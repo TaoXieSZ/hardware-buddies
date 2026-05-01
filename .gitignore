@@ -70,5 +70,4 @@ logs/
 *.tmp
 
 # Local model / runtime payloads
-models/
 internal/
