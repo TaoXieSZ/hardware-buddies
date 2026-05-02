@@ -1,9 +1,11 @@
 import SwiftUI
 import VoiceAgent
 
-/// 飞书集成配置面板：lark-cli 用户登录 + 联系人管理。
-/// lark-cli 二进制和 app 凭证均内置于 app bundle，用户只需扫码登录。
+/// 飞书集成配置面板：用户填入飞书应用凭证 → lark-cli 配置 → 扫码登录 → 联系人管理。
+/// lark-cli 二进制内置于 app bundle，用户无需安装 Node.js。
 struct FeishuSetupView: View {
+    @State private var appID: String = ""
+    @State private var appSecret: String = ""
     @State private var larkCLIStatus: LarkCLIStatus = .checking
     @State private var loginURL: String?
     @State private var deviceCode: String?
@@ -19,7 +21,7 @@ struct FeishuSetupView: View {
         .onAppear { checkLarkCLI() }
     }
 
-    // MARK: - lark-cli 登录状态
+    // MARK: - lark-cli 配置与登录
 
     private var larkCLISection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -39,6 +41,35 @@ struct FeishuSetupView: View {
                 Text("lark-cli 未找到，请联系开发者。")
                     .font(.caption)
                     .foregroundStyle(.red)
+
+            case .notConfigured:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("请填入飞书开放平台应用的凭证（从 open.feishu.cn 创建应用后获取）：")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        Text("App ID")
+                            .frame(width: 80, alignment: .leading)
+                        TextField("cli_xxxxxxxxx", text: $appID)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.callout.monospaced())
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("App Secret")
+                            .frame(width: 80, alignment: .leading)
+                        SecureField("填入 App Secret", text: $appSecret)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.callout.monospaced())
+                    }
+
+                    Button("配置并登录") { configureLarkCLI() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(appID.trimmingCharacters(in: .whitespaces).isEmpty
+                            || appSecret.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
 
             case .notLoggedIn:
                 if let loginURL {
@@ -73,12 +104,16 @@ struct FeishuSetupView: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("登录飞书后即可使用语音发消息功能。")
+                        Text("已配置应用，点击登录完成用户授权。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("登录飞书") { startLogin() }
-                            .controlSize(.small)
-                            .buttonStyle(.borderedProminent)
+                        HStack {
+                            Button("登录飞书") { startLogin() }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                            Button("重新配置") { larkCLIStatus = .notConfigured }
+                                .controlSize(.small)
+                        }
                     }
                 }
 
@@ -89,8 +124,12 @@ struct FeishuSetupView: View {
                     Text("已登录: \(user)")
                         .font(.caption)
                 }
-                Button("重新登录") { startLogin() }
-                    .controlSize(.small)
+                HStack {
+                    Button("重新登录") { startLogin() }
+                        .controlSize(.small)
+                    Button("重新配置") { larkCLIStatus = .notConfigured }
+                        .controlSize(.small)
+                }
             }
 
             if let statusMessage {
@@ -118,6 +157,13 @@ struct FeishuSetupView: View {
                 .padding(.vertical, 2)
                 .background(Capsule().fill(Color.orange.opacity(0.15)))
                 .foregroundStyle(.orange)
+        case .notConfigured:
+            Text("未配置")
+                .font(.caption2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.orange.opacity(0.15)))
+                .foregroundStyle(.orange)
         case .notInstalled:
             Text("异常")
                 .font(.caption2)
@@ -139,10 +185,14 @@ struct FeishuSetupView: View {
                 return
             }
 
-            // 确保 lark-cli 已用内置凭证配置
-            Self.ensureConfigured(path: path)
+            // 检查是否已配置（有 app 凭证）
+            let configOutput = Self.runProcess(path, args: ["config", "show"])
+            if configOutput.contains("not configured") || configOutput.contains("no app") || configOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await MainActor.run { larkCLIStatus = .notConfigured }
+                return
+            }
 
-            // Check auth status
+            // 检查登录状态
             let authOutput = Self.runProcess(path, args: ["auth", "status"])
             if authOutput.contains("logged_in") || authOutput.contains("user") {
                 let user = Self.extractUser(from: authOutput)
@@ -153,21 +203,47 @@ struct FeishuSetupView: View {
         }
     }
 
+    private func configureLarkCLI() {
+        Task.detached {
+            guard let path = Self.findLarkCLI() else { return }
+            let trimmedID = await appID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedSecret = await appSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // 用用户填入的凭证配置 lark-cli
+            let process = Process()
+            let pipe = Pipe()
+            let inputPipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = ["config", "init", "--app-id", trimmedID, "--app-secret-stdin", "--brand", "feishu"]
+            process.standardOutput = pipe
+            process.standardError = pipe
+            process.standardInput = inputPipe
+            do { try process.run() } catch {
+                await MainActor.run {
+                    statusMessage = "配置失败: \(error.localizedDescription)"
+                    statusIsError = true
+                }
+                return
+            }
+            inputPipe.fileHandleForWriting.write(Data((trimmedSecret + "\n").utf8))
+            inputPipe.fileHandleForWriting.closeFile()
+            process.waitUntilExit()
+
+            // 配置完后直接进入登录流程
+            await MainActor.run { startLogin() }
+        }
+    }
+
     private func startLogin() {
         Task.detached {
             guard let path = Self.findLarkCLI() else { return }
 
-            // 确保已配置
-            Self.ensureConfigured(path: path)
-
-            // 启动登录，请求 im + contact 权限
             let output = Self.runProcess(path, args: [
                 "auth", "login",
-                "--scope", "im,contact:user:search",
+                "--domain", "im,contact",
                 "--json", "--no-wait",
             ])
 
-            // Parse device_code and verification_url
             if let data = output.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let code = json["device_code"] as? String,
@@ -176,6 +252,8 @@ struct FeishuSetupView: View {
                     deviceCode = code
                     loginURL = url
                     larkCLIStatus = .notLoggedIn
+                    statusMessage = nil
+                    statusIsError = false
                 }
             } else {
                 await MainActor.run {
@@ -211,33 +289,6 @@ struct FeishuSetupView: View {
     }
 
     // MARK: - Helpers
-
-    /// 内置的飞书应用凭证。用户无需自行创建应用。
-    private static let embeddedAppID = "cli_a97f07e4fd39dcc4"
-    private static let embeddedAppSecret = "CX2LgH3QQk5csXWmjAJ6Hgd0MybuZaEz"
-
-    /// 确保 lark-cli 已用内置凭证初始化。
-    nonisolated private static func ensureConfigured(path: String) {
-        // 检查是否已配置
-        let configOutput = runProcess(path, args: ["config", "show"])
-        if configOutput.contains(embeddedAppID) {
-            return // 已正确配置
-        }
-
-        // 用内置凭证初始化
-        let process = Process()
-        let pipe = Pipe()
-        let inputPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["config", "init", "--app-id", embeddedAppID, "--app-secret-stdin", "--brand", "feishu"]
-        process.standardOutput = pipe
-        process.standardError = pipe
-        process.standardInput = inputPipe
-        do { try process.run() } catch { return }
-        inputPipe.fileHandleForWriting.write(Data((embeddedAppSecret + "\n").utf8))
-        inputPipe.fileHandleForWriting.closeFile()
-        process.waitUntilExit()
-    }
 
     nonisolated private static func findLarkCLI() -> String? {
         var paths: [String] = []
@@ -287,6 +338,7 @@ struct FeishuSetupView: View {
 private enum LarkCLIStatus {
     case checking
     case notInstalled
+    case notConfigured
     case notLoggedIn
     case loggedIn(user: String)
 }

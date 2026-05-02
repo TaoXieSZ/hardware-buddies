@@ -48,8 +48,9 @@ cd "$APP_ROOT"
 swift build -c debug --arch "$BUILD_ARCH" --product AhaKeyConfig
 swift build -c debug --arch "$BUILD_ARCH" --product ahakeyconfig-agent
 
-BUILD_OUTPUT=".build/$BUILD_ARCH-apple-macosx/debug/$EXECUTABLE_NAME"
-AGENT_OUTPUT=".build/$BUILD_ARCH-apple-macosx/debug/ahakeyconfig-agent"
+DEBUG_BUILD_DIR=".build/$BUILD_ARCH-apple-macosx/debug"
+BUILD_OUTPUT="$DEBUG_BUILD_DIR/$EXECUTABLE_NAME"
+AGENT_OUTPUT="$DEBUG_BUILD_DIR/ahakeyconfig-agent"
 if [[ ! -f "$BUILD_OUTPUT" ]]; then
   echo "Build output not found at $BUILD_OUTPUT"
   exit 1
@@ -150,6 +151,14 @@ fi
 
 cp "$BUILD_OUTPUT" "$APP_EXECUTABLE"
 cp "$AGENT_OUTPUT" "$AGENT_EXECUTABLE"
+
+# Keep SwiftPM resource bundles inside Contents/Resources so the .app signs cleanly.
+for resource_bundle in "$DEBUG_BUILD_DIR"/*.bundle(N); do
+  bundle_name="$(basename "$resource_bundle")"
+  rm -rf "$APP_BUNDLE/$bundle_name"
+  rm -rf "$APP_BUNDLE/Contents/Resources/$bundle_name"
+  ditto "$resource_bundle" "$APP_BUNDLE/Contents/Resources/$bundle_name"
+done
 
 # 内置 lark-cli 二进制（仅在不存在时拷贝，避免每次 debug build 重复）
 LARK_CLI_DEST="$APP_BUNDLE/Contents/MacOS/lark-cli"

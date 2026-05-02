@@ -2037,8 +2037,9 @@ struct AhaKeyStudioView: View {
 
                 guideStep(
                     number: 2,
-                    title: "登录飞书",
-                    description: "在下方「飞书 / Lark」区域点击「登录飞书」，用飞书扫码完成授权即可。无需创建应用或填写凭证。",
+                    title: "配置飞书",
+                    description: "在飞书开放平台创建应用获取 App ID 和 Secret，填入下方「飞书」区域后扫码登录。\n需要的权限：im:message（消息）、contact:user:search（通讯录）。",
+                    link: ("打开飞书开放平台", "https://open.feishu.cn/app"),
                     isDone: larkCLIInstalled
                 )
 
