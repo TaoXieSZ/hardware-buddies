@@ -40,6 +40,10 @@ final class AhaKeyAgent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// 最新 lightMode
     private(set) var cachedLightMode: UInt8?
 
+    /// 最近一次由 IDE/Hook 设置的稳定灯态。临时提示结束后恢复到这里。
+    private var currentIDEState: UInt8?
+    private var pendingFlashRestore: DispatchWorkItem?
+
     /// 等待下一次 status 回包的回调队列（用于 querySwitchState）
     private var statusWaiters: [(AgentDeviceStatus?) -> Void] = []
 
@@ -53,7 +57,13 @@ final class AhaKeyAgent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     // MARK: - Public
 
-    func sendState(_ state: UInt8) {
+    func sendState(_ state: UInt8, remember: Bool = true) {
+        if remember {
+            pendingFlashRestore?.cancel()
+            pendingFlashRestore = nil
+            currentIDEState = state
+        }
+
         guard let commandChar, let peripheral else {
             emit("LED 状态 \(state): 未连接")
             return
@@ -63,6 +73,31 @@ final class AhaKeyAgent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             commandChar.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
         peripheral.writeValue(data, for: commandChar, type: wt)
         emit("→ LED 状态 \(state): \(data.map { String(format: "%02X", $0) }.joined(separator: " "))")
+    }
+
+    /// 短暂覆盖灯态，然后恢复到最近一次 IDE/Hook 写入的稳定灯态。
+    @discardableResult
+    func flashState(_ state: UInt8, durationMilliseconds: Int) -> UInt8? {
+        pendingFlashRestore?.cancel()
+
+        guard let restoreState = currentIDEState else {
+            emit("flash LED 状态 \(state) 跳过：没有稳定状态可恢复")
+            return nil
+        }
+
+        let duration = max(100, min(durationMilliseconds, 5_000))
+        sendState(state, remember: false)
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.sendState(restoreState, remember: false)
+            self.pendingFlashRestore = nil
+            self.emit("flash LED 状态恢复到 \(restoreState)")
+        }
+        pendingFlashRestore = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(duration), execute: work)
+        emit("flash LED 状态 \(state) \(duration)ms，随后恢复 \(restoreState)")
+        return restoreState
     }
 
     /// 主动查询一次设备状态，等待下一个 notify 回包 (timeout 秒内)。
@@ -139,7 +174,7 @@ final class AhaKeyAgent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// 单个客户端的处理：读一包请求，按 JSON 或旧版纯数字分发。
     ///
     /// 协议：
-    /// - JSON 一行：`{"cmd":"state","value":3}` / `{"cmd":"permission","value":1}` / `{"cmd":"status"}`
+    /// - JSON 一行：`{"cmd":"state","value":3}` / `{"cmd":"flash_state","value":6,"duration_ms":900}` / `{"cmd":"permission","value":1}` / `{"cmd":"status"}`
     /// - 纯数字（兼容旧 `ahakey-state.sh`）：`3` → sendState(3)，不回包
     private func handleClient(_ clientFd: Int32) {
         var buf = [UInt8](repeating: 0, count: 1024)
@@ -189,6 +224,15 @@ final class AhaKeyAgent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
                 }
                 Self.replyAndClose(clientFd, body)
             }
+
+        case "flash_state":
+            let stateValue = obj["value"] as? Int ?? 6
+            let duration = obj["duration_ms"] as? Int ?? 900
+            let restoreState = flashState(UInt8(clamping: stateValue), durationMilliseconds: duration)
+            Self.replyAndClose(clientFd, [
+                "ok": restoreState != nil,
+                "restoreState": restoreState.map { Int($0) } ?? NSNull(),
+            ])
 
         case "status":
             if cachedSwitchState != nil {

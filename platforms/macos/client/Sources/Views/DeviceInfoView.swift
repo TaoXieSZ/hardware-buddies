@@ -384,59 +384,6 @@ struct DeviceInfoView: View {
                     }
                 }
             }
-
-            // MARK: - 通信日志
-            Section {
-                VStack(alignment: .leading, spacing: 0) {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 2) {
-                                ForEach(bleManager.commLog) { entry in
-                                    HStack(alignment: .top, spacing: 8) {
-                                        Text(entry.formattedTime)
-                                            .font(.system(.caption2, design: .monospaced))
-                                            .foregroundStyle(.tertiary)
-                                            .frame(width: 80, alignment: .leading)
-                                        Text(entry.message)
-                                            .font(.system(.caption2, design: .monospaced))
-                                            .foregroundStyle(entry.isError ? .red : .secondary)
-                                            .textSelection(.enabled)
-                                    }
-                                    .id(entry.id)
-                                }
-                            }
-                            .padding(8)
-                        }
-                        .frame(height: 150)
-                        .background(Color.primary.opacity(0.03))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .onChange(of: bleManager.commLog.count) { _, _ in
-                            if let last = bleManager.commLog.last {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
-                    }
-
-                    HStack {
-                        Spacer()
-                        Button("复制全部") {
-                            let text = bleManager.commLog.map { "[\($0.formattedTime)] \($0.message)" }.joined(separator: "\n")
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(text, forType: .string)
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                        Button("清空") {
-                            bleManager.clearLog()
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                    }
-                    .padding(.top, 4)
-                }
-            } header: {
-                Text("通信日志")
-            }
         }
         .formStyle(.grouped)
     }

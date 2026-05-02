@@ -27,6 +27,8 @@ ICON_SOURCE="${ICON_SOURCE:-$APP_ROOT/VibeCodeKeyboard.ico}"
 ICONSET_DIR="$APP_ROOT/.build/AhaKeyConfig.iconset"
 ICNS_PATH="$APP_ROOT/.build/AhaKeyConfig.icns"
 SIGNING_IDENTITY="${AHAKEY_DEBUG_SIGNING_IDENTITY:-${SIGNING_IDENTITY:-}}"
+BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+MIN_SYSTEM_VERSION="${MIN_SYSTEM_VERSION:-14.0}"
 
 # 本地 Debug 默认启用稳定自签证书：TCC 会按证书 CN 记授权，
 # 避免 ad-hoc 签名每次 build 因 cdhash 变化而掉权限。
@@ -43,11 +45,12 @@ fi
 
 echo "🐞 Debug building $APP_DISPLAY_NAME..."
 cd "$APP_ROOT"
-swift build -c debug --arch arm64 --product AhaKeyConfig
-swift build -c debug --arch arm64 --product ahakeyconfig-agent
+swift build -c debug --arch "$BUILD_ARCH" --product AhaKeyConfig
+swift build -c debug --arch "$BUILD_ARCH" --product ahakeyconfig-agent
 
-BUILD_OUTPUT=".build/arm64-apple-macosx/debug/$EXECUTABLE_NAME"
-AGENT_OUTPUT=".build/arm64-apple-macosx/debug/ahakeyconfig-agent"
+DEBUG_BUILD_DIR=".build/$BUILD_ARCH-apple-macosx/debug"
+BUILD_OUTPUT="$DEBUG_BUILD_DIR/$EXECUTABLE_NAME"
+AGENT_OUTPUT="$DEBUG_BUILD_DIR/ahakeyconfig-agent"
 if [[ ! -f "$BUILD_OUTPUT" ]]; then
   echo "Build output not found at $BUILD_OUTPUT"
   exit 1
@@ -120,7 +123,7 @@ if [[ "$NEED_PLIST" == "1" ]]; then
   <key>CFBundleVersion</key>
   <string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key>
-  <string>15.0</string>
+  <string>${MIN_SYSTEM_VERSION}</string>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>AhaKey 配置需要蓝牙连接你的 AhaKey 键盘。</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -148,6 +151,38 @@ fi
 
 cp "$BUILD_OUTPUT" "$APP_EXECUTABLE"
 cp "$AGENT_OUTPUT" "$AGENT_EXECUTABLE"
+
+# Keep SwiftPM resource bundles inside Contents/Resources so the .app signs cleanly.
+for resource_bundle in "$DEBUG_BUILD_DIR"/*.bundle(N); do
+  bundle_name="$(basename "$resource_bundle")"
+  rm -rf "$APP_BUNDLE/$bundle_name"
+  rm -rf "$APP_BUNDLE/Contents/Resources/$bundle_name"
+  ditto "$resource_bundle" "$APP_BUNDLE/Contents/Resources/$bundle_name"
+done
+
+# 内置 lark-cli 二进制（仅在不存在时拷贝，避免每次 debug build 重复）
+LARK_CLI_DEST="$APP_BUNDLE/Contents/MacOS/lark-cli"
+if [[ ! -f "$LARK_CLI_DEST" ]]; then
+  LARK_CLI_BINARY=""
+  LARK_CLI_CANDIDATES=(
+    "$HOME/.npm-global/lib/node_modules/@larksuite/cli/bin/lark-cli"
+    "/usr/local/lib/node_modules/@larksuite/cli/bin/lark-cli"
+    "/opt/homebrew/lib/node_modules/@larksuite/cli/bin/lark-cli"
+    "/usr/local/bin/lark-cli"
+    "/opt/homebrew/bin/lark-cli"
+  )
+  for candidate in "${LARK_CLI_CANDIDATES[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      LARK_CLI_BINARY="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$LARK_CLI_BINARY" ]]; then
+    echo "📎 Bundling lark-cli from: $LARK_CLI_BINARY"
+    cp "$LARK_CLI_BINARY" "$LARK_CLI_DEST"
+    chmod +x "$LARK_CLI_DEST"
+  fi
+fi
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
   # 对 40 位十六进制（SHA-1）用 security 反查一下 CN，方便日志定位

@@ -71,3 +71,4 @@ logs/
 
 # Local model / runtime payloads
 internal/
+.gstack/

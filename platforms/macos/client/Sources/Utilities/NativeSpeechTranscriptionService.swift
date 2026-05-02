@@ -15,6 +15,7 @@ final class NativeSpeechTranscriptionService: ObservableObject {
     @Published private(set) var transcriptPreview = ""
     @Published private(set) var lastCommittedText = ""
     @Published private(set) var lastPermissionCheckSummary = "尚未检查麦克风与语音转写权限。"
+    @Published private(set) var recognitionLocaleIdentifier = ""
 
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -24,7 +25,9 @@ final class NativeSpeechTranscriptionService: ObservableObject {
     /// 防止 `isFinal`、1s 超时、`error` 回调各触发一次，导致同一段被 ⌘V 多遍
     private var hasCommittedThisRecording = false
     private var didRequestPermissionsThisLaunch = false
+    private var finalTranscriptConsumer: ((String) -> Bool)?
 
+    private let speechLocaleEnvironmentVariable = "AHAKEY_SPEECH_LOCALE"
     private let syntheticEventUserData: Int64 = 0x4148414B
 
     private init() { }
@@ -107,6 +110,10 @@ final class NativeSpeechTranscriptionService: ObservableObject {
         }
     }
 
+    func setFinalTranscriptConsumer(_ consumer: ((String) -> Bool)?) {
+        finalTranscriptConsumer = consumer
+    }
+
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
@@ -179,6 +186,7 @@ final class NativeSpeechTranscriptionService: ObservableObject {
         audioEngine = engine
         recognitionRequest = request
         isRecording = true
+        recognitionLocaleIdentifier = recognizer.locale.identifier
         statusMessage = "苹果原生转写录音中… 再按一次语音键结束。"
         appendDiagnostic("start recording locale=\(recognizer.locale.identifier)")
 
@@ -315,6 +323,14 @@ final class NativeSpeechTranscriptionService: ObservableObject {
             return
         }
 
+        if let finalTranscriptConsumer, finalTranscriptConsumer(text) {
+            hasCommittedThisRecording = true
+            lastCommittedText = text
+            statusMessage = "已处理：\(text)"
+            appendDiagnostic("finalize consumed reason=\(reason) text=\(text)")
+            return
+        }
+
         if injectText(text) {
             hasCommittedThisRecording = true
             lastCommittedText = text
@@ -340,8 +356,8 @@ final class NativeSpeechTranscriptionService: ObservableObject {
     }
 
     private func makeSpeechRecognizer() -> SFSpeechRecognizer? {
-        if let preferredIdentifier = Locale.preferredLanguages.first {
-            let locale = Locale(identifier: preferredIdentifier)
+        for identifier in speechLocaleCandidates() {
+            let locale = Locale(identifier: identifier)
             if let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable {
                 return recognizer
             }
@@ -352,6 +368,28 @@ final class NativeSpeechTranscriptionService: ObservableObject {
         }
 
         return nil
+    }
+
+    private func speechLocaleCandidates() -> [String] {
+        var identifiers: [String] = []
+
+        if let configured = ProcessInfo.processInfo.environment[speechLocaleEnvironmentVariable],
+           !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            identifiers.append(configured)
+        }
+
+        // AhaKey 的主要语音指令是中文；显式优先普通话，避免系统语言是英文时走英文识别模型。
+        identifiers.append(contentsOf: ["zh_CN", "zh-Hans_CN", "zh-Hans"])
+        identifiers.append(contentsOf: Locale.preferredLanguages)
+        identifiers.append(Locale.current.identifier)
+
+        var seen = Set<String>()
+        return identifiers.filter { identifier in
+            let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else { return false }
+            seen.insert(trimmed)
+            return true
+        }
     }
 
     private func missingPermissionMessage(

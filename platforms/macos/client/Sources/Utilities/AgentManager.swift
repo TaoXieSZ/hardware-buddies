@@ -124,19 +124,26 @@ final class AgentManager: ObservableObject {
         cursorHooksInstalled = detectCursorHooksInstalled()
         hooksInstalled = claudeHooksInstalled || cursorHooksInstalled
         if isRunning {
+            let path = socketPath
             DispatchQueue.global(qos: .utility).async { [weak self] in
-                guard let self else { return }
-                let bleConnected = self.querySocketBLEConnected()
-                DispatchQueue.main.async { self.isAgentBLEConnected = bleConnected }
+                let bleConnected = Self.querySocketBLEConnected(socketPath: path)
+                Task { @MainActor [weak self] in
+                    self?.applyAgentSocketBLEStatus(bleConnected)
+                }
             }
         } else {
             isAgentBLEConnected = false
         }
     }
 
+    @MainActor
+    private func applyAgentSocketBLEStatus(_ connected: Bool) {
+        isAgentBLEConnected = connected
+    }
+
     /// 向 agent socket 发 status 命令，switchState 非 null 即代表 BLE 已连上键盘。
-    /// 同步执行，需在后台线程调用。
-    private func querySocketBLEConnected() -> Bool {
+    /// 同步阻塞 I/O，与 MainActor 无关；在后台线程调用。
+    private nonisolated static func querySocketBLEConnected(socketPath: String) -> Bool {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }

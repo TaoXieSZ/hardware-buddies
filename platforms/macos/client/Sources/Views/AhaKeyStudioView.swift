@@ -1,11 +1,45 @@
 import AppKit
+import AhaKeyConfigUI
 import SwiftUI
 import UniformTypeIdentifiers
+import VoiceAgent
+
+private enum AhaKeyWorkspaceSection: String, CaseIterable, Identifiable {
+    case workbench
+    case deviceInfo
+    case ai
+    case usageData
+    case account
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .workbench: return "配置台"
+        case .deviceInfo: return "设备信息"
+        case .ai: return "AI 引擎"
+        case .usageData: return "使用数据"
+        case .account: return "账号管理"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .workbench: return "house"
+        case .deviceInfo: return "list.bullet.rectangle"
+        case .ai: return "cpu"
+        case .usageData: return "chart.bar.xaxis"
+        case .account: return "person.crop.circle"
+        }
+    }
+}
 
 struct AhaKeyStudioView: View {
     @ObservedObject var bleManager: AhaKeyBLEManager
+    @Binding private var rootWorkspaceMode: AhaKeyRootWorkspaceMode
     @StateObject private var voiceRelay = VoiceRelayService.shared
     @StateObject private var nativeSpeech = NativeSpeechTranscriptionService.shared
+    @StateObject private var voiceAgentSession = VoiceAgentSessionStore.shared
     @StateObject private var agentManager = AgentManager.shared
 
     @State private var studioDraft: AhaKeyStudioDraft
@@ -17,10 +51,16 @@ struct AhaKeyStudioView: View {
     @State private var syncStatusMessage = "修改会先保存在本地，连接设备后再同步。"
     @State private var isSyncing = false
     @State private var showsOLEDPlaybackPreview = false
-    @State private var showsDeviceInfo = false
+    @State private var showsVoiceAgentConfiguration = false
+    @State private var selectedWorkspace: AhaKeyWorkspaceSection = .workbench
+    @AppStorage(AhaKeyAppearanceMode.storageKey) private var appearanceModeRaw = AhaKeyAppearanceMode.light.rawValue
 
-    init(bleManager: AhaKeyBLEManager) {
+    init(
+        bleManager: AhaKeyBLEManager,
+        rootWorkspaceMode: Binding<AhaKeyRootWorkspaceMode> = .constant(.classic)
+    ) {
         self.bleManager = bleManager
+        _rootWorkspaceMode = rootWorkspaceMode
         let initialDraft = AhaKeyStudioStore.load() ?? .default
         // 注意：不要在这里调用 VoiceRelayService.updateRoutes —— SwiftUI 会因 bleManager
         // 的 @Published 属性（workMode/电量/连接状态等）频繁重建 view，init 会跟着多次执行。
@@ -39,19 +79,22 @@ struct AhaKeyStudioView: View {
             topBar
             Divider()
             HStack(spacing: 0) {
-                canvasPane
+                sidebarPane
                 Divider()
-                inspectorPane
+                workspacePane
             }
+            .background(AhaKeyUI.ColorToken.card)
             Divider()
             statusBar
         }
         .frame(minWidth: 1280, minHeight: 820)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(AhaKeyUI.ColorToken.base)
+        .groupBoxStyle(AhaKeyPlainPanelGroupBoxStyle())
         .onAppear {
             agentManager.applyStoredBluetoothPreferenceOnLaunch(bleManager: bleManager)
             voiceRelay.start()
             nativeSpeech.start()
+            voiceAgentSession.start(keyboardMode: AhaKeyModeSlot(rawValue: bleManager.workMode) ?? .mode0)
             applyCursorRejectMacroSelfHealIfNeeded()
             voiceRelay.updateRoutes(from: studioDraft)
             SwitchStateNotifier.shared.bind(to: bleManager)
@@ -70,6 +113,9 @@ struct AhaKeyStudioView: View {
         .onChange(of: bleManager.workMode) { _, newValue in
             if let slot = AhaKeyModeSlot(rawValue: newValue), slot != selectedMode {
                 selectedMode = slot
+            }
+            if let slot = AhaKeyModeSlot(rawValue: newValue) {
+                voiceAgentSession.updateKeyboardMode(slot)
             }
         }
         .alert("Agent", isPresented: Binding(
@@ -94,30 +140,33 @@ struct AhaKeyStudioView: View {
                 nativeSpeech: nativeSpeech
             )
         }
-        .sheet(isPresented: $showsDeviceInfo) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("设备信息 · Agent")
-                        .font(.headline)
-                    Spacer()
-                    Button("关闭") { showsDeviceInfo = false }
-                }
-                .padding(16)
-                Divider()
-                DeviceInfoView(bleManager: bleManager)
-            }
-            .frame(width: 720, height: 720)
+        .sheet(isPresented: $showsVoiceAgentConfiguration) {
+            voiceAgentConfigurationSheet
         }
     }
 
     private var topBar: some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("AhaKey Studio")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
-            }
-
+        HStack(spacing: 16) {
             HStack(spacing: 10) {
+                Text("AK")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                            .fill(AhaKeyUI.ColorToken.primary.opacity(0.12))
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AhaKey Studio")
+                        .font(AhaKeyUI.Font.title3)
+                    Text("Native review prototype")
+                        .font(AhaKeyUI.Font.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.trailing, 2)
+
+            HStack(spacing: 8) {
                 infoPill(
                     title: bleManager.isConnected ? "已连接" : (bleManager.isScanning ? "扫描中" : "未连接"),
                     subtitle: bleManager.deviceName ?? "等待设备",
@@ -138,20 +187,39 @@ struct AhaKeyStudioView: View {
 
             Spacer(minLength: 0)
 
+            rootWorkspacePicker
+
             if !bleManager.isConnected, agentManager.bluetoothConnectionOwner == .ahaKeyStudio {
                 Button(bleManager.isScanning ? "扫描中…" : "连接设备") {
                     bleManager.userInitiatedConnect()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AhaKeySecondaryButtonStyle())
                 .disabled(bleManager.isScanning)
+            }
+
+            if isEditingConfiguration {
+                Button(syncToKeyboardButtonTitle) {
+                    syncAllModesToDevice(returnToKeyboardControlWhenDone: false)
+                }
+                .buttonStyle(AhaKeySecondaryButtonStyle())
+                .disabled(!canSyncConfiguration)
+                .help(syncToKeyboardButtonHelp)
             }
 
             Button(configurationModeButtonTitle) {
                 handleConfigurationModeButton()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AhaKeyPrimaryButtonStyle())
             .disabled(isSyncing || agentManager.isAgentOperationInProgress)
             .help(configurationModeButtonHelp)
+
+            Button {
+                toggleAppearanceMode()
+            } label: {
+                Image(systemName: appearanceMode.systemImage)
+            }
+            .buttonStyle(AhaKeyIconButtonStyle())
+            .help(appearanceMode.title)
 
             Menu {
                 Button("恢复当前模式默认值") {
@@ -165,10 +233,6 @@ struct AhaKeyStudioView: View {
                     clearCurrentOLED()
                 }
                 Divider()
-                Button("设备信息 · Agent…") {
-                    showsDeviceInfo = true
-                }
-                Divider()
                 Button("隐藏到后台") {
                     NSApp.keyWindow?.close()
                 }
@@ -176,21 +240,678 @@ struct AhaKeyStudioView: View {
                     NSApp.terminate(nil)
                 }
             } label: {
-                Label("更多", systemImage: "ellipsis.circle")
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: 32, height: 32)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(chromeBarBackground)
+    }
+
+    private var rootWorkspacePicker: some View {
+        Picker("界面", selection: $rootWorkspaceMode) {
+            ForEach(AhaKeyRootWorkspaceMode.allCases) { mode in
+                Text(mode.title).tag(mode)
             }
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 220)
+        .help("切换 IDE 工作台和 Agent 工作台")
+    }
+
+    private var sidebarPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("AK")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                            .fill(AhaKeyUI.ColorToken.control)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                            .strokeBorder(AhaKeyUI.ColorToken.border, lineWidth: 1)
+                    )
+                Text("AhaKey Stu...")
+                    .font(AhaKeyUI.Font.title3)
+                    .lineLimit(1)
+                Spacer()
+                Text("Pro Trial")
+                    .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                    .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(AhaKeyUI.ColorToken.primary.opacity(0.12)))
+                    .overlay(Capsule().strokeBorder(AhaKeyUI.ColorToken.primary.opacity(0.35), lineWidth: 1))
+            }
+            .padding(.bottom, 12)
+
+            Divider()
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(AhaKeyWorkspaceSection.allCases) { section in
+                    Button {
+                        switchWorkspace(section)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: section.systemImage)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(selectedWorkspace == section ? Color.primary : Color.secondary)
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                                        .fill(selectedWorkspace == section ? Color.primary.opacity(0.08) : AhaKeyUI.ColorToken.control)
+                                )
+                            Text(section.title)
+                                .font(AhaKeyUI.Font.subhead.weight(selectedWorkspace == section ? .semibold : .medium))
+                                .foregroundStyle(selectedWorkspace == section ? Color.primary : Color.secondary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                                .fill(selectedWorkspace == section ? Color.primary.opacity(0.055) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pro Trial")
+                    .font(AhaKeyUI.Font.caption.weight(.semibold))
+                    .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                    .textCase(.uppercase)
+                Text("在试用结束前升级到 Pro")
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("已使用 3 天，共 30 天")
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                ProgressView(value: 0.1)
+                    .controlSize(.small)
+                Text("升级 · 开发中")
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(AhaKeyUI.ColorToken.control.opacity(0.7))
+                    )
+            }
+            .padding(14)
+            .ahaKeySurface(radius: AhaKeyUI.Radius.medium)
+
+            HStack(spacing: 8) {
+                sidebarDockButton("person", help: "账号") {
+                    switchWorkspace(.account)
+                }
+                sidebarDockButton("tray", help: "收件箱")
+                sidebarDockButton("gearshape", help: "设置")
+                sidebarDockButton("questionmark.circle", help: "帮助")
+            }
+            .padding(.top, 12)
+        }
+        .padding(16)
+        .frame(width: 254)
+        .frame(maxHeight: .infinity)
+        .background(AhaKeyUI.ColorToken.card)
+    }
+
+    private func sidebarDockButton(_ systemImage: String, help: String, action: @escaping () -> Void = {}) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                        .fill(AhaKeyUI.ColorToken.control)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                        .strokeBorder(AhaKeyUI.ColorToken.border, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help == "账号" ? help : "\(help) · 开发中")
+        .disabled(help != "账号")
+        .opacity(help == "账号" ? 1 : 0.55)
+    }
+
+    private func switchWorkspace(_ section: AhaKeyWorkspaceSection) {
+        guard selectedWorkspace != section else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        transaction.animation = nil
+        withTransaction(transaction) {
+            selectedWorkspace = section
+        }
+    }
+
+    @ViewBuilder
+    private var workspacePane: some View {
+        ZStack {
+            switch selectedWorkspace {
+            case .workbench:
+                workbenchWorkspace
+            case .deviceInfo:
+                deviceInfoWorkspace
+            case .ai:
+                aiWorkspace
+            case .usageData:
+                usageDataWorkspace
+            case .account:
+                accountWorkspace
+            }
+        }
+        .id("\(rootWorkspaceMode.rawValue)-\(selectedWorkspace.rawValue)")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+
+    private var workbenchWorkspace: some View {
+        VStack(spacing: 0) {
+            workspaceHeader(
+                title: "配置台",
+                subtitle: "配置键盘模式、语音键、OLED 与灯条。编辑配置时由 AhaKey Studio 临时接管蓝牙。",
+                trailing: {
+                    HStack(spacing: 8) {
+                        Text(dirtyCount == 0 ? "配置已就绪" : "未同步 \(dirtyCount) 项")
+                            .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                            .foregroundStyle(dirtyCount == 0 ? Color.secondary : Color.orange)
+                            .ahaKeyPill(accent: dirtyCount == 0 ? .green : .orange)
+                        Picker("模式", selection: $selectedMode) {
+                            ForEach(AhaKeyModeSlot.allCases) { mode in
+                                Text(mode.name).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 300)
+                    }
+                }
+            )
+            Divider()
+            if selectedMode == .mode2 {
+                VoiceAgentWorkspaceView(
+                    session: voiceAgentSession,
+                    modeEditorHeader: modeEditorHeader,
+                    onOpenConfiguration: openVoiceAgentConfiguration
+                )
+            } else {
+                HStack(spacing: 0) {
+                    canvasPane
+                    Divider()
+                    inspectorPane
+                }
+            }
+        }
+    }
+
+    private var deviceInfoWorkspace: some View {
+        VStack(spacing: 0) {
+            workspaceHeader(
+                title: "设备信息",
+                subtitle: "查看连接、Agent、BLE、拨杆与日志。这里不做键盘映射，映射配置请回到配置台。",
+                trailing: {
+                    Text(agentManager.bluetoothConnectionOwner.title)
+                        .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .ahaKeyPill()
+                }
+            )
+            Divider()
+            HStack(spacing: 0) {
+                devicePreviewLogPane
+                Divider()
+                DeviceInfoView(bleManager: bleManager)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AhaKeyUI.ColorToken.card.opacity(0.42))
+            }
+        }
+    }
+
+    private var devicePreviewLogPane: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: bleManager.isConnected ? "keyboard.fill" : "keyboard")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(bleManager.isConnected ? AhaKeyUI.ColorToken.primary : Color.secondary)
+                        .frame(width: 54, height: 54)
+                        .background(
+                            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.large, style: .continuous)
+                                .fill(bleManager.isConnected ? AhaKeyUI.ColorToken.primary.opacity(0.12) : AhaKeyUI.ColorToken.control)
+                        )
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(bleManager.deviceName ?? "AhaKey Keyboard")
+                            .font(AhaKeyUI.Font.title2)
+                            .lineLimit(1)
+                        Text(bleManager.isConnected ? "设备在线 · \(workModeDisplayName)" : "等待连接")
+                            .font(AhaKeyUI.Font.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Circle()
+                        .fill(bleManager.isConnected ? Color.green : Color.orange)
+                        .frame(width: 10, height: 10)
+                }
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+                    deviceStatTile("电量", value: bleManager.isConnected ? "\(bleManager.batteryLevel)%" : "—", systemImage: "battery.75")
+                    deviceStatTile("固件", value: "v\(bleManager.firmwareMainVersion).\(bleManager.firmwareSubVersion)", systemImage: "shippingbox")
+                    deviceStatTile("信号", value: bleManager.isConnected ? "\(bleManager.signalStrength) dBm" : "—", systemImage: "wifi")
+                    deviceStatTile("拨杆", value: switchStateDisplayName, systemImage: "switch.2")
+                }
+            }
+            .padding(16)
+            .ahaKeySurface()
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("通信日志", systemImage: "terminal")
+                        .font(AhaKeyUI.Font.title2)
+                    Spacer()
+                    Button {
+                        copyBLELog()
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("复制全部通信日志")
+                    Button {
+                        bleManager.clearLog()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("清空通信日志")
+                }
+
+                communicationLogList
+            }
+            .padding(16)
+            .ahaKeySurface()
+            .frame(maxHeight: .infinity)
+        }
+        .padding(24)
+        .frame(width: 430)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(AhaKeyUI.ColorToken.canvas.opacity(0.35))
+    }
+
+    private var communicationLogList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                if bleManager.commLog.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "waveform.path.ecg.rectangle")
+                            .font(.system(size: 30, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                        Text("暂无通信记录")
+                            .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                        Text("连接、查询状态或探测协议后，BLE 通信会常驻显示在这里。")
+                            .font(AhaKeyUI.Font.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 240)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(bleManager.commLog.suffix(120)) { entry in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(entry.formattedTime)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 74, alignment: .leading)
+                                Text(entry.message)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(entry.isError ? .red : .secondary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .id(entry.id)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.64))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                    .strokeBorder(AhaKeyUI.ColorToken.border, lineWidth: 1)
+            )
+            .onChange(of: bleManager.commLog.count) { _, _ in
+                if let last = bleManager.commLog.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    private var aiWorkspace: some View {
+        VStack(spacing: 0) {
+            workspaceHeader(
+                title: "AI 引擎",
+                subtitle: "管理本地优先的语音识别、后处理与模型运行状态。",
+                trailing: {
+                    Text("本地离线")
+                        .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .ahaKeyPill()
+                }
+            )
+            Divider()
+            VStack(alignment: .leading, spacing: 16) {
+                Text("此页将承载引擎提供方、模型路径、推理参数等设置。当前为本地 SwiftUI 占位实现；请从侧栏进入配置台继续配置键盘与 Inspector 主流程。")
+                    .font(AhaKeyUI.Font.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("本地优先", systemImage: "internaldrive")
+                    Label("模型参数", systemImage: "slider.horizontal.3")
+                    Label("运行状态", systemImage: "waveform.path.ecg")
+                }
+                .font(AhaKeyUI.Font.subhead)
+                .ahaKeyPanel()
+                Spacer()
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(AhaKeyUI.ColorToken.card.opacity(0.42))
+        }
+    }
+
+    private var usageDataWorkspace: some View {
+        VStack(spacing: 0) {
+            workspaceHeader(
+                title: "使用数据",
+                subtitle: "个人本机使用看板。当前展示来自本地状态的轻量统计，不上传云端。",
+                trailing: {
+                    Text("本机数据")
+                        .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .ahaKeyPill()
+                }
+            )
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 4), spacing: 14) {
+                        usageMetricCard("今日语音", value: "\(estimatedVoiceSessions)", detail: "次触发", systemImage: "mic")
+                        usageMetricCard("最近写入", value: lastCommittedCharacterCountText, detail: "字符", systemImage: "text.cursor")
+                        usageMetricCard("配置改动", value: "\(dirtyCount)", detail: "待同步项", systemImage: "slider.horizontal.3")
+                        usageMetricCard("连接状态", value: bleManager.isConnected ? "在线" : "离线", detail: bleManager.deviceName ?? "AhaKey", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("语音输入链路")
+                            .font(AhaKeyUI.Font.title2)
+                        usageStatusRow("语音服务", value: nativeSpeech.statusMessage, ok: nativeSpeech.microphoneGranted && nativeSpeech.speechRecognitionGranted)
+                        usageStatusRow("后台语音键", value: voiceRelay.statusMessage, ok: voiceRelay.inputMonitoringGranted && voiceRelay.accessibilityGranted)
+                        usageStatusRow("设备同步", value: syncStatusMessage, ok: !hasUnsyncedChanges)
+                    }
+                    .padding(16)
+                    .ahaKeySurface()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("最近一次识别")
+                            .font(AhaKeyUI.Font.title2)
+                        Text(nativeSpeech.lastCommittedText.isEmpty ? "暂无已写入文本。完成一次语音输入后，这里会展示最近写入摘要。" : nativeSpeech.lastCommittedText)
+                            .font(AhaKeyUI.Font.callout)
+                            .foregroundStyle(nativeSpeech.lastCommittedText.isEmpty ? .secondary : .primary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(16)
+                    .ahaKeySurface()
+                }
+                .padding(24)
+            }
+            .background(AhaKeyUI.ColorToken.card.opacity(0.42))
+        }
+    }
+
+    private var accountWorkspace: some View {
+        VStack(spacing: 0) {
+            workspaceHeader(
+                title: "账号管理",
+                subtitle: "管理个人账户、订阅与本机隐私设置。当前为本地账户骨架，不影响设备业务逻辑。",
+                trailing: {
+                    Text("Pro Trial")
+                        .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                        .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                        .ahaKeyPill(accent: AhaKeyUI.ColorToken.primary)
+                }
+            )
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .center, spacing: 14) {
+                        Text("AK")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                            .frame(width: 56, height: 56)
+                            .background(
+                                RoundedRectangle(cornerRadius: AhaKeyUI.Radius.large, style: .continuous)
+                                    .fill(AhaKeyUI.ColorToken.primary.opacity(0.12))
+                            )
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("本机用户")
+                                .font(AhaKeyUI.Font.title2)
+                            Text("未登录云账户 · 配置与使用数据保存在本机")
+                                .font(AhaKeyUI.Font.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("登录 · 开发中")
+                            .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 9)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(AhaKeyUI.ColorToken.control.opacity(0.7))
+                            )
+                    }
+                    .padding(18)
+                    .ahaKeySurface()
+
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 2), spacing: 14) {
+                        accountSettingCard("订阅", detail: "Pro Trial · 已使用 3 天，共 30 天", systemImage: "creditcard")
+                        accountSettingCard("隐私", detail: "语音转写和使用数据默认保存在本机", systemImage: "lock.shield")
+                        accountSettingCard("设备", detail: bleManager.deviceName ?? "尚未连接设备", systemImage: "keyboard")
+                        accountSettingCard("支持", detail: "帮助、反馈与诊断导出入口预留", systemImage: "questionmark.circle")
+                    }
+                }
+                .padding(24)
+            }
+            .background(AhaKeyUI.ColorToken.card.opacity(0.42))
+        }
+    }
+
+    private func previewCanvasPane(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(AhaKeyUI.Font.title2)
+                Text(subtitle)
+                    .font(AhaKeyUI.Font.callout)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                AhaKeyKeyboardCanvasView(
+                    modeDraft: currentModeDraft,
+                    selectedPart: selectedPart,
+                    lightBarPreview: lightBarPreview,
+                    switchTitle: currentSwitchTitle,
+                    dirtyParts: dirtyPartsForCurrentMode(),
+                    onSelect: { _ in }
+                )
+                .aspectRatio(109.0 / 54.0, contentMode: .fit)
+                .allowsHitTesting(false)
+            }
+            .padding(20)
+            .ahaKeySurface()
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(AhaKeyUI.ColorToken.canvas.opacity(0.35))
+    }
+
+    private func workspaceHeader<Trailing: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(AhaKeyUI.Font.largeTitle)
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(AhaKeyUI.Font.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 16)
+            trailing()
+        }
         .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.vertical, 16)
         .background(chromeBarBackground)
+    }
+
+    private func usageMetricCard(_ title: String, value: String, detail: String, systemImage: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                            .fill(AhaKeyUI.ColorToken.primary.opacity(0.12))
+                    )
+                Spacer()
+            }
+            Text(value)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                Text(detail)
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .ahaKeySurface()
+    }
+
+    private func usageStatusRow(_ title: String, value: String, ok: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(ok ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                Text(value)
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func accountSettingCard(_ title: String, detail: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                        .fill(AhaKeyUI.ColorToken.primary.opacity(0.12))
+                )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                Text(detail)
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .ahaKeySurface()
+    }
+
+    private func deviceStatTile(_ title: String, value: String, systemImage: String) -> some View {
+        HStack(alignment: .center, spacing: 9) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AhaKeyUI.ColorToken.primary)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                        .fill(AhaKeyUI.ColorToken.primary.opacity(0.10))
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                .fill(AhaKeyUI.ColorToken.control.opacity(0.58))
+        )
     }
 
     private var configurationModeStatus: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(isEditingConfiguration ? Color.blue : Color.green)
+                .fill(selectedMode == .mode2 ? Color.purple : (isEditingConfiguration ? Color.blue : Color.green))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
-                Text(isEditingConfiguration ? "编辑配置中" : "键盘控制中")
+                Text(configurationModeTitle)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
                 Text(configurationModeDetail)
@@ -199,17 +920,20 @@ struct AhaKeyStudioView: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
+        .ahaKeyPill(accent: isEditingConfiguration ? .blue : .green)
         .help("日常使用由 Agent 控制键盘；需要改键、OLED 或同步时，进入编辑配置后由 AhaKey Studio 临时接管蓝牙。")
     }
 
+    private var appearanceMode: AhaKeyAppearanceMode {
+        AhaKeyAppearanceMode(rawValue: appearanceModeRaw) ?? .light
+    }
+
+    private func toggleAppearanceMode() {
+        appearanceModeRaw = appearanceMode.next.rawValue
+    }
+
     private var canvasPane: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             modeEditorHeader
 
             VStack(alignment: .leading, spacing: 8) {
@@ -230,11 +954,13 @@ struct AhaKeyStudioView: View {
                     .padding(.leading, 20)
             }
             .frame(maxWidth: .infinity)
+            .padding(20)
+            .ahaKeySurface()
 
             HStack(spacing: 12) {
                 manualCallout(
                     title: "主流程",
-                    detail: "默认键盘控制 -> 点编辑配置 -> 修改 -> 同步并返回控制"
+                    detail: "默认键盘控制 -> 点编辑配置 -> 修改 -> 同步到设备 -> 返回控制"
                 )
                 manualCallout(
                     title: "模式切换",
@@ -243,327 +969,446 @@ struct AhaKeyStudioView: View {
             }
         }
         .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity)
+        .background(AhaKeyUI.ColorToken.canvas.opacity(0.35))
     }
 
     private var modeEditorHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 16) {
-                Text("Keyboard Mode")
-                    .font(.system(size: 17, weight: .semibold))
-
-                Picker("模式", selection: $selectedMode) {
-                    ForEach(AhaKeyModeSlot.allCases) { mode in
-                        Text(mode.name).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 320)
+                Text("设备展示")
+                    .font(AhaKeyUI.Font.title2)
+                Text("65%")
+                    .font(AhaKeyUI.Font.subhead)
+                    .foregroundStyle(.secondary)
 
                 Spacer(minLength: 0)
+                Text(selectedMode.title)
+                    .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .ahaKeyPill()
             }
 
             Text(selectedMode.guidance)
-                .font(.callout)
+                .font(AhaKeyUI.Font.callout)
                 .foregroundStyle(.secondary)
         }
     }
 
     private var inspectorPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                inspectorHeader
+        VStack(spacing: 0) {
+            HStack {
+                Text("配置面板")
+                    .font(AhaKeyUI.Font.title2)
+                Spacer()
+                Text("35%")
+                    .font(AhaKeyUI.Font.subhead)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(chromeBarBackground)
+            Divider()
 
-                Group {
-                    switch selectedPart {
-                    case .key1, .key2, .key3, .key4:
-                        keyInspector
-                    case .oledDisplay:
-                        oledInspector
-                    case .lightBar:
-                        lightBarInspector
-                    case .toggleSwitch:
-                        switchInspector
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    inspectorHeader
+
+                    Group {
+                        switch selectedPart {
+                        case .key1, .key2, .key3, .key4:
+                            keyInspector
+                        case .oledDisplay:
+                            oledInspector
+                                .disabled(!isEditingConfiguration)
+                        case .lightBar:
+                            lightBarInspector
+                                .disabled(!isEditingConfiguration)
+                        case .toggleSwitch:
+                            switchInspector
+                                .disabled(!isEditingConfiguration)
+                        }
                     }
                 }
-                .disabled(!isEditingConfiguration)
+                .padding(18)
             }
-            .padding(24)
+
+            Divider()
+            inspectorSyncHint
+            Divider()
+            inspectorFooter
         }
-        .frame(width: 390)
+        .frame(width: 430)
         .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        .background(AhaKeyUI.ColorToken.card.opacity(0.42))
     }
 
     private var inspectorHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                Label(selectedPart.title, systemImage: selectedPart.systemImage)
-                    .font(.system(size: 20, weight: .semibold))
-                Spacer()
-                if partIsDirty(selectedPart) {
-                    Label("未同步", systemImage: "circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
+        EmptyView()
+    }
+
+    private var inspectorSyncHint: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: hasUnsyncedChanges ? "arrow.down.doc.fill" : "checkmark.circle.fill")
+                .foregroundStyle(hasUnsyncedChanges ? Color.orange : Color.green)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(hasUnsyncedChanges ? "有改动尚未写入键盘" : "当前配置已就绪")
+                    .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(hasUnsyncedChanges ? "同步后配置才会写入硬件；退出编辑前建议先保存配置。" : "修改按键、OLED 或描述后，这里会提示待同步状态。")
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(selectedPart.subtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(AhaKeyUI.ColorToken.control.opacity(0.45))
+    }
+
+    private var inspectorFooter: some View {
+        HStack(spacing: 10) {
+            Text(isEditingConfiguration ? "编辑模式" : "键盘控制")
+                .font(AhaKeyUI.Font.footnote.weight(.semibold))
+                .foregroundStyle(isEditingConfiguration ? Color.blue : Color.secondary)
+            Spacer(minLength: 0)
+
+            Button("重发当前模式") {
+                resendCurrentModeToDevice()
+            }
+            .buttonStyle(AhaKeySecondaryButtonStyle())
+            .disabled(!bleManager.isConnected || isSyncing)
+
+            Button(configurationModeButtonTitle) {
+                handleConfigurationModeButton()
+            }
+            .buttonStyle(AhaKeyPrimaryButtonStyle())
+            .disabled(isSyncing || agentManager.isAgentOperationInProgress)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(chromeBarBackground)
     }
 
     private var keyInspector: some View {
         let key = currentSelectedKey
         return VStack(alignment: .leading, spacing: 16) {
-            if key.role == .voice {
-                GroupBox("语音软件") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        VoicePresetPicker(
-                            selectedPreset: key.voicePreset ?? .custom,
-                            onSelect: applyVoicePreset
-                        )
+            keyHeroHeader(for: key)
+            keySummaryStrip(for: key)
+            keyConfigurationCard(for: key)
+            keyPermissionCard(for: key)
+            keyUsageDisclosure(for: key)
+        }
+    }
 
-                        if (key.voicePreset ?? .custom) == .macOSNative {
-                            Text("只要 AhaKey Studio 在后台运行，Mode 0 出厂语音键发出的 F18 就会被直接接管到苹果原生转写。现在不再依赖系统听写快捷键。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-
-                GroupBox("后台语音桥") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 10) {
-                            Circle()
-                                .fill(voiceRelay.isListening ? Color.green : Color.orange)
-                                .frame(width: 10, height: 10)
-                            Text(voiceRelay.isListening ? "后台监听中" : "等待系统权限")
-                                .font(.callout.weight(.semibold))
-                            Spacer()
-                        }
-
-                        HStack(spacing: 10) {
-                            permissionBadge(title: "输入监控", granted: voiceRelay.inputMonitoringGranted)
-                            permissionBadge(title: "辅助功能", granted: voiceRelay.accessibilityGranted)
-                        }
-
-                        Text(voiceRelay.statusMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Text(voiceRelay.lastPermissionCheckSummary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Text(voiceRelay.activeRouteSummary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 10) {
-                            Button("再次申请权限") {
-                                voiceRelay.refreshPermissions(requestIfNeeded: true)
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                                    openCombinedVoicePrivacySettingsURL()
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-
-                            Button("重新检查权限") {
-                                voiceRelay.refreshPermissions(deferredTCCRequery: true)
-                            }
-                            .buttonStyle(.bordered)
-
-                            RestartToApplyPermissionsButton()
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-
-                if let preset = key.voicePreset, preset == .typeless || preset == .wechat {
-                    GroupBox("Typeless / 微信") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("「开始录音」只用于「macOS 原生语音」。当前预设由硬件语音键或下方按钮触发：会向系统注入 Fn 按住/松开，供输入法「按住说话」使用。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("排查请看 voice-relay.log（ matched · function relay · post fn ）。路径：~/Library/Application Support/AhaKeyConfig/diagnostics/")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            Button("模拟按一次语音键（切换 Fn 按住）") {
-                                voiceRelay.simulateInspectorVoiceKeyTap(for: selectedMode)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            if let hint = voiceRelay.lastInspectorSimulateHint {
-                                Text(hint)
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        .padding(.top, 4)
+    private func keyHeroHeader(for key: AhaKeyKeyDraft) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: key.role.systemImage)
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 58, height: 58)
+                .background(
+                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.large, style: .continuous)
+                        .fill(AhaKeyUI.ColorToken.control)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: AhaKeyUI.Radius.large, style: .continuous)
+                        .strokeBorder(AhaKeyUI.ColorToken.border, lineWidth: 1)
+                )
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Key \(key.role.rawValue + 1)")
+                        .font(.system(size: 26, weight: .semibold))
+                        .lineLimit(1)
+                    if partIsDirty(key.role.part) {
+                        Text("未同步")
+                            .font(AhaKeyUI.Font.caption.weight(.semibold))
+                            .foregroundStyle(Color.orange)
+                            .ahaKeyPill(accent: .orange)
                     }
                 }
-
-                if (key.voicePreset ?? .custom) == .macOSNative {
-                    GroupBox("苹果原生转写") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 10) {
-                                Circle()
-                                    .fill(nativeSpeech.isRecording ? Color.red : (nativeSpeech.microphoneGranted && nativeSpeech.speechRecognitionGranted ? Color.green : Color.orange))
-                                    .frame(width: 10, height: 10)
-                                Text(nativeSpeech.isRecording ? "录音转写中" : "等待语音键触发")
-                                    .font(.callout.weight(.semibold))
-                                Spacer()
-                            }
-
-                            HStack(spacing: 10) {
-                                permissionBadge(title: "麦克风", granted: nativeSpeech.microphoneGranted)
-                                permissionBadge(title: "语音转写", granted: nativeSpeech.speechRecognitionGranted)
-                            }
-
-                            Text(nativeSpeech.statusMessage)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Text(nativeSpeech.lastPermissionCheckSummary)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            if !nativeSpeech.transcriptPreview.isEmpty {
-                                Text("实时识别：\(nativeSpeech.transcriptPreview)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else if !nativeSpeech.lastCommittedText.isEmpty {
-                                Text("最近写入：\(nativeSpeech.lastCommittedText)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack(spacing: 10) {
-                                Button(nativeSpeech.isRecording ? "结束并写入" : "开始录音") {
-                                    nativeSpeech.toggleRecordingFromVoiceKey()
-                                }
-                                .buttonStyle(.borderedProminent)
-
-                                Button("重新检查权限") {
-                                    nativeSpeech.refreshPermissions(deferredTCCRequery: true)
-                                }
-                                .buttonStyle(.bordered)
-
-                                RestartToApplyPermissionsButton()
-
-                                if !nativeSpeech.microphoneGranted || !nativeSpeech.speechRecognitionGranted {
-                                    Button("打开系统设置") {
-                                        openNativeSpeechPrivacySettings()
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                        }
-                        .padding(.top, 4)
-                    }
-                }
-
-                GroupBox("当前出厂固件直接体验") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("1. 保持 AhaKey Studio 在后台运行。")
-                        Text("2. 在系统设置里为 AhaKey Studio 打开“输入监控”“辅助功能”“麦克风”“语音转写”。若已打开仍显示未授权，先完全退出本应用再开一次。")
-                        Text("3. 确认设备当前在 Mode 0。")
-                        Text("4. 不用同步设备，直接按实体语音键即可开始苹果原生转写；再按一次会结束并把文字写回当前光标。")
-                    }
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-            GroupBox("按键职责") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(key.role.manualText)
-                        .font(.callout)
-                    Text("当前会把快捷键和按键描述一起写入键盘。切换模式时，设备会先显示描述，再回到该模式的 OLED 动图。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(key.role.title)
+                    .font(AhaKeyUI.Font.callout)
+                    .foregroundStyle(.secondary)
             }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func keySummaryStrip(for key: AhaKeyKeyDraft) -> some View {
+        HStack(spacing: 0) {
+            keySummaryItem(
+                icon: key.role == .voice ? "waveform" : key.role.systemImage,
+                accent: .blue,
+                title: "当前功能",
+                value: key.role == .voice ? "语音输入" : key.role.title
+            )
+            Divider().padding(.vertical, 10)
+            keySummaryItem(
+                icon: "square.stack.3d.up",
+                accent: .purple,
+                title: "当前方案",
+                value: key.displaySummary
+            )
+            Divider().padding(.vertical, 10)
+            keySummaryItem(
+                icon: "checkmark",
+                accent: keyAvailabilityColor(for: key),
+                title: "当前状态",
+                value: keyAvailabilityTitle(for: key)
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 16)
+        .ahaKeySurface(radius: AhaKeyUI.Radius.large)
+    }
+
+    private func keySummaryItem(icon: String, accent: Color, title: String, value: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(accent)
+                .frame(width: 42, height: 42)
+                .background(Circle().fill(accent.opacity(0.14)))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(AhaKeyUI.Font.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(AhaKeyUI.Font.title3)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.78)
+            }
+            Spacer(minLength: 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func keyConfigurationCard(for key: AhaKeyKeyDraft) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("按键配置")
+                    .font(AhaKeyUI.Font.title2)
+                Spacer()
+                Button(keyConfigSyncButtonTitle) {
+                    syncAllModesToDevice(returnToKeyboardControlWhenDone: false)
+                }
+                .buttonStyle(AhaKeyPrimaryButtonStyle())
+                .disabled(!canSyncConfiguration)
+                .help(syncToKeyboardButtonHelp)
             }
 
-            GroupBox("将写入键盘的按键绑定") {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text(key.displaySummary)
-                            .font(.system(.title3, design: .rounded).weight(.semibold))
-                            .lineLimit(2)
-                        Spacer()
-                        Text(key.usesMacro ? "固件宏" : "底层 HID")
-                            .font(.caption)
+            VStack(spacing: 12) {
+                if key.role == .voice {
+                    inspectorFormRow(title: "功能类型") {
+                        Text("语音输入")
+                            .font(AhaKeyUI.Font.callout)
+                    }
+                    inspectorFormRow(title: "语音方案") {
+                        Picker("语音方案", selection: selectedVoicePresetBinding) {
+                            ForEach(VoicePreset.allCases) { preset in
+                                Text(preset.availableInV1 ? preset.title : "\(preset.title) · 开发中").tag(preset)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                    inspectorFormRow(title: "触发方式") {
+                        Text("单击开始，再按结束")
+                            .font(AhaKeyUI.Font.callout)
                             .foregroundStyle(.secondary)
                     }
-
-                    Picker("", selection: selectedKeyBindingModeBinding) {
-                        Text("单键 / 组合键").tag(KeyBindingMode.shortcut)
-                        Text("宏").tag(KeyBindingMode.macro)
+                    inspectorFormRow(title: "绑定键位") {
+                        Text((key.voicePreset ?? .custom).defaultBinding.displayLabel)
+                            .font(AhaKeyUI.Font.callout)
+                            .foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .disabled(key.role == .voice && (key.voicePreset ?? .custom) != .custom)
-
+                } else {
+                    inspectorFormRow(title: "功能类型") {
+                        Text(key.role.title)
+                            .font(AhaKeyUI.Font.callout)
+                    }
+                    inspectorFormRow(title: "绑定模式") {
+                        Picker("绑定模式", selection: selectedKeyBindingModeBinding) {
+                            Text("单键 / 组合键").tag(KeyBindingMode.shortcut)
+                            Text("宏").tag(KeyBindingMode.macro)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
                     if key.usesMacro {
                         macroEditor(for: key)
+                            .padding(.top, 2)
                     } else {
-                        ShortcutBindingEditor(shortcut: selectedKeyShortcutBinding)
-                    }
-
-                    if key.role == .voice {
-                        Text(voicePresetDetail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if key.role == .voice && (key.voicePreset ?? .custom) != .custom {
-                        Text("语音键预设会固定使用单键绑定；如需录制宏，请先把预设改为“自定义快捷键”。")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                        inspectorFormRow(title: "绑定键位") {
+                            ShortcutBindingEditor(shortcut: selectedKeyShortcutBinding)
+                        }
                     }
                 }
-                .padding(.top, 4)
-            }
 
-            GroupBox("按键描述") {
-                VStack(alignment: .leading, spacing: 8) {
+                inspectorFormRow(title: "按键名称") {
                     TextField("例如 Record / Accept / Reject / Enter", text: selectedKeyDescriptionBinding)
-                        .textFieldStyle(.roundedBorder)
-                    if currentSelectedKey.description.containsNonASCII {
-                        Text("设备 OLED 只稳定支持 ASCII。中文、emoji 和全角字符会在写入时被自动过滤，避免乱码。")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                    Text("设备实际写入：\(currentSelectedKeySanitizedDescription.isEmpty ? "空白" : currentSelectedKeySanitizedDescription)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("同步到键盘后，短按实体键切换模式时，OLED 会先短暂显示这里的描述，然后回到该模式的动图。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if selectedMode == .mode0 {
-                        Text("Mode 0 默认文案：Record / Accept / Reject / Enter")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                        .textFieldStyle(.plain)
+                        .font(AhaKeyUI.Font.callout)
+                        .padding(.horizontal, 10)
+                        .frame(height: 34)
+                        .background(
+                            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                                .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.small, style: .continuous)
+                                .strokeBorder(AhaKeyUI.ColorToken.border, lineWidth: 1)
+                        )
                 }
-                .padding(.top, 4)
             }
 
-            GroupBox("如何使用") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("1. 在左侧点中这个实体按键。")
-                    Text("2. 如果是语音键，先选软件预设；其他键按需选“单键 / 组合键”或“宏”。")
-                    Text("3. 填好按键描述后点击顶部“同步并返回控制”。")
-                    Text("4. 在设备侧短按按键切换模式时，会先看到描述，再回到该模式动图。")
-                }
-                .font(.callout)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if key.role == .voice {
+                Text(voicePresetDetail)
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if currentSelectedKey.description.containsNonASCII {
+                Text("设备 OLED 只稳定支持 ASCII。中文、emoji 和全角字符会在写入时被自动过滤，当前写入：\(currentSelectedKeySanitizedDescription.isEmpty ? "空白" : currentSelectedKeySanitizedDescription)")
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !isEditingConfiguration {
+                Text("当前为键盘控制模式，配置项只读。点击顶部“编辑配置”后可修改并同步到设备。")
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(16)
+        .ahaKeySurface(radius: AhaKeyUI.Radius.large)
+        .disabled(!isEditingConfiguration)
+    }
+
+    private func inspectorFormRow<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title)
+                .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 82, alignment: .leading)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 40)
+    }
+
+    private func keyPermissionCard(for key: AhaKeyKeyDraft) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("状态与权限")
+                .font(AhaKeyUI.Font.title2)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+                if key.role == .voice {
+                    permissionTile("后台监听", granted: voiceRelay.isListening || voiceRelay.inputMonitoringGranted)
+                    permissionTile("麦克风", granted: nativeSpeech.microphoneGranted)
+                    permissionTile("输入监控", granted: voiceRelay.inputMonitoringGranted)
+                    permissionTile("语音转写", granted: nativeSpeech.speechRecognitionGranted)
+                } else {
+                    permissionTile("配置草稿", granted: !partIsDirty(key.role.part))
+                    permissionTile("设备连接", granted: bleManager.isConnected)
+                    permissionTile("编辑模式", granted: isEditingConfiguration)
+                    permissionTile("可同步", granted: canSyncConfiguration || !hasUnsyncedChanges)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    voiceRelay.refreshPermissions(deferredTCCRequery: true)
+                    nativeSpeech.refreshPermissions(deferredTCCRequery: true)
+                } label: {
+                    Label("检查权限", systemImage: "checkmark.shield")
+                }
+                .buttonStyle(AhaKeySecondaryButtonStyle())
+
+                Button {
+                    if key.role == .voice {
+                        nativeSpeech.toggleRecordingFromVoiceKey()
+                    } else {
+                        resendCurrentModeToDevice()
+                    }
+                } label: {
+                    Label(key.role == .voice ? "测试按键" : "重发当前模式", systemImage: key.role == .voice ? "waveform" : "arrow.clockwise")
+                }
+                .buttonStyle(AhaKeySecondaryButtonStyle())
+                .disabled(key.role != .voice && (!bleManager.isConnected || isSyncing))
+            }
+        }
+        .padding(16)
+        .ahaKeySurface(radius: AhaKeyUI.Radius.large)
+    }
+
+    private func permissionTile(_ title: String, granted: Bool) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(granted ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
+                Text(granted ? "已开启" : "未开启")
+                    .font(AhaKeyUI.Font.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                .fill(AhaKeyUI.ColorToken.control.opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AhaKeyUI.Radius.medium, style: .continuous)
+                .strokeBorder(AhaKeyUI.ColorToken.border, lineWidth: 1)
+        )
+    }
+
+    private func keyUsageDisclosure(for key: AhaKeyKeyDraft) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                if key.role == .voice {
+                    Text("保持 AhaKey Studio 在后台运行，按实体语音键开始 macOS 原生转写，再按一次结束并写回当前光标。")
+                    Text("若权限显示异常，请在系统设置中开启输入监控、辅助功能、麦克风和语音转写后，完全退出并重新打开本应用。")
+                } else {
+                    Text(key.role.manualText)
+                    Text("完成配置后点击顶部或本卡片内的“同步到设备”，设备侧短按切换模式时会显示按键描述。")
+                }
+            }
+            .font(AhaKeyUI.Font.callout)
+            .foregroundStyle(.secondary)
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.secondary)
+                Text("使用说明")
+                    .font(AhaKeyUI.Font.title3)
+                Spacer()
+            }
+        }
+        .padding(16)
+        .ahaKeySurface(radius: AhaKeyUI.Radius.large)
+    }
+
+    private func keyAvailabilityColor(for key: AhaKeyKeyDraft) -> Color {
+        keyAvailabilityTitle(for: key) == "可用" ? .green : .orange
+    }
+
+    private func keyAvailabilityTitle(for key: AhaKeyKeyDraft) -> String {
+        if key.role == .voice {
+            return nativeSpeech.microphoneGranted && nativeSpeech.speechRecognitionGranted ? "可用" : "待授权"
+        }
+        return isEditingConfiguration ? "可编辑" : "只读"
     }
 
     // MARK: - 宏编辑器视图
@@ -1057,7 +1902,7 @@ struct AhaKeyStudioView: View {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                         } else if !agentManager.isRunning {
-                            // 与「设备信息 · Agent」相同：在 launchd 中 load + start 守护进程。
+                            // 与「设备信息」相同：在 launchd 中 load + start 守护进程。
                             // 若当前由本 App 占用蓝牙，此处也应引导先去设备信息把「蓝牙连接」切给 Agent，否则与主流程二选一相冲突（故与 DeviceInfo 同样禁用直接启动）。
                             Button("启动 Agent") {
                                 agentManager.start()
@@ -1068,11 +1913,11 @@ struct AhaKeyStudioView: View {
                             .help(
                                 agentManager.bluetoothConnectionOwner == .ahaKeyStudio
                                 ? "当前由本 App 占用蓝牙。请打开下方「设备信息…」，在「蓝牙连接」里选「由 Agent 占用」后再启 Agent；与设备信息里「启动」按钮规则一致。"
-                                : "与「设备信息 · Agent」中的启动相同，由 launchd 加载并执行 ahakeyconfig-agent。"
+                                : "与「设备信息」中的启动相同，由 launchd 加载并执行 ahakeyconfig-agent。"
                             )
                         }
-                        Button("设备信息（蓝牙 / 启停 Agent）…") {
-                            showsDeviceInfo = true
+                        Button("设备信息（蓝牙 / 启停 Agent）") {
+                            switchWorkspace(.deviceInfo)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -1097,32 +1942,210 @@ struct AhaKeyStudioView: View {
 
     private var statusBar: some View {
         HStack(spacing: 16) {
-            Label("\(selectedPart.title) · \(selectedMode.title)", systemImage: selectedPart.systemImage)
-                .font(.callout)
+            Label(statusBarSelectionText, systemImage: statusBarSelectionIcon)
+                .font(AhaKeyUI.Font.subhead)
             Divider()
                 .frame(height: 14)
-            Text("未同步改动 \(dirtyCount)")
-                .font(.callout)
-            Divider()
-                .frame(height: 14)
-            Text(syncStatusMessage)
-                .font(.callout)
+            Label("蓝牙延迟 14 ms", systemImage: "rectangle.fill")
+                .font(AhaKeyUI.Font.subhead)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+            Divider()
+                .frame(height: 14)
+            Text("固件 v\(bleManager.firmwareMainVersion).\(bleManager.firmwareSubVersion)")
+                .font(AhaKeyUI.Font.subhead)
+                .foregroundStyle(.secondary)
+            Divider()
+                .frame(height: 14)
+            Text("AI 引擎 本地离线")
+                .font(AhaKeyUI.Font.subhead)
+                .foregroundStyle(.secondary)
+            Divider()
+                .frame(height: 14)
+            Text(dirtyCount == 0 ? "配置已就绪" : "未同步改动 \(dirtyCount)")
+                .font(AhaKeyUI.Font.subhead)
+                .foregroundStyle(dirtyCount == 0 ? Color.secondary : Color.orange)
             Spacer()
-            if let lastSyncDate {
-                Text("最近同步 \(Self.timeFormatter.string(from: lastSyncDate))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            Button("新手引导") {
+                NotificationCenter.default.post(name: .ahaKeyDebugShowOnboardingPreview, object: nil)
             }
+            .buttonStyle(AhaKeySecondaryButtonStyle())
+            Button("权限引导") {
+                voiceRelay.showsPermissionOnboarding = true
+            }
+            .buttonStyle(AhaKeySecondaryButtonStyle())
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
         .background(chromeBarBackground)
     }
 
+    private var voiceAgentConfigurationSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("VoiceAgent 设置")
+                    .font(.headline)
+                Spacer()
+                Button("关闭") {
+                    showsVoiceAgentConfiguration = false
+                }
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // 新手指引
+                    setupGuideSection
+
+                    GroupBox("AI 模型") {
+                        LLMConfigView()
+                            .padding(.top, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    GroupBox("飞书 / Lark") {
+                        FeishuSetupView()
+                            .padding(.top, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .frame(width: 640, height: 760)
+    }
+
+    private var setupGuideSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.purple)
+                Text("快速开始")
+                    .font(.title3.weight(.semibold))
+            }
+
+            Text("按照以下步骤完成配置，即可通过语音让 AI 助手帮你发飞书消息。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 14) {
+                guideStep(
+                    number: 1,
+                    title: "配置 AI 模型",
+                    description: "在下方「AI 模型」区域填入你的 API Key。支持 OpenAI、Claude（需代理）、Deepseek、通义等兼容接口。",
+                    isDone: llmAPIKeyConfigured
+                )
+
+                guideStep(
+                    number: 2,
+                    title: "配置飞书",
+                    description: "在飞书开放平台创建应用获取 App ID 和 Secret，填入下方「飞书」区域后扫码登录。\n需要的权限：im:message（消息）、contact:user:search（通讯录）。",
+                    link: ("打开飞书开放平台", "https://open.feishu.cn/app"),
+                    isDone: larkCLIInstalled
+                )
+
+                guideStep(
+                    number: 3,
+                    title: "添加联系人（可选）",
+                    description: "预设常用群聊或联系人可以加速消息发送。也可以不设置，直接说联系人名字，AI 会自动搜索。",
+                    isDone: false
+                )
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+        }
+    }
+
+    private func guideStep(
+        number: Int,
+        title: String,
+        description: String,
+        code: String? = nil,
+        link: (String, String)? = nil,
+        isDone: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(isDone ? Color.green : Color.blue.opacity(0.15))
+                    .frame(width: 24, height: 24)
+                if isDone {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                } else {
+                    Text("\(number)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let code {
+                    Text(code)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.05)))
+                }
+
+                if let link {
+                    Button(link.0) {
+                        if let url = URL(string: link.1) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private var larkCLIInstalled: Bool {
+        // 检查 app bundle 内置或系统安装的 lark-cli
+        var paths: [String] = []
+        if let bundlePath = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("lark-cli").path {
+            paths.append(bundlePath)
+        }
+        paths += [
+            "/usr/local/bin/lark-cli",
+            "/opt/homebrew/bin/lark-cli",
+            ProcessInfo.processInfo.environment["HOME"].map { "\($0)/.npm-global/bin/lark-cli" },
+        ].compactMap { $0 }
+        return paths.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    private var llmAPIKeyConfigured: Bool {
+        VoiceAgentRuntimeConfig.openAIAPIKey != nil
+    }
+
+    private func settingRow(title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+
     private var chromeBarBackground: Color {
-        Color(nsColor: .controlBackgroundColor)
+        AhaKeyUI.ColorToken.card
     }
 
     private var currentModeDraft: AhaKeyModeDraft {
@@ -1135,6 +2158,19 @@ struct AhaKeyStudioView: View {
     }
 
     private var currentSwitchTitle: String {
+        bleManager.switchState == 0 ? "自动批准" : "手动批准"
+    }
+
+    private var workModeDisplayName: String {
+        switch bleManager.workMode {
+        case 0: return "Mode 0"
+        case 1: return "Mode 1"
+        case 2: return "Mode 2"
+        default: return "Mode \(bleManager.workMode)"
+        }
+    }
+
+    private var switchStateDisplayName: String {
         bleManager.switchState == 0 ? "自动批准" : "手动批准"
     }
 
@@ -1164,7 +2200,17 @@ struct AhaKeyStudioView: View {
         agentManager.bluetoothConnectionOwner == .ahaKeyStudio
     }
 
+    private var configurationModeTitle: String {
+        if selectedMode == .mode2 {
+            return "VoiceAgent"
+        }
+        return isEditingConfiguration ? "编辑配置中" : "键盘控制中"
+    }
+
     private var configurationModeDetail: String {
+        if selectedMode == .mode2 {
+            return "主 agent 工作台"
+        }
         if isEditingConfiguration {
             if bleManager.isConnected {
                 return "AhaKey Studio 正在配置键盘"
@@ -1184,16 +2230,22 @@ struct AhaKeyStudioView: View {
     }
 
     private var configurationModeButtonTitle: String {
+        if selectedMode == .mode2 {
+            return "VoiceAgent 设置"
+        }
         if isSyncing {
             return "同步中…"
         }
         if isEditingConfiguration {
-            return "保存配置"
+            return "返回控制"
         }
         return "编辑配置"
     }
 
     private var configurationModeButtonHelp: String {
+        if selectedMode == .mode2 {
+            return "打开 VoiceAgent 运行时配置入口；当前 API key 暂时从 Keychain 读取。"
+        }
         if isEditingConfiguration {
             if hasUnsyncedChanges {
                 return "将当前草稿同步到键盘，然后把蓝牙交还给 Agent。"
@@ -1201,6 +2253,63 @@ struct AhaKeyStudioView: View {
             return "没有未同步改动，直接把蓝牙交还给 Agent。"
         }
         return "临时由 AhaKey Studio 接管蓝牙，用于改键、OLED、同步和本机灯效测试。"
+    }
+
+    private var statusBarSelectionText: String {
+        if selectedMode == .mode2 {
+            return "VoiceAgent · \(selectedMode.title)"
+        }
+        return "\(selectedPart.title) · \(selectedMode.title)"
+    }
+
+    private var statusBarSelectionIcon: String {
+        if selectedMode == .mode2 {
+            return "point.3.connected.trianglepath.dotted"
+        }
+        return selectedPart.systemImage
+    }
+
+    private var syncToKeyboardButtonTitle: String {
+        if isSyncing { return "同步中…" }
+        return hasUnsyncedChanges ? "同步到键盘" : "已同步"
+    }
+
+    private var keyConfigSyncButtonTitle: String {
+        if isSyncing { return "同步中…" }
+        if !isEditingConfiguration { return "先编辑配置" }
+        if !bleManager.isConnected { return "等待连接" }
+        return hasUnsyncedChanges ? "同步到设备" : "已同步"
+    }
+
+    private var syncToKeyboardButtonHelp: String {
+        if !bleManager.isConnected {
+            return "键盘未连接，当前只能保存本地草稿。"
+        }
+        if !hasUnsyncedChanges {
+            return "当前配置已写入键盘，无需再次同步。"
+        }
+        return "将当前 Mode、按键、OLED 和灯效草稿写入键盘。"
+    }
+
+    private var canSyncConfiguration: Bool {
+        isEditingConfiguration &&
+        hasUnsyncedChanges &&
+        bleManager.isConnected &&
+        !isSyncing &&
+        !agentManager.isAgentOperationInProgress
+    }
+
+    private var estimatedVoiceSessions: Int {
+        var count = 0
+        if nativeSpeech.isRecording { count += 1 }
+        if !nativeSpeech.lastCommittedText.isEmpty { count += 1 }
+        if !nativeSpeech.transcriptPreview.isEmpty { count += 1 }
+        return count
+    }
+
+    private var lastCommittedCharacterCountText: String {
+        let count = nativeSpeech.lastCommittedText.count
+        return count == 0 ? "—" : "\(count)"
     }
 
     private var voicePresetDetail: String {
@@ -1219,12 +2328,7 @@ struct AhaKeyStudioView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 999)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
+        .ahaKeyPill(accent: granted ? .green : .orange)
     }
 
     private var currentSelectedKeySanitizedDescription: String {
@@ -1247,6 +2351,16 @@ struct AhaKeyStudioView: View {
             get: { currentSelectedKey.shortcut },
             set: { newValue in
                 updateSelectedKey { $0.shortcut = newValue }
+            }
+        )
+    }
+
+    private var selectedVoicePresetBinding: Binding<VoicePreset> {
+        Binding(
+            get: { currentSelectedKey.voicePreset ?? .custom },
+            set: { preset in
+                guard preset.availableInV1 else { return }
+                applyVoicePreset(preset)
             }
         )
     }
@@ -1440,11 +2554,20 @@ struct AhaKeyStudioView: View {
     }
 
     private func handleConfigurationModeButton() {
+        if selectedMode == .mode2 {
+            openVoiceAgentConfiguration()
+            return
+        }
         if isEditingConfiguration {
             finishEditingConfiguration()
         } else {
             enterEditingConfiguration()
         }
+    }
+
+    private func openVoiceAgentConfiguration() {
+        showsVoiceAgentConfiguration = true
+        syncStatusMessage = "VoiceAgent 配置入口已预留，当前运行时读取 Keychain。"
     }
 
     private func enterEditingConfiguration() {
@@ -1745,25 +2868,26 @@ struct AhaKeyStudioView: View {
         }
     }
 
+    private func copyBLELog() {
+        let text = bleManager.commLog.map { "[\($0.formattedTime)] \($0.message)" }.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     private func infoPill(title: String, subtitle: String, accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.caption)
+                .font(AhaKeyUI.Font.caption)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 Circle()
                     .fill(accent)
                     .frame(width: 8, height: 8)
                 Text(subtitle)
-                    .font(.callout.weight(.medium))
+                    .font(AhaKeyUI.Font.subhead.weight(.semibold))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
+        .ahaKeyPill(accent: accent)
     }
 
     private func manualCallout(title: String, detail: String) -> some View {
@@ -1776,11 +2900,7 @@ struct AhaKeyStudioView: View {
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
+        .ahaKeyRemarkPanel()
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1790,7 +2910,7 @@ struct AhaKeyStudioView: View {
     }()
 
     private func openNativeSpeechPrivacySettings() {
-        openNativeSpeechPrivacySettingsURL()
+        openStudioNativeSpeechPrivacySettingsURL()
     }
 }
 
@@ -1840,7 +2960,7 @@ private struct VoicePermissionOnboardingSheet: View {
 
             HStack(spacing: 12) {
                 Button("现在申请权限") {
-                    requestPermissionsThenOpenPrivacySettingsIfNeeded(
+                    requestStudioPermissionsThenOpenPrivacySettingsIfNeeded(
                         voiceRelay: voiceRelay,
                         nativeSpeech: nativeSpeech
                     )
@@ -1857,7 +2977,7 @@ private struct VoicePermissionOnboardingSheet: View {
 
                 if !nativeSpeech.microphoneGranted || !nativeSpeech.speechRecognitionGranted {
                     Button("打开系统设置") {
-                        openNativeSpeechPrivacySettingsURL()
+                        openStudioNativeSpeechPrivacySettingsURL()
                     }
                     .buttonStyle(.bordered)
                 }
@@ -2135,12 +3255,12 @@ private struct AhaKeyKeyboardCanvasView: View {
                 Spacer()
             }
 
-            ForEach([CGPoint(x: 8, y: 8), CGPoint(x: 101, y: 8), CGPoint(x: 8, y: 46), CGPoint(x: 101, y: 46)], id: \.self) { point in
+            ForEach(Array([(8.0, 8.0), (101.0, 8.0), (8.0, 46.0), (101.0, 46.0)].enumerated()), id: \.offset) { _, point in
                 Circle()
                     .stroke(Color.black.opacity(0.14), lineWidth: 1.2)
                     .background(Circle().fill(Color.white.opacity(0.4)))
                     .frame(width: scaled(4.8, in: width), height: scaled(4.8, in: width))
-                    .position(position(point.x, point.y, width: width, height: height))
+                    .position(position(point.0, point.1, width: width, height: height))
             }
 
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -2413,11 +3533,11 @@ private struct AhaKeyKeyboardCanvasView: View {
     }
 
     private func openNativeSpeechPrivacySettings() {
-        openNativeSpeechPrivacySettingsURL()
+        openStudioNativeSpeechPrivacySettingsURL()
     }
 }
 
-private func openNativeSpeechPrivacySettingsURL() {
+private func openStudioNativeSpeechPrivacySettingsURL() {
     let candidates = [
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
         "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
@@ -2433,7 +3553,7 @@ private func openNativeSpeechPrivacySettingsURL() {
 
 /// 输入监控 / 辅助功能 / 麦克风和语音转写：系统在「已拒绝」或部分版本下不会再弹权限窗。主动申请后打开「隐私与安全性」相关页，保证有可操作反馈。
 @MainActor
-private func openCombinedVoicePrivacySettingsURL() {
+private func openStudioCombinedVoicePrivacySettingsURL() {
     // 勿用未文档化的 `x-apple.systemsettings` + `.extension` 等组合；在部分系统上会被当成「文稿」，
     // 连续弹出「在 App Store 搜索… / 选取应用程序」而非进入设置。
     let candidates = [
@@ -2463,7 +3583,7 @@ private func openCombinedVoicePrivacySettingsURL() {
 
 /// 先走系统 API 申请；随后在桌面端打开「隐私与安全性」相关页。输入监控 / 辅助功能在多数 macOS 版本上**不会**像 iOS 那样弹窗，麦克风和语音在「已选择过」后也不再弹窗，因此必须配合系统设置界面。
 @MainActor
-private func requestPermissionsThenOpenPrivacySettingsIfNeeded(
+private func requestStudioPermissionsThenOpenPrivacySettingsIfNeeded(
     voiceRelay: VoiceRelayService,
     nativeSpeech: NativeSpeechTranscriptionService,
     delay: TimeInterval = 0.45
@@ -2471,7 +3591,7 @@ private func requestPermissionsThenOpenPrivacySettingsIfNeeded(
     voiceRelay.refreshPermissions(requestIfNeeded: true)
     nativeSpeech.refreshPermissions(requestIfNeeded: true)
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-        openCombinedVoicePrivacySettingsURL()
+        openStudioCombinedVoicePrivacySettingsURL()
     }
 }
 
