@@ -24,6 +24,7 @@ final class NativeSpeechTranscriptionService: ObservableObject {
     /// 防止 `isFinal`、1s 超时、`error` 回调各触发一次，导致同一段被 ⌘V 多遍
     private var hasCommittedThisRecording = false
     private var didRequestPermissionsThisLaunch = false
+    private var finalTranscriptConsumer: ((String) -> Bool)?
 
     private let syntheticEventUserData: Int64 = 0x4148414B
 
@@ -105,6 +106,10 @@ final class NativeSpeechTranscriptionService: ObservableObject {
         } else {
             startRecording()
         }
+    }
+
+    func setFinalTranscriptConsumer(_ consumer: ((String) -> Bool)?) {
+        finalTranscriptConsumer = consumer
     }
 
     func stopRecording() {
@@ -312,6 +317,14 @@ final class NativeSpeechTranscriptionService: ObservableObject {
         guard !text.isEmpty else {
             statusMessage = "未识别到有效语音内容。"
             appendDiagnostic("finalize empty reason=\(reason)")
+            return
+        }
+
+        if let finalTranscriptConsumer, finalTranscriptConsumer(text) {
+            hasCommittedThisRecording = true
+            lastCommittedText = text
+            statusMessage = "已处理：\(text)"
+            appendDiagnostic("finalize consumed reason=\(reason) text=\(text)")
             return
         }
 

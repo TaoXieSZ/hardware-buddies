@@ -14,7 +14,7 @@ import VoiceAgent
 /// - `events`：兼容旧调试输出；
 /// - `runEvents`：用于实时 run tree / subagent 面板。
 @MainActor
-public final class Agent: ObservableObject {
+public final class VoiceAssistantModel: ObservableObject {
     public struct ChatMessage: Identifiable, Equatable {
         public enum Role: String, Sendable, Equatable {
             case user
@@ -40,7 +40,7 @@ public final class Agent: ObservableObject {
     @Published public var lastError: String?
 
     public let systemPrompt: String
-    /// runner 内部的工具/子 agent 事件流。可在调试视图里 `for await event in agent.events` 读取。
+    /// runner 内部的工具/子 agent 事件流。可在调试视图里 `for await event in assistantModel.events` 读取。
     public let events: AsyncStream<String>
     /// 结构化 run/subagent/tool 事件流，用于可视化调试面板。
     public let runEvents: AsyncStream<VoiceAgentRunEvent>
@@ -141,14 +141,14 @@ public final class Agent: ObservableObject {
 
 // MARK: - Convenience
 
-public extension Agent {
+public extension VoiceAssistantModel {
     /// 与 `VoiceAgentLiveSession` 默认 prompt 对齐的语音助手实例。
     static func voiceAssistant(
         tools: [OpenAIToolDefinition] = [],
         toolHandlers: [String: VoiceAgentToolHandler] = [:],
         options: VoiceAgentOptions = VoiceAgentOptions(temperature: 0.3, maxTokens: 2048)
-    ) -> Agent {
-        Agent(
+    ) -> VoiceAssistantModel {
+        VoiceAssistantModel(
             systemPrompt: """
             你是 AhaKey Mode 2 的智能语音助手，负责总管所有的事项。
             你可以直接回答简单问题。

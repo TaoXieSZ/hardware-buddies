@@ -18,6 +18,7 @@ struct AhaKeyStudioView: View {
     @State private var isSyncing = false
     @State private var showsOLEDPlaybackPreview = false
     @State private var showsDeviceInfo = false
+    @State private var showsVoiceAgentConfiguration = false
 
     init(bleManager: AhaKeyBLEManager) {
         self.bleManager = bleManager
@@ -38,11 +39,7 @@ struct AhaKeyStudioView: View {
         VStack(spacing: 0) {
             topBar
             Divider()
-            HStack(spacing: 0) {
-                canvasPane
-                Divider()
-                inspectorPane
-            }
+            mainPane
             Divider()
             statusBar
         }
@@ -107,6 +104,9 @@ struct AhaKeyStudioView: View {
                 DeviceInfoView(bleManager: bleManager)
             }
             .frame(width: 720, height: 720)
+        }
+        .sheet(isPresented: $showsVoiceAgentConfiguration) {
+            voiceAgentConfigurationSheet
         }
     }
 
@@ -187,10 +187,10 @@ struct AhaKeyStudioView: View {
     private var configurationModeStatus: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(isEditingConfiguration ? Color.blue : Color.green)
+                .fill(selectedMode == .mode2 ? Color.purple : (isEditingConfiguration ? Color.blue : Color.green))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
-                Text(isEditingConfiguration ? "编辑配置中" : "键盘控制中")
+                Text(configurationModeTitle)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
                 Text(configurationModeDetail)
@@ -206,6 +206,33 @@ struct AhaKeyStudioView: View {
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
         .help("日常使用由 Agent 控制键盘；需要改键、OLED 或同步时，进入编辑配置后由 AhaKey Studio 临时接管蓝牙。")
+    }
+
+    @ViewBuilder
+    private var mainPane: some View {
+        if selectedMode == .mode2 {
+            voiceAgentPane
+        } else {
+            HStack(spacing: 0) {
+                canvasPane
+                Divider()
+                inspectorPane
+            }
+        }
+    }
+
+    private var voiceAgentPane: some View {
+        VStack(spacing: 0) {
+            modeEditorHeader
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(Color(nsColor: .windowBackgroundColor))
+            Divider()
+            VoiceAgentWorkspaceView(
+                onOpenConfiguration: openVoiceAgentConfiguration
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var canvasPane: some View {
@@ -1097,7 +1124,7 @@ struct AhaKeyStudioView: View {
 
     private var statusBar: some View {
         HStack(spacing: 16) {
-            Label("\(selectedPart.title) · \(selectedMode.title)", systemImage: selectedPart.systemImage)
+            Label(statusBarSelectionText, systemImage: statusBarSelectionIcon)
                 .font(.callout)
             Divider()
                 .frame(height: 14)
@@ -1119,6 +1146,58 @@ struct AhaKeyStudioView: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
         .background(chromeBarBackground)
+    }
+
+    private var voiceAgentConfigurationSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("VoiceAgent 设置")
+                    .font(.headline)
+                Spacer()
+                Button("关闭") {
+                    showsVoiceAgentConfiguration = false
+                }
+            }
+            .padding(16)
+            Divider()
+            VStack(alignment: .leading, spacing: 16) {
+                GroupBox("运行时") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        settingRow(title: "API Key", value: "Keychain: com.ahakey.voiceagent / openai-compatible-api-key")
+                        settingRow(title: "Model", value: "读取 AHAKEY_OPENAI_MODEL，未设置时使用默认模型")
+                        settingRow(title: "Base URL", value: "读取 AHAKEY_OPENAI_BASE_URL，未设置时使用默认端点")
+                    }
+                    .padding(.top, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("接口") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        settingRow(title: "配置保存", value: "待接入")
+                        settingRow(title: "语音输入目标", value: "待接入 NativeSpeechTranscriptionService")
+                    }
+                    .padding(.top, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Spacer()
+            }
+            .padding(16)
+        }
+        .frame(width: 560, height: 360)
+    }
+
+    private func settingRow(title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
     }
 
     private var chromeBarBackground: Color {
@@ -1164,7 +1243,17 @@ struct AhaKeyStudioView: View {
         agentManager.bluetoothConnectionOwner == .ahaKeyStudio
     }
 
+    private var configurationModeTitle: String {
+        if selectedMode == .mode2 {
+            return "VoiceAgent"
+        }
+        return isEditingConfiguration ? "编辑配置中" : "键盘控制中"
+    }
+
     private var configurationModeDetail: String {
+        if selectedMode == .mode2 {
+            return "主 agent 工作台"
+        }
         if isEditingConfiguration {
             if bleManager.isConnected {
                 return "AhaKey Studio 正在配置键盘"
@@ -1184,6 +1273,9 @@ struct AhaKeyStudioView: View {
     }
 
     private var configurationModeButtonTitle: String {
+        if selectedMode == .mode2 {
+            return "VoiceAgent 设置"
+        }
         if isSyncing {
             return "同步中…"
         }
@@ -1194,6 +1286,9 @@ struct AhaKeyStudioView: View {
     }
 
     private var configurationModeButtonHelp: String {
+        if selectedMode == .mode2 {
+            return "打开 VoiceAgent 运行时配置入口；当前 API key 暂时从 Keychain 读取。"
+        }
         if isEditingConfiguration {
             if hasUnsyncedChanges {
                 return "将当前草稿同步到键盘，然后把蓝牙交还给 Agent。"
@@ -1201,6 +1296,20 @@ struct AhaKeyStudioView: View {
             return "没有未同步改动，直接把蓝牙交还给 Agent。"
         }
         return "临时由 AhaKey Studio 接管蓝牙，用于改键、OLED、同步和本机灯效测试。"
+    }
+
+    private var statusBarSelectionText: String {
+        if selectedMode == .mode2 {
+            return "VoiceAgent · \(selectedMode.title)"
+        }
+        return "\(selectedPart.title) · \(selectedMode.title)"
+    }
+
+    private var statusBarSelectionIcon: String {
+        if selectedMode == .mode2 {
+            return "point.3.connected.trianglepath.dotted"
+        }
+        return selectedPart.systemImage
     }
 
     private var voicePresetDetail: String {
@@ -1440,11 +1549,20 @@ struct AhaKeyStudioView: View {
     }
 
     private func handleConfigurationModeButton() {
+        if selectedMode == .mode2 {
+            openVoiceAgentConfiguration()
+            return
+        }
         if isEditingConfiguration {
             finishEditingConfiguration()
         } else {
             enterEditingConfiguration()
         }
+    }
+
+    private func openVoiceAgentConfiguration() {
+        showsVoiceAgentConfiguration = true
+        syncStatusMessage = "VoiceAgent 配置入口已预留，当前运行时读取 Keychain。"
     }
 
     private func enterEditingConfiguration() {
