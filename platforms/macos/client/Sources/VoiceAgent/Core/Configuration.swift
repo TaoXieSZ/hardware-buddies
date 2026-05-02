@@ -14,6 +14,15 @@ public enum VoiceAgentRuntimeConfig {
     public static let keychainService = "com.ahakey.voiceagent"
     public static let keychainAPIKeyAccount = "openai-compatible-api-key"
 
+    // MARK: - Feishu / Lark
+
+    public static let feishuAppIDEnvironmentVariable = "AHAKEY_FEISHU_APP_ID"
+    public static let feishuAppSecretEnvironmentVariable = "AHAKEY_FEISHU_APP_SECRET"
+    public static let feishuContactsEnvironmentVariable = "AHAKEY_FEISHU_CONTACTS_JSON"
+    public static let keychainFeishuAppIDAccount = "feishu-app-id"
+    public static let keychainFeishuAppSecretAccount = "feishu-app-secret"
+    public static let feishuBaseURL = URL(string: "https://open.feishu.cn/open-apis")!
+
     public static let defaultOpenAIBaseURL = URL(string: "https://api.openai-next.com/v1")!
     public static let defaultModel = "claude-opus-4-7"
 
@@ -64,6 +73,54 @@ public enum VoiceAgentRuntimeConfig {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String {
         nonEmpty(environment[modelEnvironmentVariable]) ?? defaultModel
+    }
+
+    // MARK: - Feishu accessors
+
+    public static var feishuAppID: String? {
+        feishuAppID(environment: ProcessInfo.processInfo.environment)
+    }
+
+    public static var feishuAppSecret: String? {
+        feishuAppSecret(environment: ProcessInfo.processInfo.environment)
+    }
+
+    public static var feishuContactsJSON: String? {
+        feishuContactsJSON(environment: ProcessInfo.processInfo.environment)
+    }
+
+    public static func feishuAppID(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        includeKeychain: Bool = true
+    ) -> String? {
+        if let value = nonEmpty(environment[feishuAppIDEnvironmentVariable]) {
+            return value
+        }
+        guard includeKeychain else { return nil }
+        return VoiceAgentKeychain.openAIAPIKey(
+            service: keychainService,
+            account: keychainFeishuAppIDAccount
+        )
+    }
+
+    public static func feishuAppSecret(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        includeKeychain: Bool = true
+    ) -> String? {
+        if let value = nonEmpty(environment[feishuAppSecretEnvironmentVariable]) {
+            return value
+        }
+        guard includeKeychain else { return nil }
+        return VoiceAgentKeychain.openAIAPIKey(
+            service: keychainService,
+            account: keychainFeishuAppSecretAccount
+        )
+    }
+
+    public static func feishuContactsJSON(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        nonEmpty(environment[feishuContactsEnvironmentVariable])
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

@@ -446,6 +446,12 @@ struct AhaKeyStudioView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
+                            if !nativeSpeech.recognitionLocaleIdentifier.isEmpty {
+                                Text("识别语言：\(nativeSpeech.recognitionLocaleIdentifier)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
                             if !nativeSpeech.transcriptPreview.isEmpty {
                                 Text("实时识别：\(nativeSpeech.transcriptPreview)")
                                     .font(.caption)
@@ -1149,31 +1155,43 @@ struct AhaKeyStudioView: View {
             }
             .padding(16)
             Divider()
-            VStack(alignment: .leading, spacing: 16) {
-                GroupBox("运行时") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        settingRow(title: "API Key", value: "Keychain: com.ahakey.voiceagent / openai-compatible-api-key")
-                        settingRow(title: "Model", value: "读取 AHAKEY_OPENAI_MODEL，未设置时使用默认模型")
-                        settingRow(title: "Base URL", value: "读取 AHAKEY_OPENAI_BASE_URL，未设置时使用默认端点")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    GroupBox("运行时") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            settingRow(title: "API Key", value: "Keychain: com.ahakey.voiceagent / openai-compatible-api-key")
+                            settingRow(title: "Model", value: "读取 AHAKEY_OPENAI_MODEL，未设置时使用默认模型")
+                            settingRow(title: "Base URL", value: "读取 AHAKEY_OPENAI_BASE_URL，未设置时使用默认端点")
+                        }
+                        .padding(.top, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.top, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
 
-                GroupBox("接口") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        settingRow(title: "配置保存", value: "待接入")
-                        settingRow(title: "语音输入目标", value: "待接入 NativeSpeechTranscriptionService")
+                    GroupBox("飞书 / Lark") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            settingRow(title: "App ID", value: "Keychain: com.ahakey.voiceagent / feishu-app-id")
+                            settingRow(title: "App Secret", value: "Keychain: com.ahakey.voiceagent / feishu-app-secret")
+                            Divider()
+                            FeishuContactsConfigView()
+                                .padding(.top, 4)
+                        }
+                        .padding(.top, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.top, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
 
-                Spacer()
+                    GroupBox("接口") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            settingRow(title: "配置保存", value: "待接入")
+                            settingRow(title: "语音输入目标", value: "待接入 NativeSpeechTranscriptionService")
+                        }
+                        .padding(.top, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(16)
             }
-            .padding(16)
         }
-        .frame(width: 560, height: 360)
+        .frame(width: 600, height: 680)
     }
 
     private func settingRow(title: String, value: String) -> some View {

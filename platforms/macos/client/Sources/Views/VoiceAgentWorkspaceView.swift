@@ -1,15 +1,24 @@
 import SwiftUI
 import VoiceAgent
 
+@MainActor
+private func makeDefaultVoiceAssistantModel() -> VoiceAssistantModel {
+    VoiceAssistantModel.voiceAssistant(subAgents: defaultVoiceSubAgents())
+}
+
+private func defaultVoiceSubAgents() -> [VoiceSubAgent] {
+    [VoiceSubAgent.feishuMessenger()].compactMap { $0 }
+}
+
 struct VoiceAgentWorkspaceView<Header: View>: View {
-    @StateObject private var assistantModel = VoiceAssistantModel.voiceAssistant()
+    @StateObject private var assistantModel = makeDefaultVoiceAssistantModel()
     @StateObject private var nativeSpeech = NativeSpeechTranscriptionService.shared
     @State private var promptDraft = ""
     @State private var runSnapshots: [VoiceAgentRunSnapshot] = []
     @State private var selectedRunID: UUID?
 
-    let modeEditorHeader: Header
-    let onOpenConfiguration: () -> Void
+    var modeEditorHeader: Header
+    var onOpenConfiguration: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -25,6 +34,7 @@ struct VoiceAgentWorkspaceView<Header: View>: View {
             NativeSpeechTranscriptionService.shared.setFinalTranscriptConsumer(nil)
         }
         .task {
+            await assistantModel.registerInitialSubAgents()
             await consumeRunEvents()
         }
     }
@@ -80,27 +90,100 @@ struct VoiceAgentWorkspaceView<Header: View>: View {
     // MARK: - Inspector (Right)
 
     private var inspectorPane: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            inspectorHeader
-            actionButtons
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                inspectorHeader
+                actionButtons
 
-            if runSnapshots.isEmpty {
-                emptyRunTree
+                if runSnapshots.isEmpty {
+                    emptyRunTree
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(orderedRuns) { run in
+                                runRow(run)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .padding(24)
+
+            if let selected = selectedRun {
+                Divider()
+                runDetailPane(selected)
+            }
+        }
+        .frame(width: 390)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+    }
+
+    private var selectedRun: VoiceAgentRunSnapshot? {
+        guard let id = selectedRunID else { return nil }
+        return runSnapshots.first { $0.runID == id }
+    }
+
+    private func runDetailPane(_ run: VoiceAgentRunSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(
+                    run.kind == .root ? "Main Messages" : "Subagent Messages",
+                    systemImage: run.kind == .root ? "bubble.left.and.bubble.right" : "arrow.triangle.branch"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    selectedRunID = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            let visibleMessages = run.messages.filter {
+                $0.role == .user || $0.role == .assistant
+            }.filter { !$0.content.isEmpty }
+
+            if visibleMessages.isEmpty {
+                Text("No messages in this run.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(orderedRuns) { run in
-                            runRow(run)
+                        ForEach(Array(visibleMessages.enumerated()), id: \.offset) { _, msg in
+                            runMessageRow(msg)
                         }
                     }
                     .padding(.vertical, 2)
                 }
             }
         }
-        .padding(24)
-        .frame(width: 390)
-        .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        .padding(16)
+        .frame(maxHeight: 280)
+    }
+
+    private func runMessageRow(_ message: VoiceAgentMessage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(message.role.rawValue.capitalized)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(message.content)
+                .font(.caption)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(message.role == .user ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
+        )
     }
 
     private var inspectorHeader: some View {
@@ -135,10 +218,12 @@ struct VoiceAgentWorkspaceView<Header: View>: View {
             }
             .disabled(assistantModel.isThinking)
 
-            Button {
-                onOpenConfiguration()
-            } label: {
-                Label("Settings", systemImage: "slider.horizontal.3")
+            if let onOpenConfiguration {
+                Button {
+                    onOpenConfiguration()
+                } label: {
+                    Label("Settings", systemImage: "slider.horizontal.3")
+                }
             }
         }
     }
@@ -225,7 +310,7 @@ struct VoiceAgentWorkspaceView<Header: View>: View {
 
     private func runRow(_ run: VoiceAgentRunSnapshot) -> some View {
         Button {
-            selectedRunID = run.runID
+            selectedRunID = selectedRunID == run.runID ? nil : run.runID
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Circle()
@@ -361,5 +446,14 @@ struct VoiceAgentWorkspaceView<Header: View>: View {
         case .failed:
             .red
         }
+    }
+}
+
+// MARK: - Convenience initializer (no header needed)
+
+extension VoiceAgentWorkspaceView where Header == EmptyView {
+    init(onOpenConfiguration: (() -> Void)? = nil) {
+        self.modeEditorHeader = EmptyView()
+        self.onOpenConfiguration = onOpenConfiguration
     }
 }

@@ -95,8 +95,12 @@ public struct VoiceSubAgentLiveSnapshot: Sendable {
 public actor VoiceSubAgent {
     public let name: String
     public let purpose: String
+    public let model: String
+    public let options: VoiceAgentOptions
+    public let systemPrompt: String
 
     private let agent: VoiceAgent
+    private let llmClient: any VoiceAgentLLMClient
     private let memory: VoiceAgentMemory
     private let tools: [String: any VoiceAgentTool]
     private let eventHandler: VoiceSubAgentEventHandler?
@@ -114,6 +118,10 @@ public actor VoiceSubAgent {
     ) {
         self.name = name
         self.purpose = purpose
+        self.model = model
+        self.options = options
+        self.systemPrompt = systemPrompt
+        self.llmClient = client
         self.agent = VoiceAgent(
             model: model,
             systemPrompt: systemPrompt,
@@ -211,6 +219,28 @@ public actor VoiceSubAgent {
 
     public func availableTools() -> [String] {
         tools.keys.sorted()
+    }
+
+    // MARK: - Runner integration
+
+    /// All registered tools, for VoiceAgentRunner agentic loop integration.
+    public func registeredTools() -> [any VoiceAgentTool] {
+        Array(tools.values)
+    }
+
+    /// The underlying memory actor, for VoiceAgentRunner tool context construction.
+    public func agentMemory() -> VoiceAgentMemory {
+        memory
+    }
+
+    /// The LLM client configured for this specialist.
+    public func agentLLMClient() -> any VoiceAgentLLMClient {
+        llmClient
+    }
+
+    /// Record a note in this agent's memory (used by runner after completing a task).
+    public func remember(_ note: String) async {
+        await memory.remember(note)
     }
 
     private func executeTools(

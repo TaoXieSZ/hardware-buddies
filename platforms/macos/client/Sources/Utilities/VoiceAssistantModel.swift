@@ -49,22 +49,24 @@ public final class VoiceAssistantModel: ObservableObject {
     private nonisolated let eventContinuation: AsyncStream<String>.Continuation
     private nonisolated let runEventContinuation: AsyncStream<VoiceAgentRunEvent>.Continuation
 
+    private let initialSubAgents: [VoiceSubAgent]
+
     public init(
         systemPrompt: String,
         model: String = VoiceAgentRuntimeConfig.openAIModel,
         options: VoiceAgentOptions = VoiceAgentOptions(temperature: 0.3, maxTokens: 2048),
-        tools: [OpenAIToolDefinition] = [],
-        toolHandlers: [String: VoiceAgentToolHandler] = [:],
+        tools: [any VoiceAgentTool] = [],
+        subAgents: [VoiceSubAgent] = [],
         client: any VoiceAgentLLMClient = OpenAICompatibleChatClient.configuredOpenAI()
     ) {
         self.systemPrompt = systemPrompt
+        self.initialSubAgents = subAgents
         let (stream, continuation) = AsyncStream<String>.makeStream()
         let (runStream, runContinuation) = AsyncStream<VoiceAgentRunEvent>.makeStream()
         self.events = stream
         self.runEvents = runStream
         self.eventContinuation = continuation
         self.runEventContinuation = runContinuation
-        // 闭包只捕获 Sendable 的 continuation，避免 self 跨 actor 引用。
         let onEvent: VoiceAgentEventCallback = { [continuation] event in
             continuation.yield(event)
         }
@@ -76,11 +78,17 @@ public final class VoiceAssistantModel: ObservableObject {
             systemPrompt: systemPrompt,
             client: client,
             tools: tools,
-            toolHandlers: toolHandlers,
             options: options,
             onEvent: onEvent,
             onRunEvent: onRunEvent
         )
+    }
+
+    /// Register initial subagents. Call once after init (e.g. in .task modifier).
+    public func registerInitialSubAgents() async {
+        for agent in initialSubAgents {
+            await runner.registerSubAgent(agent)
+        }
     }
 
     deinit {
@@ -137,6 +145,11 @@ public final class VoiceAssistantModel: ObservableObject {
     public func runSnapshot(runID: UUID) async -> VoiceAgentRunSnapshot? {
         await runner.runSnapshot(runID: runID)
     }
+
+    /// Register a named subagent that the root agent can delegate to by name.
+    public func registerSubAgent(_ subAgent: VoiceSubAgent) async {
+        await runner.registerSubAgent(subAgent)
+    }
 }
 
 // MARK: - Convenience
@@ -144,8 +157,8 @@ public final class VoiceAssistantModel: ObservableObject {
 public extension VoiceAssistantModel {
     /// 与 `VoiceAgentLiveSession` 默认 prompt 对齐的语音助手实例。
     static func voiceAssistant(
-        tools: [OpenAIToolDefinition] = [],
-        toolHandlers: [String: VoiceAgentToolHandler] = [:],
+        tools: [any VoiceAgentTool] = [],
+        subAgents: [VoiceSubAgent] = [],
         options: VoiceAgentOptions = VoiceAgentOptions(temperature: 0.3, maxTokens: 2048)
     ) -> VoiceAssistantModel {
         VoiceAssistantModel(
@@ -155,15 +168,36 @@ public extension VoiceAssistantModel {
             你是 AhaKey Mode 2 的语音助手总控。用户通过语音或文字向你下达指令，\
             你的职责是理解意图、决定执行策略、交付结果。
 
-            # 直接完成（默认路径）
+            # 你的能力
 
-            大多数请求你应该自己完成，包括但不限于：
+            1. **工具调用**：你可以调用已注册的工具来完成具体操作（搜索、计算、API 调用等）。\
+               工具列表会在可用时自动出现在你的 function calling 接口中。
+            2. **委派 subagent**：你可以启动子 agent 来并行处理独立的子任务。\
+               子 agent 分两种：
+               - **命名专家**：通过 `agent` 参数指定名字，他们有自己的专属工具和记忆，\
+                 会记住之前做过的任务，擅长各自的领域。可用专家列表会在 subagent 工具描述中列出。
+               - **匿名通用**：不指定 `agent` 参数，临时创建一个通用 agent，适合一次性任务。
+            3. **直接回答**：对于简单问题，你自己就是最高效的执行者。
+
+            # 执行策略
+
+            ## 直接完成（默认路径）
+
+            大多数请求你应该自己完成：
             - 简单问答、知识查询、翻译、总结
             - 格式整理、文案润色、单步计算
             - 需要前后文连贯的多轮对话
             - 任何一个人做比拆开更快的事情
+            - 需要调用一两个工具就能搞定的事情
 
-            # 委派 subagent（仅在明确收益时）
+            ## 固定专家路由
+
+            - 飞书/Lark 发消息请求：如果可用专家列表中有 `feishu`，必须委派给 `agent: "feishu"`。\
+              委派 prompt 必须包含收件人标识（联系人名、邮箱、手机号、直接 ID，或 receive_id + receive_id_type）和要发送的完整消息内容。
+            - `feishu` 专家会自己查本地联系人别名和飞书通讯录；不要因为用户只给了名字就要求用户手动找 ID。
+            - 如果用户没有给出收件人或消息内容，先追问缺失信息，不要猜测收件人。
+
+            ## 委派 subagent（仅在明确收益时）
 
             仅当请求可以拆成 2-4 个**彼此独立、互不依赖**的子任务，\
             且并行执行能显著缩短总耗时时，才使用 subagent。
@@ -172,11 +206,12 @@ public extension VoiceAssistantModel {
             1. 子任务之间是否真的无依赖？如果 B 需要 A 的结果，就不要并行。
             2. 我自己串行做是否也就几秒钟？如果是，不值得委派的开销。
             3. 拆分后每个子任务是否足够自洽？subagent 看不到我们的对话历史。
+            4. 有没有命名专家适合这个任务？优先用专家，他们有工具和记忆。
 
-            写 subagent 指令时：
-            - prompt 必须自包含：把必要背景写进去，不要引用"上面提到的"。
+            委派指令要求：
+            - `prompt` 必须自包含：把必要背景写进去，不要引用"上面提到的"。
             - 目标明确：说清楚要交付什么格式、什么粒度。
-            - 不要让 subagent 再委派（它们做不到）。
+            - 如果有合适的命名专家，用 `agent` 参数指定；否则省略让系统分配匿名 agent。
 
             # 回复风格
 
@@ -187,7 +222,7 @@ public extension VoiceAssistantModel {
             """,
             options: options,
             tools: tools,
-            toolHandlers: toolHandlers
+            subAgents: subAgents
         )
     }
 }

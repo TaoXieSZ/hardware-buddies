@@ -1,10 +1,10 @@
 import Foundation
 
-public typealias VoiceAgentToolHandler = @Sendable (String) async throws -> String
 public typealias VoiceAgentEventCallback = @Sendable (String) async -> Void
 public typealias VoiceAgentRunEventCallback = @Sendable (VoiceAgentRunEvent) async -> Void
 
 private struct SubAgentArgs: Sendable {
+    var agentName: String?
     var systemPrompt: String
     var prompt: String
 
@@ -22,18 +22,21 @@ private struct SubAgentArgs: Sendable {
             if trimmed.looksLikeJSON {
                 throw SubAgentArgumentError.invalidJSON(trimmed, error.localizedDescription)
             }
-            // Some OpenAI-compatible providers may return bare text instead of
-            // a JSON-encoded function argument. Treat it as the delegated prompt.
-            return SubAgentArgs(systemPrompt: defaultSystemPrompt, prompt: trimmed)
+            return SubAgentArgs(agentName: nil, systemPrompt: defaultSystemPrompt, prompt: trimmed)
         }
 
         if let prompt = value as? String, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return SubAgentArgs(systemPrompt: defaultSystemPrompt, prompt: prompt)
+            return SubAgentArgs(agentName: nil, systemPrompt: defaultSystemPrompt, prompt: prompt)
         }
 
         guard let object = value as? [String: Any] else {
             throw SubAgentArgumentError.unsupportedShape(trimmed)
         }
+
+        let agentName = firstString(
+            in: object,
+            keys: ["agent", "agent_name", "agentName", "name"]
+        )
 
         let systemPrompt = firstString(
             in: object,
@@ -44,11 +47,11 @@ private struct SubAgentArgs: Sendable {
             in: object,
             keys: ["prompt", "task", "input", "query", "question", "request", "user_prompt", "userPrompt"]
         ) {
-            return SubAgentArgs(systemPrompt: systemPrompt, prompt: prompt)
+            return SubAgentArgs(agentName: agentName, systemPrompt: systemPrompt, prompt: prompt)
         }
 
         if let onlyString = object.values.compactMap({ $0 as? String }).first(where: { !$0.isBlank }) {
-            return SubAgentArgs(systemPrompt: systemPrompt, prompt: onlyString)
+            return SubAgentArgs(agentName: agentName, systemPrompt: systemPrompt, prompt: onlyString)
         }
 
         throw SubAgentArgumentError.missingPrompt(trimmed)
@@ -120,8 +123,13 @@ public actor VoiceAgentRunner {
     private let client: any VoiceAgentLLMClient
     private let model: String
     private let options: VoiceAgentOptions
-    private let tools: [OpenAIToolDefinition]
-    private let toolHandlers: [String: VoiceAgentToolHandler]
+    private let registeredTools: [any VoiceAgentTool]
+    private let toolDefinitions: [OpenAIToolDefinition]
+    private let toolLookup: [String: any VoiceAgentTool]
+    private let sessionID: UUID
+    private let agentName: String
+    private let memory: VoiceAgentMemory
+    private var namedSubAgents: [String: VoiceSubAgent] = [:]
     private let onEvent: VoiceAgentEventCallback?
     private let onRunEvent: VoiceAgentRunEventCallback?
     private let limiter: ConcurrencyLimiter
@@ -133,9 +141,9 @@ public actor VoiceAgentRunner {
         model: String,
         systemPrompt: String,
         client: any VoiceAgentLLMClient,
-        tools: [OpenAIToolDefinition] = [],
-        toolHandlers: [String: VoiceAgentToolHandler] = [:],
+        tools: [any VoiceAgentTool] = [],
         options: VoiceAgentOptions = VoiceAgentOptions(),
+        agentName: String = "root",
         onEvent: VoiceAgentEventCallback? = nil,
         onRunEvent: VoiceAgentRunEventCallback? = nil,
         runRegistry: VoiceAgentRunRegistry = VoiceAgentRunRegistry()
@@ -143,8 +151,12 @@ public actor VoiceAgentRunner {
         self.client = client
         self.model = model
         self.options = options
-        self.tools = tools
-        self.toolHandlers = toolHandlers
+        self.registeredTools = tools
+        self.toolDefinitions = tools.map { $0.openAIDefinition() }
+        self.toolLookup = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
+        self.sessionID = UUID()
+        self.agentName = agentName
+        self.memory = VoiceAgentMemory()
         self.onEvent = onEvent
         self.onRunEvent = onRunEvent
         self.limiter = ConcurrencyLimiter(limit: Self.maxConcurrentCalls)
@@ -182,13 +194,17 @@ public actor VoiceAgentRunner {
                 messages: &working,
                 model: model,
                 client: client,
-                tools: tools,
-                toolHandlers: toolHandlers,
+                toolDefinitions: toolDefinitions,
+                toolLookup: toolLookup,
+                namedSubAgents: namedSubAgents,
                 options: options,
                 runID: rootRunID,
                 rootRunID: rootRunID,
                 depth: 0,
                 remainingSubagentCalls: &remainingSubagentCalls,
+                sessionID: sessionID,
+                agentName: agentName,
+                memory: memory,
                 limiter: limiter,
                 runRegistry: runRegistry,
                 onEvent: onEvent,
@@ -225,19 +241,33 @@ public actor VoiceAgentRunner {
         await runRegistry.reset()
     }
 
+    // MARK: - Named subagent registry
+
+    public func registerSubAgent(_ subAgent: VoiceSubAgent) async {
+        namedSubAgents[subAgent.name] = subAgent
+    }
+
+    public func availableSubAgentNames() -> [String] {
+        namedSubAgents.keys.sorted()
+    }
+
     // MARK: - Recursive agent loop
 
     private static func runAgent(
         messages: inout [VoiceAgentMessage],
         model: String,
         client: any VoiceAgentLLMClient,
-        tools: [OpenAIToolDefinition],
-        toolHandlers: [String: VoiceAgentToolHandler],
+        toolDefinitions: [OpenAIToolDefinition],
+        toolLookup: [String: any VoiceAgentTool],
+        namedSubAgents: [String: VoiceSubAgent],
         options: VoiceAgentOptions,
         runID: UUID,
         rootRunID: UUID,
         depth: Int,
         remainingSubagentCalls: inout Int,
+        sessionID: UUID,
+        agentName: String,
+        memory: VoiceAgentMemory,
         limiter: ConcurrencyLimiter,
         runRegistry: VoiceAgentRunRegistry,
         onEvent: VoiceAgentEventCallback?,
@@ -245,8 +275,8 @@ public actor VoiceAgentRunner {
     ) async throws -> String {
         while true {
             let allTools = depth == 0 && remainingSubagentCalls > 0
-                ? tools + [subagentToolDefinition]
-                : tools
+                ? toolDefinitions + [buildSubagentToolDefinition(namedAgents: namedSubAgents)]
+                : toolDefinitions
 
             let request = OpenAIChatCompletionRequest(
                 model: model,
@@ -325,20 +355,30 @@ public actor VoiceAgentRunner {
                                         args,
                                         model: model,
                                         client: client,
-                                        tools: tools,
-                                        toolHandlers: toolHandlers,
+                                        toolDefinitions: toolDefinitions,
+                                        toolLookup: toolLookup,
+                                        namedSubAgents: namedSubAgents,
                                         options: options,
                                         parentRunID: runID,
                                         rootRunID: rootRunID,
                                         depth: depth,
+                                        sessionID: sessionID,
+                                        agentName: agentName,
+                                        memory: memory,
                                         limiter: limiter,
                                         runRegistry: runRegistry,
                                         onEvent: onEvent,
                                         onRunEvent: onRunEvent
                                     )
                                 }
-                            } else if let handler = toolHandlers[name] {
-                                output = try await handler(args)
+                            } else if let tool = toolLookup[name] {
+                                let memorySnapshot = await memory.snapshot()
+                                let ctx = VoiceAgentToolContext(
+                                    sessionID: sessionID,
+                                    agentName: agentName,
+                                    memory: memorySnapshot
+                                )
+                                output = try await tool.call(input: args, context: ctx)
                             } else {
                                 output = "Error: unknown tool '\(name)'"
                                 status = .failed
@@ -409,12 +449,16 @@ public actor VoiceAgentRunner {
         _ arguments: String,
         model: String,
         client: any VoiceAgentLLMClient,
-        tools: [OpenAIToolDefinition],
-        toolHandlers: [String: VoiceAgentToolHandler],
+        toolDefinitions: [OpenAIToolDefinition],
+        toolLookup: [String: any VoiceAgentTool],
+        namedSubAgents: [String: VoiceSubAgent],
         options: VoiceAgentOptions,
         parentRunID: UUID,
         rootRunID: UUID,
         depth: Int,
+        sessionID: UUID,
+        agentName: String,
+        memory: VoiceAgentMemory,
         limiter: ConcurrencyLimiter,
         runRegistry: VoiceAgentRunRegistry,
         onEvent: VoiceAgentEventCallback?,
@@ -426,6 +470,81 @@ public actor VoiceAgentRunner {
 
         let parsed = try SubAgentArgs.parse(arguments)
 
+        // Named subagent path: agentic loop with the agent's own tools + memory
+        if let requestedName = parsed.agentName,
+           let namedAgent = namedSubAgents[requestedName] {
+            let agentTools = await namedAgent.registeredTools()
+            let agentMemory = await namedAgent.agentMemory()
+            let agentClient = await namedAgent.agentLLMClient()
+            let agentToolDefs = agentTools.map { $0.openAIDefinition() }
+            let agentToolLookup = Dictionary(uniqueKeysWithValues: agentTools.map { ($0.name, $0) })
+
+            // Preserve the specialist's own instructions, then add memory context.
+            let memorySnapshot = await agentMemory.snapshot()
+            let systemPromptText: String
+            if memorySnapshot.notes.isEmpty && memorySnapshot.facts.isEmpty {
+                systemPromptText = namedAgent.systemPrompt
+            } else {
+                systemPromptText = """
+                \(namedAgent.systemPrompt)
+
+                # 记忆
+
+                \(memorySnapshot.rendered)
+                """
+            }
+
+            var subMessages: [VoiceAgentMessage] = [
+                .system(systemPromptText),
+                .user(parsed.prompt),
+            ]
+            let childRunID = UUID()
+            let childSnapshot = await runRegistry.startRun(
+                runID: childRunID,
+                kind: .subagent,
+                title: "[\(requestedName)] \(parsed.prompt.voiceAgentRunTitle)",
+                parentRunID: parentRunID,
+                rootRunID: rootRunID,
+                depth: depth + 1,
+                messages: subMessages
+            )
+            await emit(.runStarted(childSnapshot), onEvent: onEvent, onRunEvent: onRunEvent)
+
+            var childSubagentBudget = 0
+            do {
+                let output = try await runAgent(
+                    messages: &subMessages,
+                    model: namedAgent.model,
+                    client: agentClient,
+                    toolDefinitions: agentToolDefs,
+                    toolLookup: agentToolLookup,
+                    namedSubAgents: [:],
+                    options: namedAgent.options,
+                    runID: childRunID,
+                    rootRunID: rootRunID,
+                    depth: depth + 1,
+                    remainingSubagentCalls: &childSubagentBudget,
+                    sessionID: sessionID,
+                    agentName: requestedName,
+                    memory: agentMemory,
+                    limiter: limiter,
+                    runRegistry: runRegistry,
+                    onEvent: onEvent,
+                    onRunEvent: onRunEvent
+                )
+                // Persist result in agent's memory for future delegations
+                await namedAgent.remember("Task: \(parsed.prompt)\nResult: \(output)")
+                await runRegistry.completeRun(childRunID, output: output)
+                await emit(.runCompleted(runID: childRunID, output: output), onEvent: onEvent, onRunEvent: onRunEvent)
+                return output
+            } catch {
+                await runRegistry.failRun(childRunID, error: error.localizedDescription)
+                await emit(.runFailed(runID: childRunID, error: error.localizedDescription), onEvent: onEvent, onRunEvent: onRunEvent)
+                throw error
+            }
+        }
+
+        // Anonymous subagent path: recursive runAgent (original behavior)
         var subMessages: [VoiceAgentMessage] = [
             .system(parsed.systemPrompt),
             .user(parsed.prompt),
@@ -448,13 +567,17 @@ public actor VoiceAgentRunner {
                 messages: &subMessages,
                 model: model,
                 client: client,
-                tools: tools,
-                toolHandlers: toolHandlers,
+                toolDefinitions: toolDefinitions,
+                toolLookup: toolLookup,
+                namedSubAgents: [:],
                 options: options,
                 runID: childRunID,
                 rootRunID: rootRunID,
                 depth: depth + 1,
                 remainingSubagentCalls: &childSubagentBudget,
+                sessionID: sessionID,
+                agentName: agentName,
+                memory: memory,
                 limiter: limiter,
                 runRegistry: runRegistry,
                 onEvent: onEvent,
@@ -479,33 +602,47 @@ public actor VoiceAgentRunner {
         await onEvent?(event.displayText)
     }
 
-    private static let subagentToolDefinition = OpenAIToolDefinition(
-        function: .init(
-            name: "subagent",
-            description: "Launch an independent sub-agent for a self-contained subtask only when parallel delegation is materially better than doing the work serially in the current agent. Do not use this for trivial lookups, follow-up synthesis, formatting, or tasks whose output depends on another subtask. For complex requests, split into at most 3-4 independent subagents total. Subagents cannot delegate again; they must complete their assigned task directly.",
-            parameters: .object([
-                "type": .string("object"),
-                "properties": .object([
-                    "system_prompt": .object([
-                        "type": .string("string"),
-                        "description": .string("Optional system prompt for the sub-agent to follow. If omitted, the runner uses a safe default."),
+    private static func buildSubagentToolDefinition(namedAgents: [String: VoiceSubAgent]) -> OpenAIToolDefinition {
+        var agentDescription = "Optional name of a registered specialist sub-agent to handle this task. If omitted, an anonymous general-purpose sub-agent is used."
+        if !namedAgents.isEmpty {
+            let roster = namedAgents.keys.sorted().map { name -> String in
+                let purpose = namedAgents[name].map { "— \($0.purpose)" } ?? ""
+                return "  - \"\(name)\" \(purpose)"
+            }.joined(separator: "\n")
+            agentDescription += "\n\nAvailable agents:\n\(roster)"
+        }
+
+        return OpenAIToolDefinition(
+            function: .init(
+                name: "subagent",
+                description: "Launch an independent sub-agent for a self-contained subtask only when parallel delegation is materially better than doing the work serially in the current agent. Do not use this for trivial lookups, follow-up synthesis, formatting, or tasks whose output depends on another subtask. For complex requests, split into at most 3-4 independent subagents total. Subagents cannot delegate again; they must complete their assigned task directly.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "agent": .object([
+                            "type": .string("string"),
+                            "description": .string(agentDescription),
+                        ]),
+                        "system_prompt": .object([
+                            "type": .string("string"),
+                            "description": .string("Optional system prompt for the sub-agent to follow. Ignored when using a named agent (they have their own). If omitted for anonymous agents, a safe default is used."),
+                        ]),
+                        "prompt": .object([
+                            "type": .string("string"),
+                            "description": .string("The independent task for the sub-agent to complete directly. Make it self-contained and include the needed context; do not ask it to create more subagents."),
+                        ]),
                     ]),
-                    "prompt": .object([
-                        "type": .string("string"),
-                        "description": .string("The independent task for the sub-agent to complete directly. Make it self-contained and include the needed context; do not ask it to create more subagents."),
-                    ]),
-                ]),
-                "required": .array([.string("prompt")]),
-            ])
+                    "required": .array([.string("prompt")]),
+                ])
+            )
         )
-    )
+    }
 }
 
 public extension VoiceAgentRunner {
     static func configuredOpenAI(
         systemPrompt: String,
-        tools: [OpenAIToolDefinition] = [],
-        toolHandlers: [String: VoiceAgentToolHandler] = [:],
+        tools: [any VoiceAgentTool] = [],
         options: VoiceAgentOptions = VoiceAgentOptions(),
         onEvent: VoiceAgentEventCallback? = nil,
         onRunEvent: VoiceAgentRunEventCallback? = nil
@@ -515,7 +652,6 @@ public extension VoiceAgentRunner {
             systemPrompt: systemPrompt,
             client: OpenAICompatibleChatClient.configuredOpenAI(),
             tools: tools,
-            toolHandlers: toolHandlers,
             options: options,
             onEvent: onEvent,
             onRunEvent: onRunEvent
