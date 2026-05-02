@@ -1,27 +1,21 @@
 import SwiftUI
 import VoiceAgent
 
-struct VoiceAgentWorkspaceView: View {
+struct VoiceAgentWorkspaceView<Header: View>: View {
     @StateObject private var assistantModel = VoiceAssistantModel.voiceAssistant()
     @StateObject private var nativeSpeech = NativeSpeechTranscriptionService.shared
     @State private var promptDraft = ""
     @State private var runSnapshots: [VoiceAgentRunSnapshot] = []
     @State private var selectedRunID: UUID?
 
+    let modeEditorHeader: Header
     let onOpenConfiguration: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
+        HStack(spacing: 0) {
+            canvasPane
             Divider()
-            HStack(spacing: 0) {
-                runTreePane
-                Divider()
-                transcriptPane
-            }
-            Divider()
-            voiceCaptureBanner
-            promptBar
+            inspectorPane
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -35,73 +29,26 @@ struct VoiceAgentWorkspaceView: View {
         }
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("VoiceAgent")
-                    .font(.system(size: 20, weight: .semibold))
-                Text(runtimeStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    // MARK: - Canvas (Left)
 
-            Spacer()
-
-            if assistantModel.isThinking {
-                ProgressView()
-                    .controlSize(.small)
+    private var canvasPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                modeEditorHeader
+                transcriptContent
             }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Button {
-                Task { await resetSession() }
-            } label: {
-                Label("Reset", systemImage: "arrow.counterclockwise")
-            }
-            .disabled(assistantModel.isThinking)
-
-            Button {
-                onOpenConfiguration()
-            } label: {
-                Label("Settings", systemImage: "slider.horizontal.3")
-            }
+            voiceCaptureBanner
+            Divider()
+            promptBar
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var runTreePane: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Run Tree")
-                    .font(.headline)
-                Spacer()
-                Text("\(runSnapshots.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            if runSnapshots.isEmpty {
-                emptyRunTree
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(orderedRuns) { run in
-                            runRow(run)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-        }
-        .padding(18)
-        .frame(width: 390)
-        .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.24))
-    }
-
-    private var transcriptPane: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var transcriptContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Transcript")
                 .font(.headline)
 
@@ -127,9 +74,76 @@ struct VoiceAgentWorkspaceView: View {
                 .padding(.vertical, 2)
             }
         }
-        .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    // MARK: - Inspector (Right)
+
+    private var inspectorPane: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            inspectorHeader
+            actionButtons
+
+            if runSnapshots.isEmpty {
+                emptyRunTree
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(orderedRuns) { run in
+                            runRow(run)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 390)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+    }
+
+    private var inspectorHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                Label("Run Tree", systemImage: "list.bullet.indent")
+                    .font(.system(size: 20, weight: .semibold))
+                Spacer()
+                Text("\(runSnapshots.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Text(runtimeStatusText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 8) {
+            if assistantModel.isThinking {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Spacer()
+
+            Button {
+                Task { await resetSession() }
+            } label: {
+                Label("Reset", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(assistantModel.isThinking)
+
+            Button {
+                onOpenConfiguration()
+            } label: {
+                Label("Settings", systemImage: "slider.horizontal.3")
+            }
+        }
+    }
+
+    // MARK: - Voice Capture Banner
 
     @ViewBuilder
     private var voiceCaptureBanner: some View {
@@ -166,6 +180,8 @@ struct VoiceAgentWorkspaceView: View {
         }
     }
 
+    // MARK: - Prompt Bar
+
     private var promptBar: some View {
         HStack(spacing: 12) {
             TextField("Send a prompt to the main agent", text: $promptDraft, axis: .vertical)
@@ -187,6 +203,8 @@ struct VoiceAgentWorkspaceView: View {
         .padding(16)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
+
+    // MARK: - Run Tree Helpers
 
     private var emptyRunTree: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -271,6 +289,8 @@ struct VoiceAgentWorkspaceView: View {
                 .fill(message.role == .user ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
         )
     }
+
+    // MARK: - Logic
 
     private var orderedRuns: [VoiceAgentRunSnapshot] {
         runSnapshots.sorted {

@@ -211,7 +211,10 @@ struct AhaKeyStudioView: View {
     @ViewBuilder
     private var mainPane: some View {
         if selectedMode == .mode2 {
-            voiceAgentPane
+            VoiceAgentWorkspaceView(
+                modeEditorHeader: modeEditorHeader,
+                onOpenConfiguration: openVoiceAgentConfiguration
+            )
         } else {
             HStack(spacing: 0) {
                 canvasPane
@@ -219,20 +222,6 @@ struct AhaKeyStudioView: View {
                 inspectorPane
             }
         }
-    }
-
-    private var voiceAgentPane: some View {
-        VStack(spacing: 0) {
-            modeEditorHeader
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(Color(nsColor: .windowBackgroundColor))
-            Divider()
-            VoiceAgentWorkspaceView(
-                onOpenConfiguration: openVoiceAgentConfiguration
-            )
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var canvasPane: some View {
