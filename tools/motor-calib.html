@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BugC2 Motor Calibrator</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, Menlo, monospace; max-width: 760px;
+         margin: 32px auto; padding: 0 24px; background:#111; color:#eee; }
+  h1 { font-size: 18px; margin: 0 0 18px; }
+  .row { display: flex; gap: 12px; align-items: center; margin: 10px 0; }
+  .row label { width: 60px; }
+  input[type=range] { flex: 1; }
+  .val { width: 50px; text-align: right; font-variant-numeric: tabular-nums; }
+  button { padding: 10px 16px; background:#222; color:#eee; border:1px solid #444;
+           border-radius:6px; cursor:pointer; font-family: inherit; font-size:14px; }
+  button:hover { background:#333; }
+  button.primary { background:#3a6; border-color:#4c8; }
+  button.danger  { background:#a33; border-color:#d55; }
+  #status { margin: 12px 0; padding: 8px 12px; background:#1a1a1a; border-left:3px solid #555;
+            font-size: 13px; min-height: 18px; }
+  #log { margin-top: 18px; height: 220px; overflow-y: auto; background:#0a0a0a;
+         padding:8px 12px; font-size: 12px; border-radius:4px; }
+  .keys { font-size: 12px; color:#999; margin: 8px 0 16px; }
+  kbd { background:#222; border:1px solid #555; border-radius:3px; padding:1px 6px;
+        font-family:inherit; }
+  .preset { display:flex; gap:8px; flex-wrap: wrap; margin: 12px 0; }
+  .preset button { font-size: 12px; padding: 6px 10px; }
+</style>
+</head>
+<body>
+
+<h1>BugC2 Motor Calibrator</h1>
+
+<div id="status">Disconnected. Make sure the stick is paired (or pair via the system passkey prompt).</div>
+
+<div class="row">
+  <button id="btn-connect" class="primary">Connect</button>
+  <button id="btn-disconnect">Disconnect</button>
+  <button id="btn-stop" class="danger">STOP (space)</button>
+</div>
+
+<div class="keys">
+  Keys: <kbd>W</kbd>/<kbd>S</kbd> translate fwd/back &nbsp;
+        <kbd>A</kbd>/<kbd>D</kbd> rotate L/R &nbsp;
+        <kbd>Q</kbd>/<kbd>E</kbd> diagonal A/B &nbsp;
+        <kbd>Space</kbd> stop &nbsp;
+        sliders below = manual per-channel
+</div>
+
+<div class="preset">
+  <span style="color:#999;align-self:center">Presets @ ±80 (16 sign combos):</span>
+  <button data-pattern="80,80,80,80">P1 (+,+,+,+)</button>
+  <button data-pattern="80,-80,80,-80">P2 (+,-,+,-) upstream FWD</button>
+  <button data-pattern="25,-25,25,-25" style="background:#2a4">P2 (25)</button>
+  <button data-pattern="30,-30,30,-30" style="background:#2a4">P2 (30)</button>
+  <button data-pattern="40,-40,40,-40" style="background:#2a4">P2 (40)</button>
+  <!-- Trim presets: drift right-front → suppress right side. Try a few. -->
+  <!-- 24/30 too left-biased; sweep R:L ratio at low speed. -->
+  <button data-pattern="25,-25,25,-25" style="background:#063">low 25/25 (no trim)</button>
+  <button data-pattern="25,-26,25,-26" style="background:#063">low 25/26</button>
+  <button data-pattern="25,-27,25,-27" style="background:#063">low 25/27</button>
+  <button data-pattern="25,-28,25,-28" style="background:#063">low 25/28</button>
+  <button data-pattern="26,-28,26,-28" style="background:#063">low 26/28</button>
+  <button data-pattern="27,-30,27,-30" style="background:#063">low 27/30</button>
+  <button data-pattern="28,-30,28,-30" style="background:#063">low 28/30</button>
+  <button data-pattern="28,-32,28,-32" style="background:#063">low 28/32</button>
+  <button data-pattern="80,80,-80,-80">P3 (+,+,-,-) F+ R-</button>
+  <button data-pattern="80,-80,-80,80">P4 (+,-,-,+) my deduc</button>
+  <button data-pattern="80,80,80,-80">P5 (+,+,+,-)</button>
+  <button data-pattern="80,80,-80,80">P6 (+,+,-,+)</button>
+  <button data-pattern="80,-80,80,80">P7 (+,-,+,+)</button>
+  <button data-pattern="-80,80,80,80">P8 (-,+,+,+)</button>
+  <button data-pattern="80,-80,80,80">P9 (+,-,+,+ alt)</button>
+  <button data-pattern="-80,-80,80,80">P10 F- R+</button>
+  <button data-pattern="-80,80,-80,80">P11 (-,+,-,+)</button>
+  <button data-pattern="-80,80,80,-80">P12 (-,+,+,-)</button>
+</div>
+
+<div class="row"><label>ch0</label><input type="range" id="s0" min="-100" max="100" value="0" step="5"><span class="val" id="v0">0</span></div>
+<div class="row"><label>ch1</label><input type="range" id="s1" min="-100" max="100" value="0" step="5"><span class="val" id="v1">0</span></div>
+<div class="row"><label>ch2</label><input type="range" id="s2" min="-100" max="100" value="0" step="5"><span class="val" id="v2">0</span></div>
+<div class="row"><label>ch3</label><input type="range" id="s3" min="-100" max="100" value="0" step="5"><span class="val" id="v3">0</span></div>
+
+<div class="row">
+  <button id="btn-send" class="primary">Send (Enter)</button>
+  <button id="btn-zero">Zero sliders</button>
+</div>
+
+<div id="log"></div>
+
+<script>
+// Nordic UART Service used by claude-desktop-buddy stick.
+const NUS_SVC = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+let device = null, server = null, rxChar = null;
+let keepaliveTimer = null;
+
+const $ = id => document.getElementById(id);
+const log = msg => {
+  const el = $('log');
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML += `<div>[${ts}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+};
+const setStatus = msg => $('status').textContent = msg;
+
+['s0','s1','s2','s3'].forEach(id => {
+  $(id).addEventListener('input', () => $('v'+id[1]).textContent = $(id).value);
+});
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    setStatus('Web Bluetooth not supported. Use Chrome on macOS/Linux.');
+    return;
+  }
+  try {
+    setStatus('Requesting device…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [NUS_SVC] }],
+    });
+    device.addEventListener('gattserverdisconnected', () => {
+      setStatus('Disconnected.');
+      log('disconnected');
+      stopKeepalive();
+    });
+    setStatus('Connecting GATT…');
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS_SVC);
+    rxChar = await svc.getCharacteristic(NUS_RX);
+    setStatus(`Connected to ${device.name || '(unnamed)'}. Use sliders or WASD.`);
+    log('connected');
+    startKeepalive();
+  } catch (e) {
+    setStatus('Connect failed: ' + e.message);
+    log('error: ' + e.message);
+  }
+}
+
+async function disconnect() {
+  stopKeepalive();
+  if (device && device.gatt.connected) device.gatt.disconnect();
+}
+
+async function sendMotor(s0, s1, s2, s3) {
+  if (!rxChar) { log('not connected'); return; }
+  const json = JSON.stringify({ cmd: 'motor', s: [s0,s1,s2,s3] }) + '\n';
+  try {
+    await rxChar.writeValueWithResponse(new TextEncoder().encode(json));
+    log(`→ ${s0},${s1},${s2},${s3}`);
+  } catch (e) {
+    log('write failed: ' + e.message);
+  }
+}
+
+let lastPattern = [0,0,0,0];
+function setPattern(p) {
+  lastPattern = p.slice();
+  for (let i = 0; i < 4; i++) {
+    $('s'+i).value = p[i];
+    $('v'+i).textContent = p[i];
+  }
+  sendMotor(...p);
+}
+
+// Keepalive: while any motor channel non-zero, re-send every 800ms so the
+// stick's keepalive window doesn't expire mid-motion.
+function startKeepalive() {
+  stopKeepalive();
+  keepaliveTimer = setInterval(() => {
+    if (lastPattern.some(v => v !== 0)) sendMotor(...lastPattern);
+  }, 800);
+}
+function stopKeepalive() {
+  if (keepaliveTimer) clearInterval(keepaliveTimer);
+  keepaliveTimer = null;
+}
+
+// Buttons
+$('btn-connect').onclick = connect;
+$('btn-disconnect').onclick = disconnect;
+$('btn-stop').onclick = () => setPattern([0,0,0,0]);
+$('btn-send').onclick = () => setPattern([+$('s0').value, +$('s1').value, +$('s2').value, +$('s3').value]);
+$('btn-zero').onclick = () => {
+  ['s0','s1','s2','s3'].forEach(id => { $(id).value = 0; $('v'+id[1]).textContent = '0'; });
+};
+document.querySelectorAll('.preset button').forEach(b => {
+  b.onclick = () => {
+    const p = b.dataset.pattern.split(',').map(Number);
+    setPattern(p);
+  };
+});
+
+// Keyboard. Speed = 50.
+const SPD = 50;
+const keyMap = {
+  'w': [ SPD,-SPD, SPD,-SPD],   // upstream FWD = confirmed forward
+  's': [-SPD, SPD,-SPD, SPD],   // upstream BACKWARD
+  'a': [-SPD,-SPD,-SPD,-SPD],   // rotate left (all same sign — known rotation)
+  'd': [ SPD, SPD, SPD, SPD],   // rotate right
+  'q': [ SPD,-SPD, SPD,-SPD],   // upstream FWD pattern
+  'e': [ SPD, SPD,-SPD,-SPD],   // front+ rear-
+};
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); setPattern([0,0,0,0]); return; }
+  if (k === 'enter') { $('btn-send').click(); return; }
+  if (keyMap[k]) { e.preventDefault(); setPattern(keyMap[k]); }
+});
+window.addEventListener('keyup', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (keyMap[k]) { e.preventDefault(); setPattern([0,0,0,0]); }
+});
+</script>
+</body>
+</html>

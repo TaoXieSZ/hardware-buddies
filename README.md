@@ -1,70 +1,64 @@
-# claude-desktop-buddy
+# claude-desktop-buddy (Plus2 + BugC2 fork)
 
-Claude for macOS and Windows can connect Claude Cowork and Claude Code to
-maker devices over BLE, so developers and makers can build hardware that
-displays permission prompts, recent messages, and other interactions. We've
-been impressed by the creativity of the maker community around Claude -
-providing a lightweight, opt-in API is our way of making it easier to build
-fun little hardware devices that integrate with Claude.
+Fork of [`anthropics/claude-desktop-buddy`](https://github.com/anthropics/claude-desktop-buddy)
+extended for **M5StickC PLUS2 + BugC2 chassis**, with the Claude crab
+("clawd") as the default mascot.
 
-> **Building your own device?** You don't need any of the code here. See
-> **[REFERENCE.md](REFERENCE.md)** for the wire protocol: Nordic UART
-> Service UUIDs, JSON schemas, and the folder push transport.
+What this fork adds on top of upstream:
 
-As an example, we built a desk pet on ESP32 that lives off permission
-approvals and interaction with Claude. It sleeps when nothing's happening,
-wakes when sessions start, gets visibly impatient when an approval prompt is
-waiting, and lets you approve or deny right from the device.
+| | Upstream | This fork |
+|---|---|---|
+| Stick variant | M5StickC / Plus | **+ Plus2** (via M5Unified migration; AXP192 deadlock fixed) |
+| Default species | capybara (ASCII) | **crab** (Claude mascot, ASCII) |
+| GIF pet | bufo example | **clawd pack** built from [`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk) — 8 states |
+| Pet base | — | **BugC2 chassis** integration: 4 DC motors via I2C (0x38) drive on persona-state, 2× RGB LEDs as mood lighting |
+| Tooling | `flash_character.py` | + **`tools/motor-calib.html`** — Web Bluetooth motor pattern calibrator (sliders + WASD + 16 sign-combo presets) |
+| GIF pipeline | global bbox (over-padded small poses) | **per-state bbox** (each pose fills its canvas); TARGET_W 96 → 120 |
+
+> The original Anthropic protocol docs in **[REFERENCE.md](REFERENCE.md)**
+> still apply unchanged — this fork is a hardware extension, not a protocol
+> change. Stick still talks plain Nordic UART to Claude desktop.
 
 <p align="center">
-  <img src="docs/device.jpg" alt="M5StickC Plus running the buddy firmware" width="500">
+  <img src="docs/device-plus2-bugc2.jpg" alt="M5StickC Plus2 mounted on a BugC2 chassis, screen showing the clawd buddy with mood/fed/energy stats" width="500">
 </p>
 
 ## Hardware
 
-The firmware targets ESP32 with the Arduino framework. As written, it
-depends on the M5StickCPlus library for its display, IMU, and button
-drivers—so you'll need that board, or a fork that swaps those drivers for
-your own pin layout.
+This fork targets:
+
+- **M5StickC Plus2** controller (Plus and original StickC also build via the
+  M5Unified runtime check, but Plus2 is the primary; see notes in `m5_compat.h`)
+- **BugC2 chassis** (optional) — programmable robot base, 4 DC motors,
+  2 RGB LEDs, STM32F030F4P6 over I2C 0x38
+
+Stick boots fine without BugC2 — the chassis driver probes 0x38 at startup
+and skips silently if not present.
 
 ## Flashing
 
-Install
-[PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/),
-then:
-
 ```bash
-pio run -t upload
+pio run -e m5stickc-plus2 -t upload
 ```
 
-If you're starting from a previously-flashed device, wipe it first:
+If you're starting from a previously-flashed device, wipe first:
 
 ```bash
-pio run -t erase && pio run -t upload
+pio run -e m5stickc-plus2 -t erase && pio run -e m5stickc-plus2 -t upload
 ```
 
-Once running, you can also wipe everything from the device itself: **hold A
-→ settings → reset → factory reset → tap twice**.
+Or wipe from the device itself: **hold A → settings → reset → factory reset**.
 
 ## Pairing
 
-To pair your device with Claude, first enable developer mode (**Help →
-Troubleshooting → Enable Developer Mode**). Then, open the Hardware Buddy
-window in **Developer → Open Hardware Buddy…**, click **Connect**, and pick
-your device from the list. macOS will prompt for Bluetooth permission on
-first connect; grant it.
+Same as upstream: enable **Help → Troubleshooting → Enable Developer Mode**,
+then **Developer → Open Hardware Buddy…** in Claude desktop, click
+**Connect**, pick the stick. macOS will prompt for Bluetooth permission once.
 
 <p align="center">
   <img src="docs/menu.png" alt="Developer → Open Hardware Buddy… menu item" width="420">
   <img src="docs/hardware-buddy-window.png" alt="Hardware Buddy window with Connect button and folder drop target" width="420">
 </p>
-
-Once paired, the bridge auto-reconnects whenever both sides are awake.
-
-If discovery isn't finding the stick:
-
-- Make sure it's awake (any button press)
-- Check the stick's settings menu → bluetooth is on
 
 ## Controls
 
@@ -83,59 +77,98 @@ approval prompt is up). Any button press wakes it.
 
 ## ASCII pets
 
-Eighteen pets, each with seven animations (sleep, idle, busy, attention,
-celebrate, dizzy, heart). Menu → "next pet" cycles them with a counter.
-Choice persists to NVS.
+Nineteen species, each with seven animations (sleep, idle, busy, attention,
+celebrate, dizzy, heart). **Crab** (Claude mascot) is the default. Menu →
+"next pet" cycles them with a counter; choice persists to NVS.
 
 ## GIF pets
 
-If you want a custom GIF character instead of an ASCII buddy, drag a
-character pack folder onto the drop target in the Hardware Buddy window. The
-app streams it over BLE and the stick switches to GIF mode live. **Settings
-→ delete char** reverts to ASCII mode.
+The default GIF pack is **clawd**, with all sprite art credit to
+[`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk)
+— a delightful collection of pixel-art Claude crab animations originally
+made as a desk companion. Huge thanks to
+[@rullerzhou-afk](https://github.com/rullerzhou-afk) for the art; we
+just resize and remap it onto the buddy's persona-state engine here.
 
-A character pack is a folder with `manifest.json` and 96px-wide GIFs:
+| Our state | Clawd GIF | Preview |
+|---|---|---|
+| `sleep` | `clawd-sleeping.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-sleeping.gif" width="96"> |
+| `idle` | `clawd-idle.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-idle.gif" width="96"> |
+| `busy` | `clawd-thinking.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-thinking.gif" width="96"> |
+| `attention` | `clawd-error.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-error.gif" width="96"> |
+| `celebrate` | `clawd-juggling.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-juggling.gif" width="96"> |
+| `dizzy` | `clawd-conducting.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-conducting.gif" width="96"> |
+| `heart` | `clawd-happy.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-happy.gif" width="96"> |
+
+To use your own pack: drag the folder onto the Hardware Buddy window
+(streams over BLE), or for fast iteration:
+
+```bash
+python3 tools/prep_character.py /path/to/source-gifs
+python3 tools/flash_character.py characters/<name>
+```
+
+A character pack is a folder with `manifest.json` and source GIFs at any
+size. `prep_character.py` resizes to **120px wide** (was 96 upstream — the
+larger size makes idle/sleep poses readable on Plus2's 135×240 screen).
+Each state cropped to its **own bbox**, not a global bbox — small poses
+(idle/sleep) no longer get padded out to match the widest pose
+(juggling/conducting).
 
 ```json
 {
-  "name": "bufo",
-  "colors": {
-    "body": "#6B8E23",
-    "bg": "#000000",
-    "text": "#FFFFFF",
-    "textDim": "#808080",
-    "ink": "#000000"
-  },
+  "name": "clawd",
+  "colors": { "body": "#D97757", "bg": "#000000", ... },
   "states": {
-    "sleep": "sleep.gif",
-    "idle": ["idle_0.gif", "idle_1.gif", "idle_2.gif"],
-    "busy": "busy.gif",
-    "attention": "attention.gif",
-    "celebrate": "celebrate.gif",
-    "dizzy": "dizzy.gif",
-    "heart": "heart.gif"
+    "sleep": "clawd-sleeping.gif",
+    "idle":  "clawd-idle.gif",
+    ...
   }
 }
 ```
 
-State values can be a single filename or an array. Arrays rotate: each
-loop-end advances to the next GIF, useful for an idle activity carousel so
-the home screen doesn't loop one clip forever.
+State values can be a single filename or an array; arrays rotate so the
+home screen doesn't loop one clip forever.
 
-GIFs are 96px wide; height up to ~140px stays on a 135×240 portrait screen.
-Crop tight to the character — transparent margins waste screen and shrink
-the sprite. `tools/prep_character.py` handles the resize: feed it source
-GIFs at any sizes and it produces a 96px-wide set where the character is the
-same scale in every state.
+The whole folder must fit under 1.8MB. `gifsicle --lossy=80 -O3 --colors 64`
+typically cuts 40–60% if you bust the cap.
 
-The whole folder must fit under 1.8MB —
-`gifsicle --lossy=80 -O3 --colors 64` typically cuts 40–60%.
+## BugC2 chassis (optional)
 
-See `characters/bufo/` for a working example.
+If you mount the stick on a BugC2 base, the firmware drives the chassis
+to mirror the buddy's persona state:
 
-If you're iterating on a character and would rather skip the BLE round-trip,
-`tools/flash_character.py characters/bufo` stages it into `data/` and runs
-`pio run -t uploadfs` directly over USB.
+| Persona state | BugC2 motion + LED                                              |
+|---------------|------------------------------------------------------------------|
+| `sleep`       | motors off, LEDs off                                             |
+| `idle`        | motors off, LEDs dim cyan                                        |
+| `busy`        | 1.2s in-place spin + 3-chirp ascending bleep (900/1300/1700 Hz) |
+| `attention`   | 80ms twitch every ~1.2s, amber LED breathing pulse              |
+| `celebrate`   | continuous gentle spin, green LEDs                              |
+| `dizzy`       | quick alternating spin, yellow LEDs (capped at 600ms)           |
+| `heart`       | pink heartbeat (thump-thump) on LEDs + occasional small wiggle  |
+
+I2C protocol verified verbatim against `m5stack/M5Hat-BugC@c054b6e`. The
+driver uses Arduino `Wire` (I2C_NUM_0) at 400 kHz on G0/G26 — **not** `Wire1`
+which would collide with M5Unified's IMU/RTC bus.
+
+### Manual motor calibration
+
+`tools/motor-calib.html` is a Web Bluetooth page that connects to the stick
+over the existing NUS service and sends raw 4-channel motor commands
+(`{"cmd":"motor","s":[a,b,c,d]}`). Useful for figuring out which channel
+drives which wheel, finding the FORWARD pattern, and tuning per-side speed
+trim if your motors are asymmetric.
+
+```bash
+cd tools
+python3 -m http.server 8765
+open http://localhost:8765/motor-calib.html
+```
+
+Connect, then sliders / WASD / preset buttons send commands. Auto-stop
+after 1500ms of no keepalive. Manual mode suspends the persona-state
+mapping so the operator owns the chassis.
 
 ## The seven states
 
@@ -143,11 +176,15 @@ If you're iterating on a character and would rather skip the BLE round-trip,
 | ----------- | --------------------------- | --------------------------- |
 | `sleep`     | bridge not connected        | eyes closed, slow breathing |
 | `idle`      | connected, nothing urgent   | blinking, looking around    |
-| `busy`      | sessions actively running   | sweating, working           |
+| `busy`      | session actively running    | thinking, working           |
 | `attention` | approval pending            | alert, **LED blinks**       |
 | `celebrate` | level up (every 50K tokens) | confetti, bouncing          |
 | `dizzy`     | you shook the stick         | spiral eyes, wobbling       |
 | `heart`     | approved in under 5s        | floating hearts             |
+
+> Heads up: this fork lowers the `busy` threshold from `running >= 3` to
+> `running >= 1`, so a single session counts as busy and the BugC2 chassis
+> reacts. Stick semantics otherwise unchanged.
 
 ## Project layout
 
@@ -156,17 +193,95 @@ src/
   main.cpp       — loop, state machine, UI screens
   buddy.cpp      — ASCII species dispatch + render helpers
   buddies/       — one file per species, seven anim functions each
+                   (now includes crab.cpp = Claude mascot, default)
   ble_bridge.cpp — Nordic UART service, line-buffered TX/RX
-  character.cpp  — GIF decode + render
-  data.h         — wire protocol, JSON parse
+  character.cpp  — GIF decode + render (per-state bbox aware)
+  bugc2.{h,cpp}  — BugC2 chassis driver + persona-state motion catalog
+  m5_compat.h    — Plus / Plus2 cross-board API shim (M5Unified)
+  data.h         — wire protocol, JSON parse (incl. {"cmd":"motor",...})
   xfer.h         — folder push receiver
   stats.h        — NVS-backed stats, settings, owner, species choice
-characters/      — example GIF character packs
-tools/           — generators and converters
+characters/      — bufo (upstream), clawd (this fork)
+tools/
+  prep_character.py   — resize source GIFs to 120px / per-state bbox
+  flash_character.py  — fast USB uploadfs path (skips BLE)
+  motor-calib.html    — Web Bluetooth BugC2 calibrator
+mac-helper/      — Swift package: clipboard sync helper
+.omc/            — OMC tooling state (gitignored)
 ```
+
+## TODO
+
+Roadmap for this fork (PRs welcome):
+
+- [ ] **Claude Code CLI bridge** — desktop-side daemon that consumes
+      Claude Code hooks (SessionStart / PreToolUse / Stop / Notification)
+      and pushes the same heartbeat protocol over BLE NUS, so the buddy
+      reacts to terminal sessions the way it does to Claude desktop
+      sessions today. Plan in `.omc/plans/crab-and-cli-bridge.md`.
+      Stick firmware needs zero changes — just a producer.
+- [ ] **Re-enable audio capture / BLE PTT** on Plus2. Currently disabled
+      in `setup()` because the I2S init burns ~68KB heap that the 16-bit
+      sprite needs. Need to either drop sprite to 8-bit palette or use
+      a smaller I2S buffer.
+- [ ] **More GIF packs** from `clawd-on-desk` — calico, cloudling.
+      `tools/prep_character.py` already supports per-state bbox so each
+      pack lights up cleanly. Just write a manifest.
+- [ ] **BugC2 LED-as-status overlay** — LEDs currently mirror persona
+      state mood. Could double as a token-rate indicator: brightness
+      proportional to recent tokens/sec.
+- [ ] **Auto-calibration** for BugC2 motor asymmetry. Manual tool exists
+      (`tools/motor-calib.html`); a one-shot self-test that drives a
+      known pattern and uses IMU yaw drift to compute trim would be
+      better than the current "click 8 buttons and eyeball straightness".
+- [ ] **Land a turn-around pacing motion** — initial attempt was
+      forward → 180° → forward; calibration was finicky (battery sag
+      changes the 180° duration). Replaced with a simple in-place spin.
+      A self-calibrating turn (use IMU yaw to close the loop) would
+      revive the original idea.
+- [ ] **Cliff detection** — BugC2 has no cliff sensor and the chassis
+      can walk off a desk during translation. For now we accept the
+      risk; an ultrasonic / IR add-on or a hard travel-distance cap
+      with IMU integration would harden it.
+
+Out of scope (researched, not feasible without hardware change):
+
+- ~~Jumping / hopping~~ — BugC2 spec confirms no actuator beyond 4 DC
+  motors + 2 RGB LEDs. The "springs" visible on the chassis are passive
+  wheel suspension, not driven elements.
 
 ## Availability
 
 The BLE API is only available when the desktop apps are in developer mode
 (**Help → Troubleshooting → Enable Developer Mode**). It's intended for
 makers and developers and isn't an officially supported product feature.
+
+This fork is independently maintained — for upstream's reference protocol
+docs see **[REFERENCE.md](REFERENCE.md)**.
+
+## Credits
+
+This fork stands on the shoulders of:
+
+- **[`anthropics/claude-desktop-buddy`](https://github.com/anthropics/claude-desktop-buddy)**
+  — the upstream firmware: state machine, BLE bridge, GIF runtime, ASCII
+  sprite engine, character pack pipeline. Everything below the BugC2
+  layer is upstream's design; we only added Plus2 board support, the
+  crab species, and the chassis driver on top.
+
+- **[`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk)**
+  by [@rullerzhou-afk](https://github.com/rullerzhou-afk) — every clawd
+  pixel-art animation in this fork's GIF pack. The Claude crab is from
+  this collection; we just resize it and map each pose onto our
+  PersonaState. If you like clawd, go star their repo — there are
+  many more poses (calico, cloudling, building, sweeping, carrying…)
+  that are easy to wire up by editing `tools/clawd-src/manifest.json`.
+
+- **[`m5stack/M5Hat-BugC`](https://github.com/m5stack/M5Hat-BugC)**
+  — official BugC/BugC2 chassis library. Used as the
+  ground-truth wire-protocol reference; we copied the I2C register map
+  and motion patterns verbatim from `examples/bugc_robot_test/`.
+
+- **[`m5stack/M5Unified`](https://github.com/m5stack/M5Unified)**
+  — cross-board API that made M5StickC Plus2 compatibility a 1-day
+  port instead of a 1-week one.

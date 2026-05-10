@@ -1,8 +1,11 @@
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include "m5_compat.h"
 #include "ble_bridge.h"
 #include "xfer.h"
+#include "audio_ble.h"
+#include "bugc2.h"
 
 struct TamaState {
   uint8_t  sessionsTotal;
@@ -70,7 +73,36 @@ inline bool dataRtcValid() { return _rtcValid; }
 static void _applyJson(const char* line, TamaState* out) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
+
+  // Manual motor calibration: {"cmd":"motor","s":[a,b,c,d]}
+  // MUST run BEFORE xferCommand — xfer.h has a catch-all that swallows any
+  // unrecognised cmd when no transfer is active.
+  // a..d are int8 speeds in [-100, 100]. Keepalive window is 1500ms;
+  // missing the next packet auto-stops on bugc2_manual_tick.
+  {
+    const char* cmd0 = doc["cmd"];
+    if (cmd0 && strcmp(cmd0, "motor") == 0) {
+      JsonArray sp = doc["s"];
+      if (!sp.isNull() && sp.size() == 4) {
+        bugc2_manual_drive((int8_t)(int)sp[0], (int8_t)(int)sp[1],
+                           (int8_t)(int)sp[2], (int8_t)(int)sp[3],
+                           millis());
+      }
+      _lastLiveMs = millis();
+      return;
+    }
+  }
+
   if (xferCommand(doc)) { _lastLiveMs = millis(); return; }
+
+  // Inbound PTT ack from host: {"cmd":"ptt_ack","state":"received|ready|error","reason":"..."}
+  const char* cmd = doc["cmd"];
+  if (cmd && strcmp(cmd, "ptt_ack") == 0) {
+    const char* ackState  = doc["state"]  | "";
+    const char* ackReason = doc["reason"] | "";
+    audioBleHandlePttAck(ackState, ackReason);
+    return;
+  }
 
   // Bridge sends {"time":[epoch_sec, tz_offset_sec]}; gmtime_r on the
   // adjusted epoch yields local components including weekday.
@@ -81,8 +113,8 @@ static void _applyJson(const char* line, TamaState* out) {
     RTC_TimeTypeDef tm = { (uint8_t)lt.tm_hour, (uint8_t)lt.tm_min, (uint8_t)lt.tm_sec };
     RTC_DateTypeDef dt = { (uint8_t)lt.tm_wday, (uint8_t)(lt.tm_mon + 1),
                            (uint8_t)lt.tm_mday, (uint16_t)(lt.tm_year + 1900) };
-    M5.Rtc.SetTime(&tm);
-    M5.Rtc.SetDate(&dt);
+    rtcSetTime(&tm);
+    rtcSetDate(&dt);
     extern uint32_t _clkLastRead;
     _clkLastRead = 0;   // force re-read so _clkDt and _rtcValid agree
     _rtcValid = true;

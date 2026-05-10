@@ -1,11 +1,15 @@
-#include <M5StickCPlus.h>
+#include <M5Unified.h>
+#include "m5_compat.h"
 #include <LittleFS.h>
 #include <stdarg.h>
 #include "ble_bridge.h"
+#include "bugc2.h"
 #include "data.h"
 #include "buddy.h"
+#include "audio_capture.h"
+#include "audio_ble.h"
 
-TFT_eSprite spr = TFT_eSprite(&M5.Lcd);
+M5Canvas spr;  // parent set lazily in setup() to avoid static-init order trap
 
 // Advertise as "Claude-XXXX" (last two BT MAC bytes) so multiple sticks
 // in one room are distinguishable in the desktop picker. Name persists in
@@ -90,16 +94,16 @@ uint32_t promptArrivedMs = 0;
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
   float ax, ay, az;
-  M5.Imu.getAccelData(&ax, &ay, &az);
+  imuGetAccel(&ax, &ay, &az);
   return az < -0.7f && fabsf(ax) < 0.4f && fabsf(ay) < 0.4f;
 }
 
-static void applyBrightness() { M5.Axp.ScreenBreath(20 + brightLevel * 20); }
+static void applyBrightness() { axpScreenBreath(20 + brightLevel * 20); }
 
 static void wake() {
   lastInteractMs = millis();
   if (screenOff) {
-    M5.Axp.SetLDO2(true);
+    axpSetLDO2(true);
     applyBrightness();
     screenOff = false;
     wakeTransitionUntil = millis() + 12000;
@@ -109,7 +113,7 @@ static void wake() {
 bool     responseSent = false;
 
 static void beep(uint16_t freq, uint16_t dur) {
-  if (settings().sound) M5.Beep.tone(freq, dur);
+  if (settings().sound) beepTone(freq, dur);
 }
 
 static void sendCmd(const char* json) {
@@ -226,6 +230,7 @@ static void applyReset(uint8_t idx) {
     LittleFS.format();
     bleClearBonds();
   }
+  bugc2_stop();
   delay(300);
   ESP.restart();
 }
@@ -305,7 +310,7 @@ static void drawReset() {
 void menuConfirm() {
   switch (menuSel) {
     case 0: settingsOpen = true; menuOpen = false; settingsSel = 0; break;
-    case 1: M5.Axp.PowerOff(); break;
+    case 1: bugc2_stop(); axpPowerOff(); break;
     case 2:
     case 3:
       menuOpen = false;
@@ -356,14 +361,14 @@ static bool            _onUsb       = false;
 static void clockRefreshRtc() {
   if (millis() - _clkLastRead < 1000) return;
   _clkLastRead = millis();
-  _onUsb = M5.Axp.GetVBusVoltage() > 4.0f;
-  M5.Rtc.GetTime(&_clkTm);
-  M5.Rtc.GetDate(&_clkDt);
+  _onUsb = axpGetVBusVoltage() > 4.0f;
+  rtcGetTime(&_clkTm);
+  rtcGetDate(&_clkDt);
 }
 
 static void clockUpdateOrient() {
   float ax, ay, az;
-  M5.Imu.getAccelData(&ax, &ay, &az);
+  imuGetAccel(&ax, &ay, &az);
   uint8_t lock = settings().clockRot;
   if (lock == 1) { clockOrient = 0; return; }
   if (lock == 2) {
@@ -480,7 +485,11 @@ PersonaState derive(const TamaState& s) {
   if (!s.connected)            return P_IDLE;
   if (s.sessionsWaiting > 0)   return P_ATTENTION;
   if (s.recentlyCompleted)     return P_CELEBRATE;
-  if (s.sessionsRunning >= 3)  return P_BUSY;
+  // running >= 1 = at least one Claude session actively generating.
+  // Per REFERENCE.md, this is the canonical "Claude is thinking" signal.
+  // Original threshold was 3 (sweating/very busy emoji); lowered so the
+  // BugC2 pacing motion fires for normal single-session work.
+  if (s.sessionsRunning >= 1)  return P_BUSY;
   return P_IDLE;   // connected, 0+ sessions, nothing urgent — hang out
 }
 
@@ -491,7 +500,7 @@ void triggerOneShot(PersonaState s, uint32_t durMs) {
 
 bool checkShake() {
   float ax, ay, az;
-  M5.Imu.getAccelData(&ax, &ay, &az);
+  imuGetAccel(&ax, &ay, &az);
   float mag = sqrtf(ax*ax + ay*ay + az*az);
   float delta = fabsf(mag - accelBaseline);
   accelBaseline = accelBaseline * 0.95f + mag * 0.05f;
@@ -531,7 +540,7 @@ void drawPasskey() {
 
 void drawInfo() {
   const Palette& p = characterPalette();
-  const int TOP = 70;
+  const int TOP = 70;  // matches character.cpp PEEK_TOP
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
   int y = TOP + 2;
@@ -593,9 +602,9 @@ void drawInfo() {
   } else if (infoPage == 3) {
     _infoHeader(p, y, "DEVICE", infoPage);
 
-    int vBat_mV = (int)(M5.Axp.GetBatVoltage() * 1000);
-    int iBat_mA = (int)M5.Axp.GetBatCurrent();
-    int vBus_mV = (int)(M5.Axp.GetVBusVoltage() * 1000);
+    int vBat_mV = (int)(axpGetBatVoltage() * 1000);
+    int iBat_mA = (int)axpGetBatCurrent();
+    int vBus_mV = (int)(axpGetVBusVoltage() * 1000);
     int pct = (vBat_mV - 3200) / 10;   // (v-3.2)/(4.2-3.2)*100 = (v-3.2)*100 = (mv-3200)/10
     if (pct < 0) pct = 0; if (pct > 100) pct = 100;
     bool usb = vBus_mV > 4000;
@@ -627,7 +636,7 @@ void drawInfo() {
     ln("  heap     %uKB", ESP.getFreeHeap() / 1024);
     ln("  bright   %u/4", brightLevel);
     ln("  bt       %s", settings().bt ? (dataBtActive() ? "linked" : "on") : "off");
-    ln("  temp     %dC", (int)M5.Axp.GetTempInAXP192());
+    ln("  temp     %dC", (int)axpGetTempInAXP192());
 
   } else if (infoPage == 4) {
     _infoHeader(p, y, "BLUETOOTH", infoPage);
@@ -781,7 +790,7 @@ static void tinyHeart(int x, int y, bool filled, uint16_t col) {
 }
 
 static void drawPetStats(const Palette& p) {
-  const int TOP = 70;
+  const int TOP = 70;  // matches character.cpp PEEK_TOP
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
   int y = TOP + 16;
@@ -836,7 +845,7 @@ static void drawPetStats(const Palette& p) {
 }
 
 static void drawPetHowTo(const Palette& p) {
-  const int TOP = 70;
+  const int TOP = 70;  // matches character.cpp PEEK_TOP
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
   int y = TOP + 2;
@@ -868,7 +877,7 @@ static void drawPetHowTo(const Palette& p) {
 
 void drawPet() {
   const Palette& p = characterPalette();
-  int y = 70;
+  int y = 70;  // matches character.cpp PEEK_TOP
 
   if (petPage == 0) drawPetStats(p);
   else drawPetHowTo(p);
@@ -936,10 +945,28 @@ void drawHUD() {
 }
 
 void setup() {
-  M5.begin();
+  Serial.begin(115200);
+  delay(50);
+  Serial.println("[setup] entering");
+  auto cfg = M5.config();
+  Serial.println("[setup] cfg ok, calling M5.begin");
+  M5.begin(cfg);
   M5.Lcd.setRotation(0);
-  M5.Imu.Init();
-  M5.Beep.begin();
+  imuInit();
+  if (!LittleFS.begin(true)) {
+    Serial.println("[setup] LittleFS.begin failed even with format=true");
+  } else {
+    Serial.println("[setup] LittleFS mounted");
+  }
+  uint32_t freeHeapPre = ESP.getFreeHeap();
+  Serial.printf("[boot] free heap = %u\n", freeHeapPre);
+  // Audio disabled on Plus2 build — eats ~68KB of 8-bit heap which starves the
+  // M5Canvas sprite allocation. Re-enable after sprite path is verified, with
+  // a smaller buffer if needed.
+  // audioCaptureInit();
+  uint32_t freeHeapPost = ESP.getFreeHeap();
+  Serial.printf("[audio] disabled; heap pre/post = %u/%u\n", freeHeapPre, freeHeapPost);
+  beepBegin();
   startBt();
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);   // off
@@ -951,7 +978,11 @@ void setup() {
   buddyInit();
 
   // BLE stays always-on; s.bt is stored as a preference only.
-  spr.createSprite(W, H);
+  spr.setColorDepth(16);
+  spr.setPsram(false);
+  if (!spr.createSprite(W, H)) {
+    Serial.println("[spr] createSprite FAILED — Plus2 8-bit heap exhausted; check audio/BLE buffer sizes");
+  }
   characterInit(nullptr);  // scan /characters/ for whatever is installed
   gifAvailable = characterLoaded();
   // species NVS: 0..N-1 = ASCII species, 0xFF = use GIF (also the default,
@@ -978,18 +1009,74 @@ void setup() {
       spr.drawString("a buddy appears", W/2, H/2 + 12);
     }
     spr.setTextDatum(TL_DATUM); spr.setTextSize(1);
-    spr.pushSprite(0, 0);
+    spr.pushSprite(&M5.Display, 0, 0);
     delay(1800);
   }
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
+
+  if (bugc2_begin()) Serial.println("bugc2: present");
+  else               Serial.println("bugc2: not present");
+  // (motor diag removed; calibration now done over BLE via the HTML tool —
+  // see tools/motor-calib.html and {"cmd":"motor","s":[...]} in data.h)
 }
 
 void loop() {
   M5.update();
-  M5.Beep.update();
+  // audio disabled in Plus2 build — see setup()
+  // audioCapturePump();
+  // audioBleStreamPump();
+  beepUpdate();
   t++;
   uint32_t now = millis();
+
+  // BugC2: BLE-state edge → greet on connect / off on disconnect. While
+  // connected, map persona state to a motion every tick (driver dedupes).
+  // Greet gets a 300ms grace window so the persona-state map doesn't
+  // interrupt the nod. Sub-tick BLE flap loses the greet — accepted.
+  static bool bugc2_wasConnected = false;
+  static uint32_t bugc2_greetUntil = 0;
+  bool bugc2_now = bleConnected();
+  if (bugc2_now != bugc2_wasConnected) {
+    if (bugc2_now) {
+      bugc2_request(BUGC2_GREET, now);
+      bugc2_greetUntil = now + 300;
+    } else {
+      bugc2_request(BUGC2_OFF, now);
+      bugc2_greetUntil = 0;
+    }
+    bugc2_wasConnected = bugc2_now;
+  }
+  if (bugc2_now && (int32_t)(now - bugc2_greetUntil) >= 0) {
+    bugc2_motion_t want;
+    switch (activeState) {
+      case P_ATTENTION:  want = BUGC2_ATTENTION; break;
+      case P_CELEBRATE:  want = BUGC2_CELEBRATE; break;
+      case P_DIZZY:      want = BUGC2_DIZZY; break;
+      case P_SLEEP:      want = BUGC2_SLEEP; break;
+      case P_BUSY:       want = BUGC2_THINKING; break;
+      case P_HEART:      want = BUGC2_HEART; break;
+      default:           want = BUGC2_IDLE_LIT; break;  // P_IDLE
+    }
+    static bugc2_motion_t bugc2_lastWant = BUGC2_OFF;
+    if (want != bugc2_lastWant) {
+      Serial.printf("[bugc2.map] activeState=%s → motion=%d (prompt=%s waiting=%u)\n",
+        stateNames[activeState], (int)want, tama.promptId, tama.sessionsWaiting);
+      // 3-chirp ascending bleep when entering THINKING — sounds like the
+      // bot revving up to think. Each beep is non-blocking (~tone enqueue).
+      if (want == BUGC2_THINKING) {
+        beep(900,  90);
+        delay(110);
+        beep(1300, 90);
+        delay(110);
+        beep(1700, 120);
+      }
+      bugc2_lastWant = want;
+    }
+    bugc2_request(want, now);
+  }
+  bugc2_manual_tick(now);  // auto-stop on BLE keepalive expiry
+  bugc2_tick(now);
 
   dataPoll(&tama);
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
@@ -1009,11 +1096,18 @@ void loop() {
   }
 
   // shake → dizzy + force scenario advance
+  // Cooldown gates re-fire by 3s after the previous dizzy oneShot ends —
+  // BugC2 motion creates desk/handheld vibration that the IMU otherwise
+  // re-interprets as shake, looping us into permanent dizzy.
+  static uint32_t shakeCooldownUntil = 0;
   if (now - lastShakeCheck > 50) {
     lastShakeCheck = now;
-    if (!menuOpen && !screenOff && checkShake() && (int32_t)(now - oneShotUntil) >= 0) {
+    if (!menuOpen && !screenOff && checkShake()
+        && (int32_t)(now - oneShotUntil) >= 0
+        && (int32_t)(now - shakeCooldownUntil) >= 0) {
       wake();
       triggerOneShot(P_DIZZY, 2000);
+      shakeCooldownUntil = now + 5000;  // 2s oneShot + 3s settle
       Serial.println("shake: dizzy");
     }
   }
@@ -1053,11 +1147,11 @@ void loop() {
 
   // AXP power button (left side): short-press toggles screen off.
   // Long-press (6s) still powers off the device via AXP hardware.
-  if (M5.Axp.GetBtnPress() == 0x02) {
+  if (axpGetBtnPress() == 0x02) {
     if (screenOff) {
       wake();
     } else {
-      M5.Axp.SetLDO2(false);
+      axpSetLDO2(false);
       screenOff = true;
     }
   }
@@ -1226,7 +1320,7 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
-    spr.pushSprite(0, 0);
+    spr.pushSprite(&M5.Display, 0, 0);
   }
 
   // Face-down nap: dim immediately, pause animations, accumulate sleep time.
@@ -1243,7 +1337,7 @@ void loop() {
   if (!napping && faceDownFrames >= 15) {
     napping = true;
     napStartMs = now;
-    M5.Axp.ScreenBreath(8);
+    axpScreenBreath(8);
     dimmed = true;
   } else if (napping && faceDownFrames <= -8) {
     napping = false;
@@ -1257,7 +1351,7 @@ void loop() {
   // No auto-off on USB power — clock face wants to stay visible while charging.
   if (!screenOff && !inPrompt && !_onUsb
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
-    M5.Axp.SetLDO2(false);
+    axpSetLDO2(false);
     screenOff = true;
   }
 
