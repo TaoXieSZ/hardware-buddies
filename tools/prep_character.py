@@ -11,7 +11,7 @@ import json, sys, shutil, tempfile, zipfile
 from pathlib import Path
 from PIL import Image, ImageSequence
 
-TARGET_W = 96
+TARGET_W = 120   # screen is 135 wide on Plus2; ~7px margin each side
 REF_W    = 1000   # normalize to this before computing the cross-state bbox
 PROJECT  = Path(__file__).resolve().parent.parent
 OUT_ROOT = PROJECT / "characters"
@@ -67,9 +67,11 @@ def install(src: Path) -> None:
     bg_hex = manifest.get("colors", {}).get("bg", "#000000").lstrip("#")
     bg_rgb = tuple(int(bg_hex[i:i+2], 16) for i in (0, 2, 4))
 
-    # Pass 1: load every state (single or list), normalize, compute one bbox across all
-    loaded = []   # (out_name, state_key, frames, durations, src_bytes)
-    global_bbox = None
+    # Pass 1: load each state and compute a PER-STATE bbox (was: one global
+    # bbox). Per-state means each state's character fills its own canvas
+    # instead of being padded out to match the widest pose across all states.
+    loaded_by_state = {}   # state -> list[(out_name, frames, durations, src_bytes)]
+    state_bbox = {}        # state -> bbox
     for state, cfg in manifest["states"].items():
         entries = cfg if isinstance(cfg, list) else [cfg]
         for i, entry in enumerate(entries):
@@ -79,27 +81,33 @@ def install(src: Path) -> None:
                 continue
             frames, durations = _load_normalized(gif_src)
             out_name = f"{state}_{i}.gif" if len(entries) > 1 else f"{state}.gif"
-            loaded.append((out_name, state, frames, durations, gif_src.stat().st_size))
+            loaded_by_state.setdefault(state, []).append(
+                (out_name, frames, durations, gif_src.stat().st_size))
             for f in frames:
-                global_bbox = _union(global_bbox, f.getbbox())
+                state_bbox[state] = _union(state_bbox.get(state), f.getbbox())
 
-    cw, ch = global_bbox[2] - global_bbox[0], global_bbox[3] - global_bbox[1]
-    out_h = round(ch * TARGET_W / cw)
-    print(f"  global crop: {global_bbox} from {REF_W}-wide reference -> {TARGET_W}x{out_h} on device\n")
+    print()
+    for s, bb in state_bbox.items():
+        cw, ch = bb[2] - bb[0], bb[3] - bb[1]
+        out_h = round(ch * TARGET_W / cw)
+        print(f"  {s:10s} bbox {bb} -> {TARGET_W}x{out_h}")
+    print()
 
-    # Pass 2: write
+    # Pass 2: write — each state crops to its OWN bbox.
     out = OUT_ROOT / name
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
     device_states, total = {}, 0
-    for out_name, state, frames, durations, src_bytes in loaded:
-        dst = out / out_name
-        after = _save_state(frames, durations, dst, global_bbox, bg_rgb)
-        total += after
-        device_states.setdefault(state, []).append(out_name)
-        print(f"  {out_name:14s} {src_bytes:>10,}b -> {after:>7,}b  ({len(frames)} frames)")
+    for state, items in loaded_by_state.items():
+        bb = state_bbox[state]
+        for out_name, frames, durations, src_bytes in items:
+            dst = out / out_name
+            after = _save_state(frames, durations, dst, bb, bg_rgb)
+            total += after
+            device_states.setdefault(state, []).append(out_name)
+            print(f"  {out_name:14s} {src_bytes:>10,}b -> {after:>7,}b  ({len(frames)} frames)")
     # Collapse single-entry lists back to strings for the common case
     device_states = {k: (v[0] if len(v) == 1 else v) for k, v in device_states.items()}
 

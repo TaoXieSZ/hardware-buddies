@@ -540,7 +540,7 @@ void drawPasskey() {
 
 void drawInfo() {
   const Palette& p = characterPalette();
-  const int TOP = 70;
+  const int TOP = 70;  // matches character.cpp PEEK_TOP
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
   int y = TOP + 2;
@@ -790,7 +790,7 @@ static void tinyHeart(int x, int y, bool filled, uint16_t col) {
 }
 
 static void drawPetStats(const Palette& p) {
-  const int TOP = 70;
+  const int TOP = 70;  // matches character.cpp PEEK_TOP
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
   int y = TOP + 16;
@@ -845,7 +845,7 @@ static void drawPetStats(const Palette& p) {
 }
 
 static void drawPetHowTo(const Palette& p) {
-  const int TOP = 70;
+  const int TOP = 70;  // matches character.cpp PEEK_TOP
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
   int y = TOP + 2;
@@ -877,7 +877,7 @@ static void drawPetHowTo(const Palette& p) {
 
 void drawPet() {
   const Palette& p = characterPalette();
-  int y = 70;
+  int y = 70;  // matches character.cpp PEEK_TOP
 
   if (petPage == 0) drawPetStats(p);
   else drawPetHowTo(p);
@@ -1062,6 +1062,15 @@ void loop() {
     if (want != bugc2_lastWant) {
       Serial.printf("[bugc2.map] activeState=%s → motion=%d (prompt=%s waiting=%u)\n",
         stateNames[activeState], (int)want, tama.promptId, tama.sessionsWaiting);
+      // 3-chirp ascending bleep when entering THINKING — sounds like the
+      // bot revving up to think. Each beep is non-blocking (~tone enqueue).
+      if (want == BUGC2_THINKING) {
+        beep(900,  90);
+        delay(110);
+        beep(1300, 90);
+        delay(110);
+        beep(1700, 120);
+      }
       bugc2_lastWant = want;
     }
     bugc2_request(want, now);

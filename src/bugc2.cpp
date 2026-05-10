@@ -139,19 +139,14 @@ static const int8_t   CELEB_SPD  = 28;    // gentle continuous spin
 static const uint32_t DIZ_PERIOD = 140;   // direction flips every 140ms (was 60)
 static const int8_t   DIZ_SPD    = 25;
 
-// THINKING — calm cool blue, slow breathe ~2s, never goes fully dark.
-// Pacing: forward → pause → backward → pause → done. Simple oscillation,
-// no rotation. One burst per BUSY entry; motors stay 0 afterwards.
+// THINKING — calm cool blue LED + brief in-place spin (no translation).
+// One burst on BUSY entry: spin ~1.2s then stop. Sound (3-chirp) is
+// triggered from main.cpp on state transition.
 static const uint8_t  THK_R = 0x00, THK_G = 0x10, THK_B = 0x80;
 static const uint32_t THK_PERIOD = 2048;  // LED breathe full cycle (bit-masked)
-// Asymmetric trim: drifting right at symmetric (25,-25,25,-25), so boost
-// left side. Pattern is (R, -L, R, -L) on this BugC2's channel layout.
-static const int8_t   THK_R_SPD      = 18;  // 30% slower (25 → 17.5 → 18; risky vs stall)
-static const int8_t   THK_L_SPD      = 20;  // preserve 25:28 ratio (28*0.7=19.6)
-static const uint32_t THK_PACE_FWD   = 200; // halved again per user request
-static const uint32_t THK_PACE_PAUSE = 200;
-// schedule via s_phase: 0=fwd, 1=pause, 2=bwd, 3=done
-static const uint8_t  THK_PHASE_DONE = 3;
+static const int8_t   THK_SPIN_SPD   = 30;  // in-place rotation speed
+static const uint32_t THK_SPIN_DUR   = 1200; // ~1.2s of spin
+static const uint8_t  THK_PHASE_DONE = 1;
 
 // HEART — pink double-pulse (thump-thump) every ~1200ms; subtle wiggle every ~3s.
 static const uint8_t  HRT_R = 0x80, HRT_G = 0x00, HRT_B = 0x30;
@@ -335,8 +330,8 @@ void bugc2_request(bugc2_motion_t m, uint32_t now_ms) {
       leds_both(0, 0, 0);
       break;
     case BUGC2_THINKING:
-      // Start pacing forward; backward leg follows after pause.
-      motors_translate_asym(THK_R_SPD, THK_L_SPD, +1);
+      // Start in-place spin; tick stops after THK_SPIN_DUR.
+      motors_spin(THK_SPIN_SPD);
       leds_both(THK_R / 2, THK_G / 2, THK_B / 2);
       break;
     case BUGC2_HEART:
@@ -463,28 +458,14 @@ void bugc2_tick(uint32_t now_ms) {
                 (uint8_t)((THK_G * br) >> 8),
                 (uint8_t)((THK_B * br) >> 8));
 
-      // Simple oscillation: fwd → pause → bwd → done. Stays silent after.
+      // In-place spin for THK_SPIN_DUR, then stop. Stays silent after.
       uint32_t since = now_ms - s_lastBeat;
       switch (s_phase) {
-        case 0:  // forward
-          if (since >= THK_PACE_FWD) {
+        case 0:  // spinning
+          if (since >= THK_SPIN_DUR) {
             motors_off_force();
             s_lastBeat = now_ms;
-            s_phase = 1;
-          }
-          break;
-        case 1:  // pause
-          if (since >= THK_PACE_PAUSE) {
-            motors_translate_asym(THK_R_SPD, THK_L_SPD, -1);  // backward
-            s_lastBeat = now_ms;
-            s_phase = 2;
-          }
-          break;
-        case 2:  // backward
-          if (since >= THK_PACE_FWD) {
-            motors_off_force();
-            s_lastBeat = now_ms;
-            s_phase = THK_PHASE_DONE;  // 3 — terminal
+            s_phase = THK_PHASE_DONE;
           }
           break;
         case THK_PHASE_DONE:
