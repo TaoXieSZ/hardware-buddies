@@ -20,7 +20,7 @@ What this fork adds on top of upstream:
 > change. Stick still talks plain Nordic UART to Claude desktop.
 
 <p align="center">
-  <img src="docs/device.jpg" alt="M5StickC Plus running the buddy firmware" width="500">
+  <img src="docs/device-plus2-bugc2.jpg" alt="M5StickC Plus2 mounted on a BugC2 chassis, screen showing the clawd buddy with mood/fed/energy stats" width="500">
 </p>
 
 ## Hardware
@@ -209,6 +209,46 @@ tools/
 mac-helper/      — Swift package: clipboard sync helper
 .omc/            — OMC tooling state (gitignored)
 ```
+
+## TODO
+
+Roadmap for this fork (PRs welcome):
+
+- [ ] **Claude Code CLI bridge** — desktop-side daemon that consumes
+      Claude Code hooks (SessionStart / PreToolUse / Stop / Notification)
+      and pushes the same heartbeat protocol over BLE NUS, so the buddy
+      reacts to terminal sessions the way it does to Claude desktop
+      sessions today. Plan in `.omc/plans/crab-and-cli-bridge.md`.
+      Stick firmware needs zero changes — just a producer.
+- [ ] **Re-enable audio capture / BLE PTT** on Plus2. Currently disabled
+      in `setup()` because the I2S init burns ~68KB heap that the 16-bit
+      sprite needs. Need to either drop sprite to 8-bit palette or use
+      a smaller I2S buffer.
+- [ ] **More GIF packs** from `clawd-on-desk` — calico, cloudling.
+      `tools/prep_character.py` already supports per-state bbox so each
+      pack lights up cleanly. Just write a manifest.
+- [ ] **BugC2 LED-as-status overlay** — LEDs currently mirror persona
+      state mood. Could double as a token-rate indicator: brightness
+      proportional to recent tokens/sec.
+- [ ] **Auto-calibration** for BugC2 motor asymmetry. Manual tool exists
+      (`tools/motor-calib.html`); a one-shot self-test that drives a
+      known pattern and uses IMU yaw drift to compute trim would be
+      better than the current "click 8 buttons and eyeball straightness".
+- [ ] **Land a turn-around pacing motion** — initial attempt was
+      forward → 180° → forward; calibration was finicky (battery sag
+      changes the 180° duration). Replaced with a simple in-place spin.
+      A self-calibrating turn (use IMU yaw to close the loop) would
+      revive the original idea.
+- [ ] **Cliff detection** — BugC2 has no cliff sensor and the chassis
+      can walk off a desk during translation. For now we accept the
+      risk; an ultrasonic / IR add-on or a hard travel-distance cap
+      with IMU integration would harden it.
+
+Out of scope (researched, not feasible without hardware change):
+
+- ~~Jumping / hopping~~ — BugC2 spec confirms no actuator beyond 4 DC
+  motors + 2 RGB LEDs. The "springs" visible on the chassis are passive
+  wheel suspension, not driven elements.
 
 ## Availability
 
