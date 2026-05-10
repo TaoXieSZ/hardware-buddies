@@ -86,15 +86,15 @@ celebrate, dizzy, heart). **Crab** (Claude mascot) is the default. Menu →
 The default GIF pack is **clawd**, built from
 [`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk):
 
-| Our state   | Clawd GIF              |
-|-------------|------------------------|
-| sleep       | `clawd-sleeping.gif`   |
-| idle        | `clawd-idle.gif`       |
-| busy        | `clawd-thinking.gif`   |
-| attention   | `clawd-error.gif`      |
-| celebrate   | `clawd-juggling.gif`   |
-| dizzy       | `clawd-conducting.gif` |
-| heart       | `clawd-happy.gif`      |
+| Our state | Clawd GIF | Preview |
+|---|---|---|
+| `sleep` | `clawd-sleeping.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-sleeping.gif" width="96"> |
+| `idle` | `clawd-idle.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-idle.gif" width="96"> |
+| `busy` | `clawd-thinking.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-thinking.gif" width="96"> |
+| `attention` | `clawd-error.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-error.gif" width="96"> |
+| `celebrate` | `clawd-juggling.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-juggling.gif" width="96"> |
+| `dizzy` | `clawd-conducting.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-conducting.gif" width="96"> |
+| `heart` | `clawd-happy.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-happy.gif" width="96"> |
 
 To use your own pack: drag the folder onto the Hardware Buddy window
 (streams over BLE), or for fast iteration:
