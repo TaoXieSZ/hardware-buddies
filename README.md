@@ -83,8 +83,12 @@ celebrate, dizzy, heart). **Crab** (Claude mascot) is the default. Menu →
 
 ## GIF pets
 
-The default GIF pack is **clawd**, built from
-[`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk):
+The default GIF pack is **clawd**, with all sprite art credit to
+[`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk)
+— a delightful collection of pixel-art Claude crab animations originally
+made as a desk companion. Huge thanks to
+[@rullerzhou-afk](https://github.com/rullerzhou-afk) for the art; we
+just resize and remap it onto the buddy's persona-state engine here.
 
 | Our state | Clawd GIF | Preview |
 |---|---|---|
@@ -214,3 +218,30 @@ makers and developers and isn't an officially supported product feature.
 
 This fork is independently maintained — for upstream's reference protocol
 docs see **[REFERENCE.md](REFERENCE.md)**.
+
+## Credits
+
+This fork stands on the shoulders of:
+
+- **[`anthropics/claude-desktop-buddy`](https://github.com/anthropics/claude-desktop-buddy)**
+  — the upstream firmware: state machine, BLE bridge, GIF runtime, ASCII
+  sprite engine, character pack pipeline. Everything below the BugC2
+  layer is upstream's design; we only added Plus2 board support, the
+  crab species, and the chassis driver on top.
+
+- **[`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk)**
+  by [@rullerzhou-afk](https://github.com/rullerzhou-afk) — every clawd
+  pixel-art animation in this fork's GIF pack. The Claude crab is from
+  this collection; we just resize it and map each pose onto our
+  PersonaState. If you like clawd, go star their repo — there are
+  many more poses (calico, cloudling, building, sweeping, carrying…)
+  that are easy to wire up by editing `tools/clawd-src/manifest.json`.
+
+- **[`m5stack/M5Hat-BugC`](https://github.com/m5stack/M5Hat-BugC)**
+  — official BugC/BugC2 chassis library. Used as the
+  ground-truth wire-protocol reference; we copied the I2C register map
+  and motion patterns verbatim from `examples/bugc_robot_test/`.
+
+- **[`m5stack/M5Unified`](https://github.com/m5stack/M5Unified)**
+  — cross-board API that made M5StickC Plus2 compatibility a 1-day
+  port instead of a 1-week one.
