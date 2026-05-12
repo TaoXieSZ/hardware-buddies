@@ -1,23 +1,57 @@
-# claude-desktop-buddy (Plus2 + BugC2 fork)
+# claude-code-buddy
 
-Fork of [`anthropics/claude-desktop-buddy`](https://github.com/anthropics/claude-desktop-buddy)
-extended for **M5StickC PLUS2 + BugC2 chassis**, with the Claude crab
-("clawd") as the default mascot.
+Firmware + desktop daemons for an M5StickC PLUS2 that mirror the state
+of an AI coding session over BLE. Driven by the same wire protocol
+upstream Claude Desktop uses; this fork adds two new producer daemons
+so the same stick can also be driven by Claude Code (CLI) or Cursor (IDE).
 
-What this fork adds on top of upstream:
-
-| | Upstream | This fork |
+| Producer | Implementation | Notes |
 |---|---|---|
-| Stick variant | M5StickC / Plus | **+ Plus2** (via M5Unified migration; AXP192 deadlock fixed) |
-| Default species | capybara (ASCII) | **crab** (Claude mascot, ASCII) |
-| GIF pet | bufo example | **clawd pack** built from [`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk) — 8 states |
-| Pet base | — | **BugC2 chassis** integration: 4 DC motors via I2C (0x38) drive on persona-state, 2× RGB LEDs as mood lighting |
-| Tooling | `flash_character.py` | + **`tools/motor-calib.html`** — Web Bluetooth motor pattern calibrator (sliders + WASD + 16 sign-combo presets) |
-| GIF pipeline | global bbox (over-padded small poses) | **per-state bbox** (each pose fills its canvas); TARGET_W 96 → 120 |
+| Claude Desktop | upstream BLE bridge (unchanged) | reference producer |
+| Claude Code CLI | `tools/cc-bridge/` — launchd Python daemon + hook | supports permission echo: stick button A approves a PreToolUse prompt, B denies |
+| Cursor IDE | `tools/cursor-bridge/` — launchd Python daemon + Node hook shim | mirrors prompt submission, tool start/stop, tool failures, subagent activity, token deltas. State coverage in [`tools/cursor-bridge/STATE.md`](tools/cursor-bridge/STATE.md) |
 
-> The original Anthropic protocol docs in **[REFERENCE.md](REFERENCE.md)**
-> still apply unchanged — this fork is a hardware extension, not a protocol
-> change. Stick still talks plain Nordic UART to Claude desktop.
+Two daemon-driven bridges can run side by side against two sticks on
+one Mac. Each daemon scans by BLE name prefix (`Claude-` vs `Cursor-`)
+so they don't fight over advertisements. Same firmware on both sticks;
+prefix is set by build flag `BUDDY_BRAND_PREFIX`.
+
+Hardware: M5StickC PLUS2 (1.14" 135×240 LCD, 240MHz ESP32, IMU,
+buzzer). Optional BugC2 chassis (4 DC motors, 2 RGB LEDs,
+STM32F030 over I2C 0x38). Software: this firmware + one Python daemon
+per producer.
+
+What's new in this fork (vs upstream `anthropics/claude-desktop-buddy`):
+
+- `tools/cursor-bridge/` — Cursor IDE producer. Daemon, Node hook shim,
+  install script, state-coverage doc.
+- `tools/cc-bridge/` — Claude Code CLI producer. Includes synchronous
+  PreToolUse permission echo, an unencrypted debug GATT service used to
+  work around macOS+bleak BLE-encryption flakiness during back-to-back
+  tool calls, and a bypass-mode short-circuit.
+- `BUDDY_BRAND_PREFIX` / `BUDDY_BRAND_NAME` / `BUDDY_VARIANT_CURSOR`
+  build flags. Two PlatformIO envs pin them
+  (`m5stickc-plus2-claude`, `m5stickc-plus2-cursor`) along with the
+  default character pack and `upload_port` / `monitor_port`.
+- Stale-session reaper in cursor-bridge: sessions idle >60s drop out
+  of the active-session count.
+- One-shot RTC sync from the daemons on BLE reconnect. Neither the
+  CLI nor the IDE producer has an upstream desktop app sending the
+  periodic time frame, so without this the stick's clock would sit at
+  2000-01-01.
+- Clawd GIF pack (sprite art credit
+  [@rullerzhou-afk/clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk))
+  as the default character for both variants.
+- M5StickC Plus2 board support via `m5_compat.h` shim over `M5Unified`.
+- BugC2 chassis driver mapping the upstream persona state to motor +
+  LED patterns. I2C protocol verbatim against
+  `m5stack/M5Hat-BugC@c054b6e`.
+- ASCII-buddy renderer (`src/buddies/*.cpp`) retired — GIF path is the
+  only character renderer.
+
+Wire protocol unchanged; see [`REFERENCE.md`](REFERENCE.md). Heavy
+thanks to upstream for the protocol, BLE service, GIF runtime, and the
+seven-state persona engine.
 
 <p align="center">
   <img src="docs/device-plus2-bugc2.jpg" alt="M5StickC Plus2 mounted on a BugC2 chassis, screen showing the clawd buddy with mood/fed/energy stats" width="500">
@@ -75,13 +109,7 @@ then **Developer → Open Hardware Buddy…** in Claude desktop, click
 The screen auto-powers-off after 30s of no interaction (kept on while an
 approval prompt is up). Any button press wakes it.
 
-## ASCII pets
-
-Nineteen species, each with seven animations (sleep, idle, busy, attention,
-celebrate, dizzy, heart). **Crab** (Claude mascot) is the default. Menu →
-"next pet" cycles them with a counter; choice persists to NVS.
-
-## GIF pets
+## GIF character
 
 The default GIF pack is **clawd**, with all sprite art credit to
 [`rullerzhou-afk/clawd-on-desk`](https://github.com/rullerzhou-afk/clawd-on-desk)
@@ -94,8 +122,8 @@ just resize and remap it onto the buddy's persona-state engine here.
 |---|---|---|
 | `sleep` | `clawd-sleeping.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-sleeping.gif" width="96"> |
 | `idle` | `clawd-idle.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-idle.gif" width="96"> |
-| `busy` | `clawd-thinking.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-thinking.gif" width="96"> |
-| `attention` | `clawd-error.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-error.gif" width="96"> |
+| `busy` | `clawd-thinking` / `typing` / `building` (rotates) | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-thinking.gif" width="80"> <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-typing.gif" width="80"> <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-building.gif" width="80"> |
+| `attention` | `clawd-notification.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-notification.gif" width="96"> |
 | `celebrate` | `clawd-juggling.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-juggling.gif" width="96"> |
 | `dizzy` | `clawd-conducting.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-conducting.gif" width="96"> |
 | `heart` | `clawd-happy.gif` | <img src="https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/assets/gif/clawd-happy.gif" width="96"> |
@@ -201,25 +229,59 @@ src/
   data.h         — wire protocol, JSON parse (incl. {"cmd":"motor",...})
   xfer.h         — folder push receiver
   stats.h        — NVS-backed stats, settings, owner, species choice
-characters/      — bufo (upstream), clawd (this fork)
+characters/      — bufo (upstream), clawd, calico (this fork)
 tools/
   prep_character.py   — resize source GIFs to 120px / per-state bbox
   flash_character.py  — fast USB uploadfs path (skips BLE)
   motor-calib.html    — Web Bluetooth BugC2 calibrator
+  cc-bridge/          — Claude Code (CLI) hooks → stick (daemon + hooks)
+  cursor-bridge/      — Cursor IDE hooks → second stick (parallel daemon)
+platformio.ini   — three Plus2 build envs:
+  m5stickc-plus2          plain (Claude- BLE name, scan LittleFS for char)
+  m5stickc-plus2-claude   pinned to Claude- + clawd default character
+  m5stickc-plus2-cursor   pinned to Cursor- + clawd default character + rebranded info screens
 mac-helper/      — Swift package: clipboard sync helper
 .omc/            — OMC tooling state (gitignored)
 ```
+
+## Setting up another stick
+
+Got a second M5StickC? See **[docs/onboarding-next-stick.md](docs/onboarding-next-stick.md)** —
+flash gotchas (USB cable, GATT cache, heap watch), per-stick port
+disambiguation, and full step-by-step for running two sticks against
+Claude Code (`tools/cc-bridge/`) and Cursor (`tools/cursor-bridge/`) in
+parallel, each with its own character pack.
 
 ## TODO
 
 Roadmap for this fork (PRs welcome):
 
-- [ ] **Claude Code CLI bridge** — desktop-side daemon that consumes
-      Claude Code hooks (SessionStart / PreToolUse / Stop / Notification)
-      and pushes the same heartbeat protocol over BLE NUS, so the buddy
-      reacts to terminal sessions the way it does to Claude desktop
-      sessions today. Plan in `.omc/plans/crab-and-cli-bridge.md`.
-      Stick firmware needs zero changes — just a producer.
+- [x] ~~**Claude Code CLI bridge** — desktop-side daemon that consumes
+      Claude Code hooks~~ — shipped in `tools/cc-bridge/`. Includes
+      synchronous PreToolUse hook that surfaces tool-approval prompts
+      to the stick (press A=allow, B=deny). Note: macOS BLE encryption
+      is flaky; the bridge currently disconnects+reconnects every few
+      seconds during back-to-back tool calls, which can eat the user's
+      approval window. Reliability work tracked separately below.
+- [x] ~~**Cursor IDE bridge** — second daemon, second stick, same wire
+      protocol~~ — shipped in `tools/cursor-bridge/`. Covers prompt
+      submission, tool start/stop, tool failures, subagent activity
+      (Cursor Multitask Mode), token accumulation per turn, stale
+      session reaping, and one-shot RTC sync on connect. State model
+      documented in [tools/cursor-bridge/STATE.md](tools/cursor-bridge/STATE.md).
+      Permission echo is **not** wired yet — Cursor's permission UX
+      lives inside the IDE, no API surface to drive from the stick.
+- [ ] **Cursor permission echo** — Cursor exposes tool approval inside
+      the IDE only; no hook event lets an external daemon answer
+      yes/no. Investigate IDE extension or CLI flag to forward the
+      decision back so the stick's A/B buttons can approve like
+      cc-bridge does.
+- [ ] **cc-bridge BLE stability** — bleak+CoreBluetooth on macOS keeps
+      dropping the encrypted NUS link mid-session, so the permission
+      echo (PreToolUse → stick A → allow) misses windows when the
+      reconnect lag exceeds the 10s hook timeout. Either pre-emptive
+      keepalive writes, or switching to an unencrypted "debug" service
+      separate from the encrypted NUS.
 - [ ] **Re-enable audio capture / BLE PTT** on Plus2. Currently disabled
       in `setup()` because the I2S init burns ~68KB heap that the 16-bit
       sprite needs. Need to either drop sprite to 8-bit palette or use

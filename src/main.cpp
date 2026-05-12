@@ -5,20 +5,32 @@
 #include "ble_bridge.h"
 #include "bugc2.h"
 #include "data.h"
-#include "buddy.h"
 #include "audio_capture.h"
 #include "audio_ble.h"
 
 M5Canvas spr;  // parent set lazily in setup() to avoid static-init order trap
 
-// Advertise as "Claude-XXXX" (last two BT MAC bytes) so multiple sticks
-// in one room are distinguishable in the desktop picker. Name persists in
+// Advertise as "<prefix>XXXX" (last two BT MAC bytes) so multiple sticks
+// in one room are distinguishable in the desktop picker. Default prefix
+// is "Claude-"; the -cursor build env overrides it to "Cursor-" via
+// BUDDY_BRAND_PREFIX so a Cursor-pinned stick shows up under its own
+// name in the macOS Bluetooth list and the cursor-bridge daemon can
+// scan for it without needing to pin the MAC suffix. Name persists in
 // btName for the BLUETOOTH info page.
-static char btName[16] = "Claude";
+#ifndef BUDDY_BRAND_PREFIX
+#define BUDDY_BRAND_PREFIX "Claude-"
+#endif
+// BUDDY_BRAND_NAME is the same brand sans dash, used in user-visible info
+// screen text ("I watch your <Brand>", "No <Brand> connected"). Set per
+// build env in platformio.ini; defaults to Claude for the plain env.
+#ifndef BUDDY_BRAND_NAME
+#define BUDDY_BRAND_NAME "Claude"
+#endif
+static char btName[16];
 static void startBt() {
   uint8_t mac[6] = {0};
   esp_read_mac(mac, ESP_MAC_BT);
-  snprintf(btName, sizeof(btName), "Claude-%02X%02X", mac[4], mac[5]);
+  snprintf(btName, sizeof(btName), BUDDY_BRAND_PREFIX "%02X%02X", mac[4], mac[5]);
   bleInit(btName);
 }
 
@@ -63,27 +75,26 @@ bool     dimmed = false;
 bool     screenOff = false;
 bool     swallowBtnA = false;
 bool     swallowBtnB = false;
-bool     buddyMode = false;
 bool     gifAvailable = false;
-const uint8_t SPECIES_GIF = 0xFF;   // species NVS sentinel: use the installed GIF
+// BugC2 chassis presence latched at boot. When attached, its base
+// physically blocks the side button B, so we remap A:
+//   short tap = cycle approve/deny selection
+//   long press = confirm (also doubles as menu-confirm everywhere else)
+bool     bugc2Present  = false;
+uint8_t  promptSelection = 0;  // 0 = approve, 1 = deny (only used when bugc2Present)
 
-// Cycle GIF (if installed) → ASCII species 0..N-1 → GIF. Persisted to the
-// existing "species" NVS key; 0xFF means GIF mode.
-static void nextPet() {
-  uint8_t n = buddySpeciesCount();
-  if (!buddyMode) {                          // GIF → species 0
-    buddyMode = true;
-    buddySetSpeciesIdx(0);
-    speciesIdxSave(0);
-  } else if (buddySpeciesIdx() + 1 >= n && gifAvailable) {  // last species → GIF
-    buddyMode = false;
-    speciesIdxSave(SPECIES_GIF);
-  } else {                                   // species i → species i+1
-    buddyNextSpecies();
-  }
-  characterInvalidate();
-  if (buddyMode) buddyInvalidate();
-}
+// Mic PTT gesture: "tap A, then within 300ms press-and-hold A". Hold for
+// 250ms to start (sends mic:down → daemon relays F5 keydown to Typeless);
+// release to stop. Only armed when on the idle main screen (no menu, no
+// prompt) so it never fights the existing approve/cycle semantics.
+uint32_t lastBtnAReleaseMs    = 0;     // 0 = gesture window closed
+bool     micCandidate         = false; // second-press of gesture in progress
+uint32_t micCandidateStartMs  = 0;
+bool     micActive            = false; // recording (key held down)
+
+// ASCII species removed — clawd GIF is the only pet. Menu still calls this
+// (entry kept for layout); we just re-render the same character.
+static void nextPet() { characterInvalidate(); }
 uint32_t wakeTransitionUntil = 0;
 const uint32_t SCREEN_OFF_MS = 30000;
 
@@ -129,7 +140,6 @@ const uint8_t INFO_PG_CREDITS = 5;
 void applyDisplayMode() {
   bool peek = displayMode != DISP_NORMAL;
   characterSetPeek(peek);
-  buddySetPeek(peek);
   // Clear the whole sprite on mode switch. drawInfo/drawPet clear their
   // own regions when they run, but when you switch FROM info/pet TO normal,
   // those functions stop running and their stale pixels stay behind. Full
@@ -279,9 +289,7 @@ static void drawSettings() {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
     } else if (i == 7) {
-      uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
-      uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
-      spr.printf("%u/%u", pos, total);
+      spr.print(gifAvailable ? "clawd" : "none");
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
@@ -462,21 +470,10 @@ static void drawClock() {
   static uint32_t lastPetTick = 0;
   if (millis() - lastPetTick >= 200) {
     lastPetTick = millis();
-    if (buddyMode) {
-      // ASCII glyphs don't self-clear; wipe the box each tick. Species
-      // hardcode BUDDY_X_CENTER=67 / BUDDY_Y_OVERLAY=6 for particles so
-      // keep portrait coords and just swap the surface — pet lands
-      // upper-left of landscape, which is where we want it anyway.
-      M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
-      buddyRenderTo(&M5.Lcd, activeState);
-    } else {
-      // Full-frame GIFs paint every pixel (transparent → pal.bg), so a
-      // per-tick clear just adds a visible black flash between wipe and
-      // last scanline. The entry fillScreen on paintedOrient change
-      // already covers the surround.
-      characterSetState(activeState);
-      characterRenderTo(&M5.Lcd, 57, 45);
-    }
+    // Full-frame GIFs paint every pixel (transparent → pal.bg). The entry
+    // fillScreen on paintedOrient change covers the surround.
+    characterSetState(activeState);
+    characterRenderTo(&M5.Lcd, 57, 45);
   }
   M5.Lcd.setRotation(0);
 }
@@ -552,8 +549,13 @@ void drawInfo() {
   if (infoPage == 0) {
     _infoHeader(p, y, "ABOUT", infoPage);
     spr.setTextColor(p.textDim, p.bg);
+#ifdef BUDDY_VARIANT_CURSOR
+    ln("I watch your Cursor");
+    ln("IDE sessions.");
+#else
     ln("I watch your Claude");
-    ln("desktop sessions.");
+    ln("Code sessions.");
+#endif
     y += 6;
     ln("I sleep when nothing's");
     ln("happening, wake when");
@@ -566,19 +568,30 @@ void drawInfo() {
     ln("to approve from here.");
     y += 6;
     spr.setTextColor(p.textDim, p.bg);
-    ln("18 species. Settings");
-    ln("> ascii pet to cycle.");
+    ln("Tap A + hold A =");
+    ln("dictate (Typeless).");
 
   } else if (infoPage == 1) {
     _infoHeader(p, y, "BUTTONS", infoPage);
-    spr.setTextColor(p.text, p.bg);    ln("A   front");
-    spr.setTextColor(p.textDim, p.bg); ln("    next screen");
-    ln("    approve prompt"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("B   right side");
-    spr.setTextColor(p.textDim, p.bg); ln("    next page");
-    ln("    deny prompt"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("hold A");
-    spr.setTextColor(p.textDim, p.bg); ln("    menu"); y += 4;
+    if (bugc2Present) {
+      spr.setTextColor(p.text, p.bg);    ln("A   front");
+      spr.setTextColor(p.textDim, p.bg); ln("    tap: cycle / next");
+      ln("    hold: confirm"); y += 4;
+      spr.setTextColor(p.text, p.bg);    ln("tap+hold A");
+      spr.setTextColor(p.textDim, p.bg); ln("    dictate (PTT)");
+      y += 4;
+      spr.setTextColor(p.text, p.bg);    ln("B  blocked by BugC2");
+    } else {
+      spr.setTextColor(p.text, p.bg);    ln("A   front");
+      spr.setTextColor(p.textDim, p.bg); ln("    tap: next / approve");
+      ln("    hold: menu"); y += 4;
+      spr.setTextColor(p.text, p.bg);    ln("B   right side");
+      spr.setTextColor(p.textDim, p.bg); ln("    tap: page / deny");
+      y += 4;
+      spr.setTextColor(p.text, p.bg);    ln("tap A + hold A");
+      spr.setTextColor(p.textDim, p.bg); ln("    dictate (PTT)");
+    }
+    y += 4;
     spr.setTextColor(p.text, p.bg);    ln("Power  left side");
     spr.setTextColor(p.textDim, p.bg); ln("    tap = screen off");
     ln("    hold 6s = off");
@@ -666,33 +679,44 @@ void drawInfo() {
       spr.setTextColor(p.text, p.bg);
       ln("TO PAIR");
       spr.setTextColor(p.textDim, p.bg);
-      ln(" Open Claude desktop");
-      ln(" > Developer");
-      ln(" > Hardware Buddy");
+#ifdef BUDDY_VARIANT_CURSOR
+      ln(" Run cursor-bridge");
+      ln(" on your Mac. It will");
+      ln(" auto-connect via BLE.");
       y += 4;
-      ln(" auto-connects via BLE");
+      ln(" See repo README.");
+#else
+      ln(" Run cc-bridge on");
+      ln(" your Mac. It will");
+      ln(" auto-connect via BLE.");
+      y += 4;
+      ln(" See repo README.");
+#endif
     }
 
   } else {
     _infoHeader(p, y, "CREDITS", infoPage);
     spr.setTextColor(p.textDim, p.bg);
-    ln("made by");
+    ln("upstream");
     y += 4;
     spr.setTextColor(p.text, p.bg);
     ln("Felix Rieseberg");
-    y += 12;
     spr.setTextColor(p.textDim, p.bg);
-    ln("source");
+    ln(" anthropics/");
+    ln(" claude-desktop-buddy");
+    y += 8;
+    spr.setTextColor(p.textDim, p.bg);
+    ln("this fork");
     y += 4;
     spr.setTextColor(p.text, p.bg);
-    ln("github.com/anthropics");
-    ln("/claude-desktop-buddy");
-    y += 12;
+    ln(" TaoXieSZ/");
+    ln(" claude-code-buddy");
+    y += 8;
     spr.setTextColor(p.textDim, p.bg);
     ln("hardware");
     y += 4;
-    ln("M5StickC Plus");
-    ln("ESP32 + AXP192");
+    ln("M5StickC Plus2");
+    ln("+ BugC2 chassis");
   }
 }
 
@@ -766,6 +790,18 @@ static void drawApproval() {
     spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, H - 12);
     spr.print("sent...");
+  } else if (bugc2Present) {
+    // No-B mode: highlight the currently selected option; tap A to
+    // toggle, long-press A to commit.
+    bool selApprove = (promptSelection == 0);
+    spr.setCursor(4, H - 12);
+    if (selApprove) {
+      spr.setTextColor(p.bg, GREEN);  spr.print(" approve ");
+      spr.setTextColor(p.textDim, p.bg); spr.print("  deny");
+    } else {
+      spr.setTextColor(p.textDim, p.bg); spr.print("approve  ");
+      spr.setTextColor(p.bg, HOT);    spr.print(" deny ");
+    }
   } else {
     spr.setTextColor(GREEN, p.bg);
     spr.setCursor(4, H - 12);
@@ -975,7 +1011,6 @@ void setup() {
   statsLoad();
   settingsLoad();
   petNameLoad();
-  buddyInit();
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.setColorDepth(16);
@@ -983,12 +1018,18 @@ void setup() {
   if (!spr.createSprite(W, H)) {
     Serial.println("[spr] createSprite FAILED — Plus2 8-bit heap exhausted; check audio/BLE buffer sizes");
   }
-  characterInit(nullptr);  // scan /characters/ for whatever is installed
+  // Default character: -claude env compiles in "clawd", -cursor env
+  // compiles in "calico", plain env passes nullptr → fall back to
+  // scanning /characters/ for the first installed pack. With a default
+  // baked in, characterInit also falls through to the scan when the
+  // named pack isn't on this stick's LittleFS, so a stick reflashed
+  // between firmwares stays usable.
+#ifdef BUDDY_DEFAULT_CHAR
+  if (!characterInit(BUDDY_DEFAULT_CHAR)) characterInit(nullptr);
+#else
+  characterInit(nullptr);
+#endif
   gifAvailable = characterLoaded();
-  // species NVS: 0..N-1 = ASCII species, 0xFF = use GIF (also the default,
-  // so a fresh install lands on the GIF). With no GIF installed, 0xFF falls
-  // through to buddyInit()'s clamped default.
-  buddyMode = !(gifAvailable && speciesIdxLoad() == SPECIES_GIF);
   applyDisplayMode();
 
   {
@@ -1013,10 +1054,10 @@ void setup() {
     delay(1800);
   }
 
-  Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
+  Serial.printf("buddy: %s\n", gifAvailable ? "GIF character loaded" : "no character");
 
-  if (bugc2_begin()) Serial.println("bugc2: present");
-  else               Serial.println("bugc2: not present");
+  bugc2Present = bugc2_begin();
+  Serial.println(bugc2Present ? "bugc2: present" : "bugc2: not present");
   // (motor diag removed; calibration now done over BLE via the HTML tool —
   // see tools/motor-calib.html and {"cmd":"motor","s":[...]} in data.h)
 }
@@ -1120,6 +1161,7 @@ void loop() {
     responseSent = false;
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
+      promptSelection = 0;   // default highlight = approve
       wake();
       beep(1200, 80);   // alert chirp
       // Jump to the approval screen no matter what was open — drawApproval
@@ -1128,7 +1170,6 @@ void loop() {
       menuOpen = settingsOpen = resetOpen = false;
       applyDisplayMode();
       characterInvalidate();
-      if (buddyMode) buddyInvalidate();
     }
   }
 
@@ -1145,6 +1186,31 @@ void loop() {
     wake();
   }
 
+  // Mic PTT gesture: second A press within 300ms of a short tap, only
+  // when nothing else has focus. Arms micCandidate; the per-tick check
+  // below escalates to micActive after 250ms of continuous hold.
+  if (M5.BtnA.wasPressed() && lastBtnAReleaseMs &&
+      (millis() - lastBtnAReleaseMs) < 300 &&
+      !(tama.promptId[0] && !responseSent) &&
+      !menuOpen && !settingsOpen && !resetOpen) {
+    micCandidate = true;
+    micCandidateStartMs = millis();
+    swallowBtnA = true;  // suppress the normal short-release / menu-open
+    lastBtnAReleaseMs = 0;
+  } else if (M5.BtnA.wasPressed()) {
+    // Any A press that isn't the gesture's second press closes the window.
+    lastBtnAReleaseMs = 0;
+  }
+
+  // Escalate candidate → active after holding the second press long enough.
+  if (micCandidate && !micActive && M5.BtnA.isPressed() &&
+      (millis() - micCandidateStartMs) > 250) {
+    micActive = true;
+    sendCmd("{\"cmd\":\"mic\",\"state\":\"down\"}");
+    beep(2400, 80);
+    characterInvalidate();
+  }
+
   // AXP power button (left side): short-press toggles screen off.
   // Long-press (6s) still powers off the device via AXP hardware.
   if (axpGetBtnPress() == 0x02) {
@@ -1159,7 +1225,34 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (resetOpen) { resetOpen = false; }
+    if (bugc2Present && inPrompt) {
+      // No-B mode: long-press commits whatever's selected.
+      const char* dec = (promptSelection == 0) ? "once" : "deny";
+      char cmd[96];
+      snprintf(cmd, sizeof(cmd),
+               "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"%s\"}",
+               tama.promptId, dec);
+      sendCmd(cmd);
+      responseSent = true;
+      if (promptSelection == 0) {
+        uint32_t tookS = (millis() - promptArrivedMs) / 1000;
+        statsOnApproval(tookS);
+        beep(2400, 60);
+        if (tookS < 5) triggerOneShot(P_HEART, 2000);
+      } else {
+        statsOnDenial();
+        beep(600, 60);
+      }
+    } else if (bugc2Present && resetOpen) {
+      beep(2400, 30);
+      applyReset(resetSel);
+    } else if (bugc2Present && settingsOpen) {
+      beep(2400, 30);
+      applySetting(settingsSel);
+    } else if (bugc2Present && menuOpen) {
+      beep(2400, 30);
+      menuConfirm();
+    } else if (resetOpen) { resetOpen = false; }
     else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
     else {
       menuOpen = !menuOpen;
@@ -1169,8 +1262,28 @@ void loop() {
     Serial.println(menuOpen ? "menu open" : "menu close");
   }
   if (M5.BtnA.wasReleased()) {
-    if (!btnALong && !swallowBtnA) {
-      if (inPrompt) {
+    // Mic gesture has highest priority — drain state before normal release.
+    if (micActive) {
+      micActive = false;
+      micCandidate = false;
+      sendCmd("{\"cmd\":\"mic\",\"state\":\"up\"}");
+      beep(600, 60);
+      characterInvalidate();
+      btnALong = false;
+      swallowBtnA = false;
+    } else if (micCandidate) {
+      // Second press released before mic threshold (250ms) — discard
+      // both events. User did a tap-tap; cycle already fired on the
+      // first release, the second was meant for a hold that fizzled.
+      micCandidate = false;
+      btnALong = false;
+      swallowBtnA = false;
+    } else if (!btnALong && !swallowBtnA) {
+      if (inPrompt && bugc2Present) {
+        // No-B mode: tap cycles selection; commit happens on long-press.
+        promptSelection ^= 1;
+        beep(1800, 30);
+      } else if (inPrompt) {
         char cmd[96];
         snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
         sendCmd(cmd);
@@ -1189,10 +1302,24 @@ void loop() {
       } else if (menuOpen) {
         beep(1800, 30);
         menuSel = (menuSel + 1) % MENU_N;
+      } else if (bugc2Present && displayMode == DISP_INFO &&
+                 infoPage < INFO_PAGES - 1) {
+        // No-B mode: tap A walks through info pages until the last,
+        // then the next tap falls through to cycle displayMode.
+        beep(1800, 30);
+        infoPage++;
+      } else if (bugc2Present && displayMode == DISP_PET &&
+                 petPage < PET_PAGES - 1) {
+        beep(1800, 30);
+        petPage++;
+        applyDisplayMode();
       } else {
         beep(1800, 30);
         displayMode = (displayMode + 1) % DISP_COUNT;
         applyDisplayMode();
+        // Arm mic gesture window: a follow-up A press within 300ms held
+        // for 250ms enters dictation mode. Only armed from idle main.
+        lastBtnAReleaseMs = millis();
       }
     }
     btnALong = false;
@@ -1255,7 +1382,6 @@ void loop() {
     if (clocking && !landscapeClock) characterSetPeek(true);
     else applyDisplayMode();
     characterInvalidate();
-    if (buddyMode) buddyInvalidate();
     wasClocking = clocking;
     wasLandscape = landscapeClock;
   }
@@ -1282,8 +1408,6 @@ void loop() {
   if (napping || screenOff || landscapeClock) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
-  } else if (buddyMode) {
-    buddyTick(activeState);
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
@@ -1320,6 +1444,17 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
+    if (micActive) {
+      // Top banner. Blink the red dot ~2 Hz so you can see it's live.
+      spr.fillRect(0, 0, W, 14, 0xC020);  // dark red
+      spr.setTextColor(0xFFFF, 0xC020);
+      spr.setTextSize(1);
+      bool blink = (millis() / 250) & 1;
+      spr.setCursor(4, 3);
+      spr.print(blink ? "\xA5 REC" : "  REC");
+      spr.setCursor(W - 56, 3);
+      spr.print("release=stop");
+    }
     spr.pushSprite(&M5.Display, 0, 0);
   }
 

@@ -1,5 +1,5 @@
 {
-  "name": "clawd",
+  "name": "calico",
   "colors": {
     "body": "#D97757",
     "bg": "#000000",
@@ -18,6 +18,6 @@
     "attention": "attention.gif",
     "celebrate": "celebrate.gif",
     "dizzy": "dizzy.gif",
-    "heart": "heart.gif"
+    "heart": "celebrate.gif"
   }
 }
