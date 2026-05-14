@@ -32,9 +32,12 @@ import sys
 import time
 import pathlib
 
-# Allow `from buddy_core import ...` when launched as a standalone script.
+# Allow `from buddy_core import ...` AND `from dashboard import ...`
+# when launched as a standalone script via launchd (where cwd ≠ here).
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from buddy_core import run, BuddyState
+from dashboard import start_dashboard, DEFAULT_PORT as DASH_DEFAULT_PORT
 
 # ─── config ────────────────────────────────────────────────────────────
 SOCKET_PATH = os.environ.get("CC_BRIDGE_SOCKET", "/tmp/cc-bridge.sock")
@@ -78,6 +81,16 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
     name = ev.get("hook_event_name") or ev.get("event") or ""
     sid = ev.get("session_id") or ev.get("sessionId") or "anon"
     changed = False
+
+    # Universal sound dispatch — every recognized event sets pending_play
+    # to the lowercase event name; firmware looks up /sounds/<name>.wav on
+    # LittleFS and plays it. Unknown names silently no-op on firmware
+    # (sound.cpp only loads .wav files present on disk). Specific event
+    # handlers below MAY override pending_play with a more specific clip
+    # name if that turns out useful, but for now 1:1 mapping is enough.
+    if name:
+        state.pending_play = name.lower()
+        changed = True  # heartbeat must emit so firmware gets the cue
 
     # Semantics matter — Claude Code's `Stop` is "assistant turn ended", NOT
     # "session terminated". Don't decrement `total` there. And don't set
@@ -171,6 +184,18 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
 
 
 if __name__ == "__main__":
+    # Dashboard port: env var CC_BRIDGE_DASH_PORT overrides; 0 disables.
+    # Default DEFAULT_PORT (8765) is fine on macOS where launchd doesn't
+    # share that range with system services. Bound to 127.0.0.1 only —
+    # don't expose the speaker/screen remote-control to the network.
+    DASH_PORT = int(os.environ.get("CC_BRIDGE_DASH_PORT", str(DASH_DEFAULT_PORT)))
+
+    def _on_loop_start(ble, loop, log):
+        if DASH_PORT > 0:
+            start_dashboard(ble, loop, log=log, port=DASH_PORT)
+        else:
+            log.info("dashboard disabled (CC_BRIDGE_DASH_PORT=0)")
+
     run(
         name="cc-bridge",
         socket_path=SOCKET_PATH,
@@ -181,4 +206,5 @@ if __name__ == "__main__":
         ptt_mode=PTT_MODE,
         keepalive_s=10.0,
         rtc_sync_on_connect=False,  # Claude Desktop handles RTC for cc-bridge
+        on_loop_start=_on_loop_start,
     )
