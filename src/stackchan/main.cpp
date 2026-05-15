@@ -164,12 +164,24 @@ static void applyJsonLine(const char* line) {
   bool is_done = false;
   uint8_t next = mapState(doc, &is_done);
   if (is_done) {
-    // Hold celebrate ~2.8s so the full CELEBRATE dance — wind-up + the
-    // 360° spin (转一圈) + settle + wiggle — completes before we fall
-    // back to IDLE. Was 1.5s (pre-spin), which cut the spin off midway.
-    g_celebrate_until = millis() + 2800;
+    // Hold celebrate ~3s so the full CELEBRATE swing dance (4 yaw
+    // swings + look-up + settle, ≈2.7s) completes before we fall back
+    // to IDLE. The holding_celebrate guard below keeps a fresh BUSY
+    // heartbeat from cutting it short.
+    g_celebrate_until = millis() + 3000;
   }
-  if (next != g_cur_state) {
+  // Don't let a fresh heartbeat interrupt an in-progress celebrate.
+  // Claude Code fires PreToolUse right after PostToolUse, so without
+  // this guard the next "running:" heartbeat flips us to BUSY within
+  // milliseconds — cutting the CELEBRATE dance (incl. the 360° spin)
+  // off before it's visible. loop() falls out of CELEBRATE on its own
+  // when g_celebrate_until expires. ATTENTION (a permission prompt) is
+  // urgent enough to still break through.
+  bool holding_celebrate = (g_cur_state == CHAR_CELEBRATE &&
+                            g_celebrate_until &&
+                            millis() < g_celebrate_until &&
+                            next != CHAR_ATTENTION);
+  if (next != g_cur_state && !holding_celebrate) {
     g_cur_state = next;
     characterSetState(next);
     motionSetState(next);   // dance pattern mirrors visual state

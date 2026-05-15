@@ -20,14 +20,16 @@ namespace {
 struct Step {
   int16_t x;       // tenths of degrees, -1280..1280
   int16_t y;       // signed delta from g_y_baseline, tenths of degrees
-  uint16_t speed;  // 0..1000 (positioned move); ignored when rotate != 0
+  uint16_t speed;  // 0..1000
   uint16_t dwell;  // ms to wait after issuing this step
-  int16_t rotate;  // 0 → positioned move(x,y,speed). non-zero → continuous
-                   // rotateX(rotate): yaw spins at that velocity (-1000..
-                   // 1000, +CCW/-CW) until the next positioned step stops
-                   // it. Used for the CELEBRATE 360° spin. x/y/speed are
-                   // ignored on a rotate step.
 };
+
+// NOTE: a true continuous 360° spin (BSP rotateX / PWM-wheel mode) was
+// tried for CELEBRATE but does NOT work on this StackChan's yaw servo —
+// a boot self-test held rotateX(650) for 3 s and the encoder never
+// moved (the BSP's SwitchMode→PWM silently fails on this unit, and it
+// doesn't check the return). So CELEBRATE is a vigorous *positioned*
+// swing dance instead — energetic, but within the ±128° yaw range.
 
 // Patterns. Sentinel (dwell=0) marks loop point — when reached, restart.
 // Speeds tuned conservatively; one pattern (CELEBRATE) goes fast.
@@ -58,23 +60,23 @@ const Step PAT_ATTENTION[] = {
   {-800, 50, 500, 600},      // look left, alert lift
   {0, 0, 0, 0}
 };
-// CELEBRATE — a happy wiggle, then 转一圈: a full 360° spin to express
-// joy. rotateX() is continuous (a velocity command, not a positioned
-// move), so the spin runs for SPIN_MS then the next positioned step
-// halts it. SPIN_MS is the dwell that yields ~one revolution at
-// SPIN_VELOCITY — the exact rev count depends on the feedback servo's
-// free-run speed, so tune SPIN_MS on-device if it over/undershoots.
-// main.cpp holds CELEBRATE long enough (see g_celebrate_until) for the
-// spin to finish before falling back to IDLE.
-constexpr int16_t  SPIN_VELOCITY = 650;    // CCW; negate for CW
-constexpr uint16_t SPIN_MS       = 1500;   // ≈ one full circle at v=650
+// CELEBRATE — a vigorous swing dance to express joy: 4 crisp ±60° yaw
+// swings + a big look-up, then settle. Not a literal 360° (this unit's
+// servo can't do continuous rotation — see the Step NOTE above), but
+// energetic enough to read as celebration.
+//
+// Dwell pacing matters: each step must give the servo time to actually
+// reach the target before the next step fires, or the swings blur into
+// an indistinct wobble. ~460ms/swing matches M5's own Dance.ino
+// (±600 @ ~500ms). Total ≈ 2.7 s; main.cpp holds CELEBRATE 3 s.
 const Step PAT_CELEBRATE[] = {
-  {0,    40, 600, 200,  0},              // chin up — wind-up
-  {0,     0,   0, SPIN_MS, SPIN_VELOCITY}, // 转一圈! continuous 360° spin
-  {0,    20, 500, 400,  0},              // positioned move halts the spin
-  {500,  60, 800, 220,  0},              // happy wiggle right
-  {-500, 60, 800, 220,  0},              // wiggle left
-  {0, 0, 0, 0, 0}
+  { 600,  60, 850, 460},     // swing right, chin up
+  {-600,  60, 850, 460},     // swing left
+  { 600,  30, 850, 460},     // swing right
+  {-600,  30, 850, 460},     // swing left
+  {   0,  80, 750, 380},     // snap center, big look-up
+  {   0,   0, 500, 520},     // settle back to baseline
+  {0, 0, 0, 0}
 };
 const Step PAT_DIZZY[]     = {
   {500, -80, 700, 250},
@@ -116,13 +118,6 @@ uint32_t      g_next_at  = 0;
 bool          g_running  = false;
 
 void issueStep(const Step& s) {
-  // A rotate step puts the yaw servo into continuous-rotation mode at
-  // the given velocity; it keeps spinning until a later positioned step
-  // (move) issues a position command on the same servo and halts it.
-  if (s.rotate != 0) {
-    ::M5StackChan.Motion.rotateX(s.rotate);
-    return;
-  }
   // s.y is a signed delta from the configurable baseline (in tenths of
   // degrees). Clamp the absolute target to the BSP's [0, 900] range so
   // a high baseline + a "tilt up" pattern step doesn't slam past the
@@ -205,10 +200,8 @@ void motionTick() {
   if (now < g_next_at) return;
 
   const Step& s = g_pattern[g_step_i];
-  // Sentinel ({0,0,0,0,0}) → loop back to start. A rotate step also has
-  // speed=0, so the sentinel must check rotate too — otherwise a
-  // dwell-0 rotate step would be misread as the loop marker.
-  if (s.dwell == 0 && s.speed == 0 && s.rotate == 0) {
+  // Sentinel (dwell=0) → loop back to start.
+  if (s.dwell == 0 && s.speed == 0) {
     g_step_i = 0;
     return;     // re-enter from index 0 next tick
   }
