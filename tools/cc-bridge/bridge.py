@@ -27,6 +27,7 @@ Run as launchd daemon:
   see tools/cc-bridge/install.sh
 """
 
+import asyncio
 import os
 import sys
 import time
@@ -37,6 +38,7 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from buddy_core import run, BuddyState
+from buddy_core.frame_server import FrameServer
 from dashboard import start_dashboard, DEFAULT_PORT as DASH_DEFAULT_PORT
 
 # ─── config ────────────────────────────────────────────────────────────
@@ -239,11 +241,100 @@ if __name__ == "__main__":
     # don't expose the speaker/screen remote-control to the network.
     DASH_PORT = int(os.environ.get("CC_BRIDGE_DASH_PORT", str(DASH_DEFAULT_PORT)))
 
-    def _on_loop_start(ble, loop, log):
+    # StackChan camera-stream ingress port. Matches the default in
+    # wifi_secrets.ini consumed by the firmware build. Set to 0 to disable
+    # the listener (e.g. on machines that don't run the StackChan).
+    # openspec change 0003-stackchan-camera-gestures.
+    FRAME_PORT = int(os.environ.get("CC_BRIDGE_FRAME_PORT", "8770"))
+    # Number of consecutive identical MediaPipe readings required to confirm
+    # a gesture. At ~10 fps capture this is roughly half a second of hold.
+    GESTURE_HOLD = int(os.environ.get("CC_BRIDGE_GESTURE_HOLD", "5"))
+
+    def _on_loop_start(ble, loop, log, state: BuddyState):
         if DASH_PORT > 0:
             start_dashboard(ble, loop, log=log, port=DASH_PORT)
         else:
             log.info("dashboard disabled (CC_BRIDGE_DASH_PORT=0)")
+        if FRAME_PORT > 0:
+            _start_frame_server(ble, loop, log, state)
+        else:
+            log.info("frame_server disabled (CC_BRIDGE_FRAME_PORT=0)")
+
+    def _start_frame_server(ble, loop, log, state: BuddyState):
+        """Schedule the StackChan camera-stream listener on the running loop.
+
+        Constructed here (not via extra_tasks) so the on_frame callback can
+        close over ble + state — feeding the daemon's MediaPipe Hands
+        classifier and writing the confirmed gesture back to the firmware.
+        """
+        from buddy_core.gesture_classifier import GestureClassifier
+
+        # MediaPipe is optional — if it isn't installed the daemon stays
+        # useful (manual approval works). The classify-from-JPEG glue is
+        # imported lazily so a missing mediapipe doesn't blow up at startup.
+        try:
+            import mediapipe  # noqa: F401 — import probe only
+            _mp_ok = True
+        except Exception as e:
+            _mp_ok = False
+            log.warning("mediapipe unavailable (%s) — gesture stays manual", e)
+
+        classifier = GestureClassifier(hold_frames=GESTURE_HOLD)
+
+        def _on_frame(payload: bytes) -> None:
+            # Only act while a prompt is pending — the firmware only sends
+            # frames during its prompt window, but a stale frame from a
+            # crashed firmware could otherwise resolve nothing or fire on
+            # the next prompt. Belt-and-suspenders.
+            prompt = state.prompt
+            if not prompt:
+                return
+            if not _mp_ok:
+                return  # Logged once at startup; don't spam per frame.
+            gesture = _classify_jpeg(payload)
+            confirmed = classifier.classify(gesture)
+            if confirmed is None:
+                return
+            log.info("gesture confirmed: %s (prompt id=%s)",
+                     confirmed, prompt.get("id"))
+            # ble.write is an async coroutine; schedule it on the loop.
+            # Firmware then emits the matching {"cmd":"permission",...}
+            # which on_stick_line routes to the pending future.
+            asyncio.run_coroutine_threadsafe(
+                ble.write({"cmd": "gesture", "result": confirmed}),
+                loop,
+            )
+
+        server = FrameServer(host="0.0.0.0", port=FRAME_PORT, on_frame=_on_frame)
+
+        async def _run():
+            try:
+                await server.start()
+                log.info("frame_server: listening on 0.0.0.0:%d", FRAME_PORT)
+                await server.serve_forever()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception("frame_server: crashed; camera stream dormant")
+            finally:
+                await server.stop()
+
+        loop.create_task(_run())
+
+    def _classify_jpeg(payload: bytes) -> str | None:
+        """Decode one JPEG → MediaPipe Hands → "approve" / "deny" / None.
+
+        Returns None for any frame where MediaPipe doesn't detect a clear
+        thumbs-up or thumbs-down. Real implementation lives in the
+        cc-bridge runtime; this stub keeps daemon startup unblocked and
+        the on-device gate check exercisable end-to-end after the
+        mediapipe + opencv-python deps are added. Returning None until
+        then degrades gesture-approve to manual — no other path breaks.
+        """
+        # P1 follow-up: decode JPEG → np.uint8 array → mediapipe.solutions
+        # .hands.Hands(...).process(rgb).multi_hand_landmarks → thumb-up/down
+        # via simple landmark-y comparisons (thumb tip vs index MCP).
+        return None
 
     run(
         name="cc-bridge",
