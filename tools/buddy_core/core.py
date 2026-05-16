@@ -466,27 +466,47 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                         dirty: asyncio.Event, apply_event: Callable,
                         pending: dict, log: logging.Logger):
     try:
-        data = await reader.read(64 * 1024)
-        if not data:
+        # Read the first frame line-by-line: hook clients write a single
+        # JSON-per-line and close; wait_permission writes one line then
+        # keeps the socket open for the reply. A bare `reader.read(64K)`
+        # returns whatever's in the kernel buffer right now and silently
+        # truncates the JSON when the client's write+flush races our read
+        # (we used to see ~500 "bad event JSON" warnings/day cutting off
+        # at offset ~200 in the payload).
+        try:
+            first_line = await reader.readuntil(b"\n")
+        except asyncio.IncompleteReadError as e:
+            first_line = e.partial  # client closed mid-line
+        first_line = first_line.strip()
+        if not first_line:
             return
 
-        # First decide if this is a request/response (wait_permission) or a
-        # batch of fire-and-forget hook events.
-        first_line = data.splitlines()[0].strip() if data else b""
         try:
-            head = json.loads(first_line) if first_line else {}
+            head = json.loads(first_line)
         except json.JSONDecodeError:
-            head = {}
+            head = None
 
         if isinstance(head, dict) and head.get("action") == "wait_permission":
             await _handle_wait_permission(head, writer, state, dirty, pending, log)
             return
 
-        # Otherwise: treat each line as a hook event.
-        for line in data.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+        # Otherwise: treat each line as a hook event. Drain the rest of
+        # the stream until the client closes — hook clients are
+        # write-then-close.
+        lines = [first_line]
+        rest = bytearray()
+        while True:
+            chunk = await reader.read(64 * 1024)
+            if not chunk:
+                break
+            rest.extend(chunk)
+        if rest:
+            for line in bytes(rest).splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(line)
+
+        for line in lines:
             try:
                 ev = json.loads(line)
             except json.JSONDecodeError:
