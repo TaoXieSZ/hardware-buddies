@@ -386,6 +386,10 @@ class BleWriter:
     def any_connected(self) -> bool:
         return bool(self.client and self.client.is_connected)
 
+    @property
+    def connected_prefixes(self) -> list[str]:
+        return [self._device_prefix] if self.any_connected else []
+
 
 # ─── Multi-peer BLE writer ─────────────────────────────────────────────
 # Wraps N BleWriter peers behind the same surface heartbeat/reconnect
@@ -425,6 +429,13 @@ class MultiBleWriter:
     @property
     def any_connected(self) -> bool:
         return any(p.any_connected for p in self._peers)
+
+    @property
+    def connected_prefixes(self) -> list[str]:
+        out: list[str] = []
+        for p in self._peers:
+            out.extend(p.connected_prefixes)
+        return out
 
     async def ensure_connected(self) -> bool:
         # All-peers semantics: return True only when every peer is live.
@@ -487,7 +498,7 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
             head = None
 
         if isinstance(head, dict) and head.get("action") == "wait_permission":
-            await _handle_wait_permission(head, writer, state, dirty, pending, log)
+            await _handle_wait_permission(head, writer, state, dirty, pending, ble, log)
             return
 
         # Otherwise: treat each line as a hook event. Drain the rest of
@@ -526,11 +537,28 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
 
 async def _handle_wait_permission(req, writer, state: BuddyState,
                                   dirty: asyncio.Event, pending: dict,
-                                  log: logging.Logger):
+                                  ble, log: logging.Logger):
     rid = req.get("id") or f"req_{int(time.time() * 1000)}"
     tool = req.get("tool", "tool")
     hint = (req.get("hint") or "")[:120]
     timeout = float(req.get("timeout", 6.0))
+
+    # Short-circuit: only Plus2 sticks have an A/B permission button.
+    # StackChan-class peers (prefix contains "SC") can't reply, so the
+    # wait would always burn the full timeout. If no permission-capable
+    # peer is connected, reply "ask" instantly and let Claude Code fall
+    # back to its normal terminal prompt. Keeps PreToolUse hook latency
+    # ~0ms instead of the daemon's ~6-8s default timeout.
+    prefixes = ble.connected_prefixes if hasattr(ble, "connected_prefixes") else []
+    has_stick = any("SC" not in p.upper() for p in prefixes)
+    if not has_stick:
+        log.info("wait_permission %s: no permission-capable peer → ask", rid)
+        try:
+            writer.write((json.dumps({"decision": "ask"}) + "\n").encode())
+            await writer.drain()
+        except Exception as e:
+            log.warning("reply failed: %s", e)
+        return
 
     log.info("wait_permission id=%s tool=%s timeout=%.1fs", rid, tool, timeout)
 
