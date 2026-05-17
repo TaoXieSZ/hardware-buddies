@@ -23,6 +23,7 @@ char    g_char_name[24] = "";
 bool    g_motion      = true;
 bool    g_idle_wiggle = true;
 uint8_t g_tilt        = 65;   // degrees, 0..90; servo Y baseline
+uint16_t g_sleep_after = 60;  // seconds after SLEEP entry to blank; 0=never
 
 }  // namespace
 
@@ -37,6 +38,7 @@ void settingsInit() {
   g_idle_wiggle= g_nvs.getBool ("idlew",  g_idle_wiggle);
   g_tilt       = g_nvs.getUChar("tilt",   g_tilt);
   if (g_tilt > 90) g_tilt = 90;
+  g_sleep_after = g_nvs.getUShort("soff", g_sleep_after);
   String cn    = g_nvs.getString("char",  "");
   size_t cl    = cn.length();
   if (cl > 0) {
@@ -44,8 +46,9 @@ void settingsInit() {
     memcpy(g_char_name, cn.c_str(), cl);
     g_char_name[cl] = 0;
   }
-  Serial.printf("[set] loaded: vol=%u bright=%u motion=%d idlew=%d tilt=%u char='%s'\n",
-                g_volume, g_brightness, g_motion, g_idle_wiggle, g_tilt, g_char_name);
+  Serial.printf("[set] loaded: vol=%u bright=%u motion=%d idlew=%d tilt=%u soff=%u char='%s'\n",
+                g_volume, g_brightness, g_motion, g_idle_wiggle, g_tilt,
+                g_sleep_after, g_char_name);
 
   // Apply baseline ASAP so boot UI matches saved state. tilt is applied
   // later by main.cpp after motionInit (servo subsystem must be up first).
@@ -105,4 +108,14 @@ void settingsSetTilt(uint8_t deg) {
   g_nvs.putUChar("tilt", deg);
   motionSetTilt(deg);
   Serial.printf("[set] tilt=%u\n", deg);
+}
+
+uint16_t settingsGetSleepAfter()        { return g_sleep_after; }
+
+void settingsSetSleepAfter(uint16_t sec) {
+  g_sleep_after = sec;
+  g_nvs.putUShort("soff", sec);
+  Serial.printf("[set] soff=%u\n", sec);
+  // No subsystem hook — main.cpp's loop polls settingsGetSleepAfter()
+  // each tick, so a change takes effect on the next idle window.
 }

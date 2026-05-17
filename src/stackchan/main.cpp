@@ -85,6 +85,24 @@ static uint8_t  g_cur_state   = CHAR_SLEEP;
 static uint32_t g_last_rx_ms  = 0;
 static uint32_t g_celebrate_until = 0;  // brief "done" celebrate timeout
 
+// Screen-off tracking: timestamp when we entered CHAR_SLEEP (0 = not in
+// sleep), and whether the backlight is currently blanked. Polled every
+// loop() tick; once sleep dwell exceeds settingsGetSleepAfter() the LCD
+// is set to brightness 0. Any non-SLEEP transition restores brightness.
+// Seeded to 1 (not 0) so a device that boots into CHAR_SLEEP and stays
+// there counts dwell from the very first tick — the boot path doesn't
+// run through the state-change branches that normally stamp this.
+static uint32_t g_sleep_entered_ms = 1;
+static bool     g_screen_off       = false;
+
+static void wakeScreenIfBlanked() {
+  if (g_screen_off) {
+    M5.Lcd.setBrightness(settingsGetBrightness());
+    g_screen_off = false;
+    Serial.println("[scr] wake");
+  }
+}
+
 // ---- Camera-gesture state (openspec 0003) ---------------------------------
 // Latched prompt id, updated each heartbeat. Required to emit a permission
 // ack with the right rid after a confirmed gesture. Cleared when the daemon
@@ -176,6 +194,16 @@ static void applyJsonLine(const char* line) {
       settingsSetTilt((uint8_t)(int)(doc["v"] | 65));
       return;
     }
+    if (strcmp(cmd, "sleep_after") == 0) {
+      // Seconds; 0 = never blank. Clamped to uint16 by Preferences.
+      int v = doc["v"] | 60;
+      if (v < 0) v = 0;
+      if (v > 65535) v = 65535;
+      settingsSetSleepAfter((uint16_t)v);
+      // Wake if user just turned the feature off.
+      if (v == 0) wakeScreenIfBlanked();
+      return;
+    }
     // Daemon-confirmed gesture (openspec 0003): show ATTENTION-state UI
     // feedback that the gesture registered, then emit the matching
     // {"cmd":"permission","id","decision"} on debug-TX so on_stick_line
@@ -248,6 +276,15 @@ static void applyJsonLine(const char* line) {
     motionSetState(next);   // dance pattern mirrors visual state
     const char* msg = doc["msg"] | "";
     Serial.printf("[state] %u  msg=\"%s\"\n", next, msg);
+    // Any hook-driven transition means activity → make sure the user
+    // can actually see it. Tracks SLEEP entry timestamp for the auto-
+    // blank timer; non-SLEEP transitions reset both.
+    if (next == CHAR_SLEEP) {
+      g_sleep_entered_ms = millis();
+    } else {
+      g_sleep_entered_ms = 0;
+      wakeScreenIfBlanked();
+    }
   }
 
   // Bottom status bar — msg + stats.
@@ -506,7 +543,21 @@ void loop() {
     characterSetState(CHAR_SLEEP);
     motionSetState(CHAR_SLEEP);
     characterSetMsg("");
+    g_sleep_entered_ms = now;
     Serial.println("[state] idle -> SLEEP");
+  }
+
+  // Screen-off: once we've held SLEEP for settingsGetSleepAfter() seconds
+  // (0 = feature off), blank the backlight. Saves heat on always-on
+  // desks. Wakeup is handled in applyJsonLine on the next non-SLEEP
+  // transition via wakeScreenIfBlanked().
+  uint16_t soff = settingsGetSleepAfter();
+  if (soff > 0 && !g_screen_off &&
+      g_cur_state == CHAR_SLEEP && g_sleep_entered_ms != 0 &&
+      (now - g_sleep_entered_ms) > (uint32_t)soff * 1000UL) {
+    M5.Lcd.setBrightness(0);
+    g_screen_off = true;
+    Serial.printf("[scr] blank after %us\n", soff);
   }
 
   // Daemon's BleWriter expects something on NUS TX every <30s.

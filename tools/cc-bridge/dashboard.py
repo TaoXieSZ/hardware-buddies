@@ -176,6 +176,15 @@ DASHBOARD_HTML = """<!doctype html>
       <p class="help">Where the head rests when not actively animating. <code>0°</code> = chin to chest (screen pointed at desk). <code>90°</code> = straight up at the ceiling. <code>50–70°</code> presents the face at typical desk-sitting eye level. Pattern motion (nod, look-around, dance) adds <code>±5–8°</code> on top.</p>
       <input type="range" id="tilt" min="0" max="90" value="65">
     </div>
+
+    <div class="row">
+      <div class="label-line">
+        <label class="main" for="soff">Screen-off delay</label>
+        <span class="val"><span id="soff_v">60</span>s</span>
+      </div>
+      <p class="help">After this many seconds in SLEEP state, the LCD backlight turns off. <code>0</code> = always on (runs hot). The next hook event (any state change) wakes the screen instantly.</p>
+      <input type="range" id="soff" min="0" max="600" step="10" value="60">
+    </div>
   </div>
 
   <div class="card">
@@ -223,6 +232,8 @@ $('bright').oninput  = e => $('bright_v').textContent = e.target.value;
 $('bright').onchange = e => post({cmd:'bright', v: +e.target.value});
 $('tilt').oninput  = e => $('tilt_v').textContent = e.target.value;
 $('tilt').onchange = e => post({cmd:'tilt', v: +e.target.value});
+$('soff').oninput  = e => $('soff_v').textContent = e.target.value;
+$('soff').onchange = e => post({cmd:'sleep_after', v: +e.target.value});
 $('motion').onchange      = e => post({cmd:'motion', enabled: e.target.checked});
 $('idle_wiggle').onchange = e => post({cmd:'idle_wiggle', enabled: e.target.checked});
 $('char').onchange        = e => post({cmd:'char', name: e.target.value});
@@ -240,6 +251,10 @@ fetch('/api/characters').then(r=>r.json()).then(list => {
   const s = localStorage.getItem('stackchan_'+k);
   if (s) { try { const v = JSON.parse(s).v; $(k).value = v; $(k+'_v').textContent = v; } catch(e){} }
 });
+// sleep_after has UI id 'soff' but posts under cmd 'sleep_after' — restore explicitly.
+{ const s = localStorage.getItem('stackchan_sleep_after');
+  if (s) { try { const v = JSON.parse(s).v; $('soff').value = v; $('soff_v').textContent = v; } catch(e){} }
+}
 ['motion','idle_wiggle'].forEach(k => {
   const s = localStorage.getItem('stackchan_'+k);
   if (s) { try { $(k).checked = JSON.parse(s).enabled; } catch(e){} }

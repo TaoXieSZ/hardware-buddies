@@ -34,3 +34,10 @@ void     settingsSetIdleWiggleEnabled(bool on);
 // of the mechanical stop). Persisted to NVS, applied via motionSetTilt.
 uint8_t  settingsGetTilt();
 void     settingsSetTilt(uint8_t deg);
+
+// Screen-off delay in seconds after entering SLEEP state. 0 = never
+// blank (always-on, runs hot). Default 60s. main.cpp polls this in
+// loop() and drops backlight to 0 once exceeded; first non-SLEEP state
+// restores settingsGetBrightness().
+uint16_t settingsGetSleepAfter();
+void     settingsSetSleepAfter(uint16_t sec);
