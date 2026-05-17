@@ -85,14 +85,19 @@ static uint8_t  g_cur_state   = CHAR_SLEEP;
 static uint32_t g_last_rx_ms  = 0;
 static uint32_t g_celebrate_until = 0;  // brief "done" celebrate timeout
 
-// Screen-off tracking: timestamp when we entered CHAR_SLEEP (0 = not in
-// sleep), and whether the backlight is currently blanked. Polled every
-// loop() tick; once sleep dwell exceeds settingsGetSleepAfter() the LCD
-// is set to brightness 0. Any non-SLEEP transition restores brightness.
-// Seeded to 1 (not 0) so a device that boots into CHAR_SLEEP and stays
-// there counts dwell from the very first tick — the boot path doesn't
-// run through the state-change branches that normally stamp this.
-static uint32_t g_sleep_entered_ms = 1;
+// Screen-off tracking: timestamp of the last g_cur_state CHANGE (not RX,
+// not heartbeat). Polled every loop() tick; once we've been in IDLE or
+// SLEEP without any further state transition for settingsGetSleepAfter()
+// seconds, the LCD is blanked. Any state change to a different value
+// restores brightness via wakeScreenIfBlanked().
+//
+// Why state-change-time and not g_last_rx_ms: daemon emits a heartbeat
+// every ~10s with running=0,waiting=0 which RXs constantly but doesn't
+// represent activity worth keeping the screen lit for.
+//
+// Seeded to 1 (not 0) so a freshly booted device with no events yet
+// counts dwell from the first tick.
+static uint32_t g_state_settled_ms = 1;
 static bool     g_screen_off       = false;
 
 static void wakeScreenIfBlanked() {
@@ -276,15 +281,12 @@ static void applyJsonLine(const char* line) {
     motionSetState(next);   // dance pattern mirrors visual state
     const char* msg = doc["msg"] | "";
     Serial.printf("[state] %u  msg=\"%s\"\n", next, msg);
-    // Any hook-driven transition means activity → make sure the user
-    // can actually see it. Tracks SLEEP entry timestamp for the auto-
-    // blank timer; non-SLEEP transitions reset both.
-    if (next == CHAR_SLEEP) {
-      g_sleep_entered_ms = millis();
-    } else {
-      g_sleep_entered_ms = 0;
-      wakeScreenIfBlanked();
-    }
+    // Stamp the change so the screen-off timer restarts on every real
+    // transition (not on heartbeats with no state delta). Always wake
+    // if we'd previously blanked — even an IDLE→IDLE-with-new-msg path
+    // wouldn't reach here, so any change is worth lighting back up.
+    g_state_settled_ms = millis();
+    wakeScreenIfBlanked();
   }
 
   // Bottom status bar — msg + stats.
@@ -533,6 +535,7 @@ void loop() {
       g_cur_state = CHAR_IDLE;
       characterSetState(CHAR_IDLE);
       motionSetState(CHAR_IDLE);
+      g_state_settled_ms = now;  // restart screen-off dwell
     }
   }
 
@@ -543,21 +546,23 @@ void loop() {
     characterSetState(CHAR_SLEEP);
     motionSetState(CHAR_SLEEP);
     characterSetMsg("");
-    g_sleep_entered_ms = now;
+    g_state_settled_ms = now;
     Serial.println("[state] idle -> SLEEP");
   }
 
-  // Screen-off: once we've held SLEEP for settingsGetSleepAfter() seconds
-  // (0 = feature off), blank the backlight. Saves heat on always-on
-  // desks. Wakeup is handled in applyJsonLine on the next non-SLEEP
-  // transition via wakeScreenIfBlanked().
+  // Screen-off: blank once we've sat in IDLE or SLEEP without a state
+  // change for settingsGetSleepAfter() seconds (0 = feature off). Note
+  // the trigger is dwell since the last *state change*, not since the
+  // last RX — daemon emits an idle heartbeat every ~10s that would
+  // otherwise reset any RX-based timer forever. Wakeup happens in
+  // applyJsonLine on the next state transition via wakeScreenIfBlanked.
   uint16_t soff = settingsGetSleepAfter();
   if (soff > 0 && !g_screen_off &&
-      g_cur_state == CHAR_SLEEP && g_sleep_entered_ms != 0 &&
-      (now - g_sleep_entered_ms) > (uint32_t)soff * 1000UL) {
+      (g_cur_state == CHAR_SLEEP || g_cur_state == CHAR_IDLE) &&
+      (now - g_state_settled_ms) > (uint32_t)soff * 1000UL) {
     M5.Lcd.setBrightness(0);
     g_screen_off = true;
-    Serial.printf("[scr] blank after %us\n", soff);
+    Serial.printf("[scr] blank after %us idle\n", soff);
   }
 
   // Daemon's BleWriter expects something on NUS TX every <30s.
