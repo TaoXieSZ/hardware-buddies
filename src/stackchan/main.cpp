@@ -576,6 +576,28 @@ void loop() {
     characterSetBatteryPct(lvl);
   }
 
+  // Tap-to-wake — only useful when the screen has been blanked by the
+  // idle-dwell timer. Poll the BMI270 accelerometer every 50ms; any
+  // single-axis transient above the threshold counts as a tap and the
+  // screen comes back. Skipped entirely while camera is streaming
+  // (that path tears down the shared I2C bus). 1.2g chosen empirically
+  // — a finger tap on the StackChan body peaks ~1.5-2g, a desk bump
+  // (which we DON'T want to wake on) sits ~0.3-0.5g.
+  static uint32_t last_imu_ms = 0;
+  if (g_screen_off && now - last_imu_ms > 50) {
+    last_imu_ms = now;
+    float ax = 0, ay = 0, az = 0;
+    if (M5.Imu.getAccel(&ax, &ay, &az)) {
+      // Subtract gravity (Z when sitting flat) — what's left is shake.
+      float mag = fabsf(ax) + fabsf(ay) + fabsf(az - 1.0f);
+      if (mag > 1.2f) {
+        Serial.printf("[tap] wake (|a-g|=%.2f)\n", mag);
+        wakeScreenIfBlanked();
+        g_state_settled_ms = now;  // restart idle dwell from now
+      }
+    }
+  }
+
   // Daemon's BleWriter expects something on NUS TX every <30s.
   static uint32_t last_ka = 0;
   if (now - last_ka > 10000) {
