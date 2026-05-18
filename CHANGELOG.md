@@ -8,6 +8,13 @@ until that changes.
 ## [Unreleased]
 
 ### Added
+- **StackChan Zelda heart-row battery indicator.** 5 hearts under the
+  character's feet, each representing 20 % of battery. Binary full/empty
+  fill, Hyrule-red on dark-red outline. CHAR_BOX trimmed 16 px to free the
+  strip; GIFs scale into the new box, no cropping. ([bdee1f3])
+- **StackChan tap-to-wake.** Once the screen is blanked by the idle-dwell
+  timer, a finger tap on the body wakes it instantly via the BMI270
+  accelerometer. Threshold tuned for tap vs desk bump (1.2 g). ([8ff70ab])
 - **StackChan auto screen-off.** New `Screen-off delay` slider on the dashboard
   (0–600 s, 0 = always on). Backlight blanks once the character has sat in
   IDLE/SLEEP without a state change for the configured dwell; any incoming
@@ -40,6 +47,8 @@ until that changes.
   SLEEP" — keepalives no longer reset the dwell clock. ([263de46])
 
 [Unreleased]: https://github.com/TaoXieSZ/claude-code-buddy/compare/ddbe751...HEAD
+[8ff70ab]: https://github.com/TaoXieSZ/claude-code-buddy/commit/8ff70ab
+[bdee1f3]: https://github.com/TaoXieSZ/claude-code-buddy/commit/bdee1f3
 [263de46]: https://github.com/TaoXieSZ/claude-code-buddy/commit/263de46
 [04be7fc]: https://github.com/TaoXieSZ/claude-code-buddy/commit/04be7fc
 [4c4eefe]: https://github.com/TaoXieSZ/claude-code-buddy/commit/4c4eefe
