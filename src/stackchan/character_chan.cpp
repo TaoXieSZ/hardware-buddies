@@ -57,7 +57,10 @@ constexpr int  HUD_H         = 50;   // 2-row card; +CARD_SHADOW_DY ends at 56
 constexpr int  CHAR_BOX_X    = 4;
 constexpr int  CHAR_BOX_Y    = 58;
 constexpr int  CHAR_BOX_W    = 176;
-constexpr int  CHAR_BOX_H    = 178;
+// Trimmed 16 px from the bottom (was 178) to free a strip for the
+// Zelda-style heart row indicator. GIFs scale into the box via
+// bilinear so the character just renders 16 px shorter — no cropping.
+constexpr int  CHAR_BOX_H    = 162;
 constexpr int  BUBBLE_X      = 184;
 constexpr int  BUBBLE_Y      = 60;
 constexpr int  BUBBLE_W      = 132;
@@ -138,6 +141,7 @@ char         g_stats_drawn[128] = "";   // last rendered stats line
 
 // HUD card metrics — from the cc-bridge `hud` event (openspec 0002).
 int          g_context_pct   = 0;
+int          g_battery_pct   = -1;   // -1 = unknown/hide; 0..100 = drawn
 char         g_model[24]     = "";
 uint32_t     g_hud_tokens    = 0;
 int          g_limit_5h      = 0;
@@ -485,6 +489,64 @@ void drawHud() {
   M5.Lcd.drawString(lim, x + w - pad, row2_y);
 }
 
+// Battery indicator drawn as a Zelda-style heart row under the
+// character's feet. 5 hearts × 20% each, binary (full or empty) —
+// crude but reads at a glance like a Hyrule HUD. Sits in the strip
+// freed below CHAR_BOX (y=222..236). Repainted whenever the HUD
+// dirty key changes (battery_pct is in that key).
+//
+// Each heart is two small circles + a downward-pointing triangle,
+// painted with M5GFX primitives — no bitmap asset. Full = bright red
+// outlined in dark red; empty = same outline, dark-red fill (so the
+// container shape still reads).
+void drawHeart(int cx, int cy, bool full) {
+  constexpr uint16_t HEART_FULL   = 0xE2CB;   // bright Zelda red
+  constexpr uint16_t HEART_EMPTY  = 0x3000;   // very dark red ~#310000
+  constexpr uint16_t HEART_BORDER = 0x6000;   // dark red outline
+  uint16_t fill = full ? HEART_FULL : HEART_EMPTY;
+
+  // Top lobes: two circles radius 3, centred so they touch.
+  M5.Lcd.fillSmoothCircle(cx - 3, cy - 1, 3, fill);
+  M5.Lcd.fillSmoothCircle(cx + 3, cy - 1, 3, fill);
+  // Bottom: triangle pointing down. Tips wide enough to span both lobes.
+  M5.Lcd.fillTriangle(cx - 6, cy, cx + 6, cy, cx, cy + 7, fill);
+
+  // Outline (drawn after fill so it sits on top crisply).
+  M5.Lcd.drawCircle(cx - 3, cy - 1, 3, HEART_BORDER);
+  M5.Lcd.drawCircle(cx + 3, cy - 1, 3, HEART_BORDER);
+  M5.Lcd.drawTriangle(cx - 6, cy, cx + 6, cy, cx, cy + 7, HEART_BORDER);
+}
+
+void drawBatteryIndicator() {
+  constexpr int N_HEARTS  = 5;
+  constexpr int HEART_W   = 14;
+  constexpr int HEART_H   = 12;
+  constexpr int GAP       = 4;
+  const int strip_y = CHAR_BOX_Y + CHAR_BOX_H + 2;   // 58+162+2 = 222
+  const int strip_h = HEART_H + 2;
+
+  // Wipe the strip first (full screen width so any prior bar pixels
+  // from older firmwares get cleared too).
+  M5.Lcd.fillRect(0, strip_y, M5.Lcd.width(), strip_h, SCREEN_BG);
+  if (g_battery_pct < 0) return;
+
+  int pct = g_battery_pct;
+  if (pct > 100) pct = 100;
+  if (pct < 0)   pct = 0;
+  // 5 hearts → each represents 20%. Round up so 1% still shows ≥1
+  // heart-of-warning, but 0% → 0 hearts (truly dead).
+  int n_full = (pct == 0) ? 0 : (pct + 19) / 20;
+  if (n_full > N_HEARTS) n_full = N_HEARTS;
+
+  const int row_w = N_HEARTS * HEART_W + (N_HEARTS - 1) * GAP;
+  const int start_x = CHAR_BOX_X + (CHAR_BOX_W - row_w) / 2 + HEART_W / 2;
+  const int cy = strip_y + HEART_H / 2;
+  for (int i = 0; i < N_HEARTS; i++) {
+    int cx = start_x + i * (HEART_W + GAP);
+    drawHeart(cx, cy, i < n_full);
+  }
+}
+
 // Tool chip = a small ACNH cream pill with a leading accent dot and
 // the uppercased tool name in warm brown.
 void drawToolChip(uint16_t accent) {
@@ -535,10 +597,10 @@ void paintStatusBarIfChanged() {
   // counters drive the bubble state, not the HUD, so they're not keyed
   // here — accent_dirty already covers state changes.
   char combined[128];
-  snprintf(combined, sizeof(combined), "%s|%d|%s|%lu|%lu|%d|%d|%lu",
+  snprintf(combined, sizeof(combined), "%s|%d|%s|%lu|%lu|%d|%d|%lu|%d",
            g_tool, g_context_pct, g_model, (unsigned long)g_hud_tokens,
            (unsigned long)g_session_ms, g_limit_5h, g_limit_7d,
-           (unsigned long)g_tokens);
+           (unsigned long)g_tokens, g_battery_pct);
   bool stats_dirty = (strncmp(combined, g_stats_drawn,
                               sizeof(g_stats_drawn)) != 0);
 
@@ -564,6 +626,7 @@ void paintStatusBarIfChanged() {
 
   if (stats_dirty || accent_dirty) {
     drawHud();
+    drawBatteryIndicator();
     drawToolChip(accent);
     strncpy(g_stats_drawn, combined, sizeof(g_stats_drawn) - 1);
     g_stats_drawn[sizeof(g_stats_drawn) - 1] = 0;
@@ -725,4 +788,10 @@ void characterSetHud(int context_pct, const char* model, uint32_t tokens,
   g_limit_5h   = limit_5h;
   g_limit_7d   = limit_7d;
   g_session_ms = session_ms;
+}
+
+void characterSetBatteryPct(int pct) {
+  if (pct < -1) pct = -1;
+  if (pct > 100) pct = 100;
+  g_battery_pct = pct;
 }

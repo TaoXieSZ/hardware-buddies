@@ -57,3 +57,9 @@ void characterSetStats(int running, int waiting, uint32_t tokens, const char* to
 // lazily on change.
 void characterSetHud(int context_pct, const char* model, uint32_t tokens,
                      int limit_5h, int limit_7d, uint32_t session_ms);
+
+// Battery indicator at the top-right corner (outside the HUD card).
+// pct = 0..100 ; pass -1 to hide. Drawn as a small horizontal battery
+// glyph + percent text, coloured by level (green/yellow/red). Repainted
+// lazily as part of the HUD dirty key.
+void characterSetBatteryPct(int pct);

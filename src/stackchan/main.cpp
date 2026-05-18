@@ -565,6 +565,17 @@ void loop() {
     Serial.printf("[scr] blank after %us idle\n", soff);
   }
 
+  // Battery indicator poll. M5.Power.getBatteryLevel() returns 0..100
+  // (-1 on read failure). 30s tick is plenty — battery level is slow.
+  // Initial reading goes out on the first tick so the HUD shows it
+  // immediately rather than waiting 30s after boot.
+  static uint32_t last_batt_ms = 0;
+  if (last_batt_ms == 0 || now - last_batt_ms > 30000) {
+    last_batt_ms = now;
+    int lvl = M5.Power.getBatteryLevel();
+    characterSetBatteryPct(lvl);
+  }
+
   // Daemon's BleWriter expects something on NUS TX every <30s.
   static uint32_t last_ka = 0;
   if (now - last_ka > 10000) {
