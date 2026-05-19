@@ -119,6 +119,42 @@ GIF + ACNH-style status panel), voice clips through the speaker, and
 two-axis dance patterns. Plus an experimental camera path described
 below.
 
+### What the UX looks like
+
+The five state-machine faces, rendered by the firmware on the CoreS3 LCD
+(captured via the [companion macOS app](desktop-app/) — see below):
+
+| State | Frame | Trigger |
+|---|---|---|
+| **SLEEP** | <img src="docs/stackchan-states/sleep.png" width="320"> | >20s without heartbeat |
+| **IDLE** | <img src="docs/stackchan-states/idle.png" width="320"> | daemon connected, no running tools |
+| **BUSY** | <img src="docs/stackchan-states/busy.png" width="320"> | tool is running (msg shows tool name) |
+| **ATTN** | <img src="docs/stackchan-states/attention.png" width="320"> | permission prompt pending |
+| **DONE** | <img src="docs/stackchan-states/done.png" width="320"> | post-tool celebrate (3s hold) |
+
+The top ACNH-style cream card is the OMC-HUD (model · ctx % · session ·
+tokens · 5h/7d limits). The right bubble carries the state header +
+word-wrapped msg. The pill below is the active tool chip. The five
+hearts under the character are battery level — each heart = 20 %, Zelda
+style.
+
+### Try it without the hardware
+
+`desktop-app/` is an Electron port of the same renderer — pixel-for-pixel
+geometry, same GIF assets, same ACNH palette — so you can dogfood the
+UX before flashing a CoreS3.
+
+```bash
+cd desktop-app
+npm install
+npm start              # mock cycles SLEEP→IDLE→BUSY→ATTN→DONE
+npx electron capture.js  # re-renders the screenshots above
+```
+
+It currently runs against a built-in mock event stream; wiring it to
+the live `cc-bridge` socket so it becomes a virtual StackChan peer is a
+future iteration.
+
 ### Flash
 
 ```bash
