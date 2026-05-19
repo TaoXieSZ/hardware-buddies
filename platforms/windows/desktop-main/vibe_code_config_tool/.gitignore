@@ -1,8 +1,0 @@
-function_test/*
-.vscode/*
-__pycache__
-build/*
-dist/*
-hook/build/*
-hook/dist/*
-.venv/*
