@@ -114,6 +114,42 @@ PlatformIO envs — two firmware targets:
 - Idle 15s → SLEEP gif. Screen off at 30s.
 - Mic gesture (see above).
 
+## StackChan power & wake (2026-05)
+
+Recent additions to the CoreS3 firmware + daemon — fully shipped on
+`main`, see CHANGELOG.md for commit links.
+
+- **Auto screen-off.** `settings.cpp` key `"soff"`, default 60 s, range
+  0–600 (0 = always on). Dashboard slider posts `cmd:"sleep_after"`.
+  Trigger condition is **"no state CHANGE for N s while in IDLE or
+  SLEEP"** — NOT "in SLEEP for N s". Earlier draft used SLEEP-only and
+  never fired because the daemon emits an `IDLE` heartbeat every ~10 s
+  that the firmware classifies as `CHAR_IDLE`. Stamp lives in
+  `g_state_settled_ms`; only real state transitions reset it.
+- **Tap-to-wake.** Reads `M5.Imu.getAccel()` every 50 ms — **only when
+  `g_screen_off` is true**, zero overhead otherwise. Threshold
+  `|a - g| > 1.2 g`; tuned to catch finger taps (~1.5-2 g) but ignore
+  desk bumps (~0.3-0.5 g). On hit: `wakeScreenIfBlanked()` +
+  `g_state_settled_ms = now`. BMI270 lives on the shared internal I²C
+  with sound/RTC/touch; the camera path tears that bus down, so IMU
+  reads are skipped while camera streams (it's only an issue during
+  permission-gesture mode, idle desk use is fine).
+- **Zelda heart-row battery.** 5 hearts under the character feet
+  (CHAR_BOX_H trimmed 178→162 to free a 16 px strip). Each heart = 20 %,
+  binary full/empty, Hyrule-red fill on dark-red outline. Drawn with
+  M5GFX primitives (two circles + triangle + outline) — no bitmap asset.
+  `M5.Power.getBatteryLevel()` polled every 30 s in main.cpp,
+  `characterSetBatteryPct()` setter; pct is in the HUD dirty key so a
+  level change repaints lazily.
+- **Hook stall fix.** `_handle_wait_permission` in `tools/buddy_core/
+  core.py` used to burn the full 8 s timeout on every PreToolUse hook,
+  even though StackChan (prefix `Claude-SC-*`) has no A/B permission
+  button. Across many tool calls in a turn this looked like "Claude
+  Code is stuck". Daemon now short-circuits to `decision=ask` instantly
+  when no permission-capable peer (heuristic: peer prefix doesn't
+  contain `SC`) is connected. `BleWriter.connected_prefixes` / 
+  `MultiBleWriter.connected_prefixes` are the new surface for that.
+
 ## Resource baseline
 
 cc-bridge daemon idle: ~40 MB RSS, 0.3% CPU, 54 file descriptors. Python
