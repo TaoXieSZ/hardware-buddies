@@ -278,6 +278,8 @@ tools/
                        gesture_classifier)
   cc-bridge/         — Claude Code daemon + dashboard.py
   cursor-bridge/     — Cursor daemon + Node hook shim
+desktop-app/         — Electron port of the StackChan renderer (mock-driven
+                       UX preview + screenshot capture; see StackChan section)
 test/                — pio native unit tests (color_util, frame_framing,
                        camera_arm, permission_ack)
 tests/               — pytest (daemon library, both bridges, statusline,
