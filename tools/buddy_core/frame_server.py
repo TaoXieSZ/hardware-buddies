@@ -81,7 +81,16 @@ class FrameServer:
                 chunk = await reader.read(4096)
                 if not chunk:
                     break  # EOF — StackChan closed the socket
-                for payload in deframer.feed(chunk):
+                try:
+                    payloads = deframer.feed(chunk)
+                except ValueError:
+                    # Corrupt/oversized length header — drop this connection.
+                    # The deframer is per-connection, so closing here discards
+                    # the poisoned buffer; the firmware reconnects cleanly on
+                    # the next prompt window.
+                    _log.warning("FrameServer: dropping %s on bad frame", peer)
+                    break
+                for payload in payloads:
                     try:
                         self.on_frame(payload)
                     except Exception:  # noqa: BLE001

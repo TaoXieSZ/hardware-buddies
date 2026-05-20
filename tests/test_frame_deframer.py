@@ -10,7 +10,9 @@ host-friendly. See openspec/changes/2026-05-15-0003-stackchan-camera-gestures/.
 
 import struct
 
-from buddy_core.frame_deframer import FrameDeframer
+import pytest
+
+from buddy_core.frame_deframer import MAX_FRAME, FrameDeframer
 
 
 def _frame(payload: bytes) -> bytes:
@@ -84,3 +86,33 @@ def test_little_endian_length_decoding():
     payload = b"x" * 0x0102  # 258 bytes
     out = df.feed(_frame(payload))
     assert out == [payload]
+
+
+def test_oversized_length_header_raises():
+    """A length header above the cap is corrupt/hostile — must raise rather
+    than buffer unboundedly toward OOM."""
+    df = FrameDeframer()
+    # Claim a frame far bigger than the cap, but send only the 4-byte header.
+    huge = struct.pack("<I", MAX_FRAME + 1)
+    with pytest.raises(ValueError):
+        df.feed(huge)
+
+
+def test_oversized_length_does_not_grow_toward_claim():
+    """The header is rejected at parse time, so the buffer only ever holds the
+    bytes actually received — never an allocation proportional to the claimed
+    (here 4 GiB) size."""
+    df = FrameDeframer()
+    sent = struct.pack("<I", 0xFFFFFFFF) + b"garbage"
+    with pytest.raises(ValueError):
+        df.feed(sent)
+    # Buffer holds at most what was fed — not the 4 GiB the header claimed.
+    assert len(df._buf) == len(sent)
+
+
+def test_custom_max_frame_boundary():
+    """A frame exactly at the cap is accepted; one byte over raises."""
+    df = FrameDeframer(max_frame=16)
+    assert df.feed(_frame(b"x" * 16)) == [b"x" * 16]
+    with pytest.raises(ValueError):
+        df.feed(struct.pack("<I", 17))

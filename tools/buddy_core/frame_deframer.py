@@ -23,20 +23,29 @@ from typing import List
 _HEADER = struct.Struct("<I")
 _HEADER_LEN = _HEADER.size  # 4
 
+# Cap declared frame size. A QVGA JPEG is well under 64 KiB; 512 KiB is ample.
+# Without this, a corrupt or hostile uint32 header (up to 4 GiB) makes feed()
+# buffer forever waiting for a frame that never completes → daemon OOM.
+MAX_FRAME = 512 * 1024
+
 
 class FrameDeframer:
     """Length-prefix framing accumulator. Not thread-safe; one per stream."""
 
-    __slots__ = ("_buf",)
+    __slots__ = ("_buf", "_max")
 
-    def __init__(self) -> None:
+    def __init__(self, max_frame: int = MAX_FRAME) -> None:
         self._buf = bytearray()
+        self._max = max_frame
 
     def feed(self, chunk: bytes) -> List[bytes]:
         """Append `chunk` to the internal buffer and return any complete
         JPEG payloads now available, in arrival order. Leftover bytes
         (partial header or partial payload) stay buffered for the next
-        feed."""
+        feed.
+
+        Raises ValueError if a frame's declared length exceeds max_frame —
+        the stream is corrupt or hostile and the caller should drop it."""
         if chunk:
             self._buf.extend(chunk)
         out: List[bytes] = []
@@ -44,6 +53,10 @@ class FrameDeframer:
             if len(self._buf) < _HEADER_LEN:
                 break
             (length,) = _HEADER.unpack_from(self._buf, 0)
+            if length > self._max:
+                raise ValueError(
+                    f"frame length {length} exceeds max {self._max}"
+                )
             total = _HEADER_LEN + length
             if len(self._buf) < total:
                 break

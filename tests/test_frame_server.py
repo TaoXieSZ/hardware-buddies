@@ -97,6 +97,30 @@ def test_reconnect_after_disconnect():
     assert _drive(steps) == [b"first", b"second"]
 
 
+def test_oversized_frame_drops_connection_and_recovers():
+    """A corrupt oversized length header must drop that connection (no OOM
+    buffering) yet leave the server able to accept the next reconnect."""
+
+    async def steps(server, received):
+        # Connection 1: claim a 4 GiB frame, send only the header.
+        _, w1 = await asyncio.open_connection("127.0.0.1", server.port)
+        w1.write(struct.pack("<I", 0xFFFFFFFF))
+        await w1.drain()
+        await asyncio.sleep(0.05)  # let the server process + drop the link
+        w1.close()
+        await w1.wait_closed()
+
+        # Connection 2: a clean frame still gets through.
+        _, w2 = await asyncio.open_connection("127.0.0.1", server.port)
+        w2.write(_frame(b"alive"))
+        await w2.drain()
+        await _wait_for(lambda: received == [b"alive"])
+        w2.close()
+        await w2.wait_closed()
+
+    assert _drive(steps) == [b"alive"]
+
+
 def test_split_frame_across_writes():
     """Worst-case TCP fragmentation — bytes drip in across recv calls."""
 
