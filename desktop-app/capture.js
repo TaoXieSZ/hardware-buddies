@@ -70,5 +70,6 @@ app.whenReady().then(async () => {
   app.quit();
 });
 
-// Prevent app from auto-quitting when the per-shot window closes.
-app.on('window-all-closed', (e) => { /* swallow */ });
+// Prevent app from auto-quitting when the per-shot window closes; the
+// loop in whenReady() drives quit explicitly after the last shot.
+app.on('window-all-closed', () => {});

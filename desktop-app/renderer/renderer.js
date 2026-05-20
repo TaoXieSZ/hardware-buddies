@@ -103,12 +103,13 @@ function fmtDuration(ms) {
 }
 
 // ---- Drawing primitives --------------------------------------------------
-function setText(font, color, bg, align, baseline) {
+// No background param: the firmware uses opaque text bg, but here every
+// card region is fully repainted before its text so a bg fill is moot.
+function setText(font, color, align, baseline) {
   ctx.font = font;
   ctx.fillStyle = color;
   ctx.textAlign = align;
   ctx.textBaseline = baseline;
-  if (bg) { /* opaque-bg emulation is unnecessary here — canvas redraws full region */ }
 }
 
 function drawHud() {
@@ -120,7 +121,7 @@ function drawHud() {
   const row2y = HUD_Y + 35;
 
   // Row 1 left — model
-  setText('bold 11px -apple-system, "Helvetica Neue", sans-serif', CARD_TEXT, CARD_FILL, 'left', 'middle');
+  setText('bold 11px -apple-system, "Helvetica Neue", sans-serif', CARD_TEXT, 'left', 'middle');
   let model = state.model || '—';
   const modelMax = w / 2;
   while (ctx.measureText(model).width > modelMax && model.length > 1) model = model.slice(0, -1);
@@ -167,12 +168,12 @@ function drawBubble() {
 
   // Header label
   setText('bold 11px -apple-system, "Helvetica Neue", sans-serif',
-    headerTextForState(s), accent, 'left', 'middle');
+    headerTextForState(s), 'left', 'middle');
   ctx.fillText(labelForState(s), sx + 8, sy + BUBBLE_HEAD_H / 2);
 
   // Body — word-wrapped msg
   setText('bold 10px -apple-system, "Helvetica Neue", sans-serif',
-    CARD_TEXT, CARD_FILL, 'left', 'top');
+    CARD_TEXT, 'left', 'top');
   const bodyY = BUBBLE_Y + CARD_BW + BUBBLE_HEAD_H + BUBBLE_PAD;
   const bodyH = BUBBLE_H - CARD_BW - BUBBLE_HEAD_H - 2 * BUBBLE_PAD;
   const lineH = 14;
@@ -220,7 +221,7 @@ function drawToolChip() {
   ctx.beginPath(); ctx.arc(dotCx, dotCy, 4, 0, Math.PI * 2); ctx.fill();
 
   setText('bold 11px -apple-system, "Helvetica Neue", sans-serif',
-    CARD_TEXT, CARD_FILL, 'left', 'middle');
+    CARD_TEXT, 'left', 'middle');
   let label = state.tool.toUpperCase();
   const textX = dotCx + 10;
   const maxW = TOOL_CHIP_X + TOOL_CHIP_W - CARD_BW - 10 - textX;
@@ -275,13 +276,39 @@ function repaint() {
   drawToolChip();
   drawHearts();
   updateCharacterGif();
+  if (charLoadFailed) drawCharFallback();
 }
 
+// Character pack — single source of truth. Override with ?char=calico etc.
+const CHARACTER = new URLSearchParams(location.search).get('char') || 'clawd';
+
 let lastGif = '';
+let charLoadFailed = false;
+const charImg = document.getElementById('char');
+charImg.addEventListener('error', () => {
+  charLoadFailed = true;
+  drawCharFallback();
+});
+charImg.addEventListener('load', () => { charLoadFailed = false; });
+
+// Drawn into CHAR_BOX when the GIF asset can't load (wrong pack name,
+// missing file) so the panel reads as "no character" instead of a
+// silent black void.
+function drawCharFallback() {
+  ctx.fillStyle = SCREEN_BG;
+  ctx.fillRect(CHAR_BOX_X, CHAR_BOX_Y, CHAR_BOX_W, CHAR_BOX_H);
+  setText('bold 11px -apple-system, "Helvetica Neue", sans-serif',
+    CARD_TEXT_SEC, 'center', 'middle');
+  const cx = CHAR_BOX_X + CHAR_BOX_W / 2;
+  const cy = CHAR_BOX_Y + CHAR_BOX_H / 2;
+  ctx.fillText('no character', cx, cy - 8);
+  ctx.fillText(`"${CHARACTER}"`, cx, cy + 8);
+}
+
 function updateCharacterGif() {
-  const want = `../../characters/clawd/${STATE_GIF[state.char] || 'sleep.gif'}`;
+  const want = `../../characters/${CHARACTER}/${STATE_GIF[state.char] || 'sleep.gif'}`;
   if (want !== lastGif) {
-    document.getElementById('char').src = want;
+    charImg.src = want;
     lastGif = want;
   }
 }
