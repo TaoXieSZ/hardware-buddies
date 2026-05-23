@@ -160,10 +160,3 @@ Claude Code hook → ahakey-state.sh → Unix socket → ahakeyconfig-agent → 
 
 ---
 
-## 许可说明
-
-本项目无偿共享，欢迎自由使用、修改、集成到你们的官方工具中。无需署名，无附加条件。
-
-协议文档 (`docs/ble-protocol.md`) 基于原厂工具反编译整理，版权归原始作者所有。
-
-如有问题欢迎随时沟通。
