@@ -511,6 +511,8 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                     ack = {"ok": True}
                 except Exception as e:  # noqa: BLE001 - report back, don't crash
                     ack = {"ok": False, "error": str(e)}
+            log.info("stage_route session=%s text=%r -> %s",
+                     head.get("session"), head.get("text"), ack)
             writer.write((json.dumps(ack) + "\n").encode())
             await writer.drain()
             return
@@ -527,6 +529,7 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                 else:
                     loop = asyncio.get_running_loop()
                     fired = await loop.run_in_executor(None, route_stager.confirm)
+            log.info("%s -> fired=%s", head["action"], bool(fired))
             writer.write((json.dumps({"ok": True, "fired": bool(fired)}) + "\n").encode())
             await writer.drain()
             return
