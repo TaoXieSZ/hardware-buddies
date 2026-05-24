@@ -347,18 +347,39 @@ if __name__ == "__main__":
         classifier = GestureClassifier(hold_frames=GESTURE_HOLD)
 
         def _on_frame(payload: bytes) -> None:
-            # Only act while a prompt is pending — the firmware only sends
-            # frames during its prompt window, but a stale frame from a
-            # crashed firmware could otherwise resolve nothing or fire on
-            # the next prompt. Belt-and-suspenders.
-            prompt = state.prompt
-            if not prompt:
-                return
             if not _mp_ok:
                 return  # Logged once at startup; don't spam per frame.
             gesture = _classify_jpeg(payload)
             confirmed = classifier.classify(gesture)
             if confirmed is None:
+                return
+
+            # Voice control-plane takes precedence: when a routed command is
+            # staged, a thumbs-up commits it (cmux send runs off-loop) and a
+            # thumbs-down cancels it. Falls through to the permission-gesture
+            # path below when nothing is staged, so existing behaviour is
+            # unchanged whenever the control plane isn't in use.
+            if _route_stager is not None and _route_stager.peek() is not None:
+                log.info("route gesture: %s", confirmed)
+                if confirmed == "approve":
+                    def _confirm_logged():
+                        # The cmux send runs off-loop; without this the
+                        # exception would land on an un-awaited future and be
+                        # silently swallowed ("confirmed but nothing happened").
+                        try:
+                            _route_stager.confirm()
+                        except Exception:
+                            log.exception("route confirm (cmux send) failed")
+                    loop.run_in_executor(None, _confirm_logged)
+                elif confirmed == "deny":
+                    _route_stager.cancel()
+                return
+
+            # Permission-gesture path — only while a prompt is pending. (The
+            # firmware streams frames during its prompt window; a stale frame
+            # from a crashed firmware would otherwise resolve nothing.)
+            prompt = state.prompt
+            if not prompt:
                 return
             log.info("gesture confirmed: %s (prompt id=%s)",
                      confirmed, prompt.get("id"))
@@ -393,6 +414,14 @@ if __name__ == "__main__":
     # once — gesture-approve goes dormant, manual approval still works.
     from buddy_core.hand_gesture import classify_jpeg as _classify_jpeg
 
+    # Voice control-plane: stage routed voice commands; a thumbs-up gesture
+    # (handled in _on_frame above) commits them into the target cmux session.
+    # CmuxClient().route runs the cmux CLI; if cmux isn't installed the stager
+    # simply never fires (stage works, confirm's send no-ops with an error log).
+    from control_plane.cmux_control import CmuxClient
+    from control_plane.stager import RouteStager
+    _route_stager = RouteStager(route_fn=CmuxClient().route)
+
     run(
         name="cc-bridge",
         socket_path=SOCKET_PATH,
@@ -405,4 +434,5 @@ if __name__ == "__main__":
         rtc_sync_on_connect=False,  # Claude Desktop handles RTC for cc-bridge
         on_loop_start=_on_loop_start,
         extra_tasks=[reaper_loop],
+        route_stager=_route_stager,
     )

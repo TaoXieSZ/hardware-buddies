@@ -8,6 +8,21 @@ until that changes.
 ## [Unreleased]
 
 ### Added
+- **Voice control-plane secretary (MVP core).** Speak to StackChan and a chosen
+  Claude/Cursor session running in **cmux** executes your verbatim command,
+  gated by a thumbs-up gesture. New `tools/control_plane/`: `cmux_control.py`
+  (enumerate sessions via `cmux rpc workspace.list`; `route(number,text)` =
+  `cmux send --workspace <uuid>` + Enter, targeting the stable UUID),
+  `stager.py` (stage→confirm/cancel with TTL), `board.py` (numbered Mac board +
+  read-screen status), `smoke_test.py` (safe throwaway-workspace check). Daemon
+  gains a `stage_route` socket action and routes thumbs-up→commit /
+  thumbs-down→cancel through the existing camera-gesture stream
+  (`tools/buddy_core/core.py`, `tools/cc-bridge/bridge.py`). buddy-voice gains
+  `app/api/stage-route` to forward the agent's `route_to_session` tool to the
+  daemon (in the separate `../buddy-voice` Agora quickstart project, not this
+  repo). Spec: `.omc/specs/deep-interview-voice-control-plane.md`; docs:
+  `tools/control_plane/README.md`. (Live voice→gesture→cmux is a user hardware
+  step; StackChan on-screen board is deferred to phase 2.)
 - **StackChan Zelda heart-row battery indicator.** 5 hearts under the
   character's feet, each representing 20 % of battery. Binary full/empty
   fill, Hyrule-red on dark-red outline. CHAR_BOX trimmed 16 px to free the
