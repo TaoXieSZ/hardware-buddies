@@ -56,6 +56,35 @@ Map the **same** classified stream onto the stager:
 No new gesture model and no firmware change — only a dispatch line where the
 daemon already handles classified gestures.
 
+## Voice trigger (Path B — client transcript parse)
+
+Rather than a cloud-reachable ConvoAI MCP tool, the buddy-voice client parses
+**your** transcript turns locally and stages matches (fully local, verbatim,
+no exposed endpoint). A turn is a command only if it carries an explicit
+session marker, so ordinary chat never misfires:
+
+| You say | Staged |
+|---|---|
+| `2号 跑测试并修复` | session 2 ← "跑测试并修复" |
+| `第1个 npm run build` | session 1 ← "npm run build" |
+| `session 3 git status` | session 3 ← "git status" |
+| `会话2 ls -la` | session 2 ← "ls -la" |
+| `今天天气不错` | (no marker → ignored) |
+
+Parser: `buddy-voice/lib/controlPlaneCommand.ts`; wiring:
+`hooks/useControlPlaneCommands.ts` → `POST /api/stage-route`. Enable with
+`NEXT_PUBLIC_CONTROL_PLANE=1` in `buddy-voice/.env.local`.
+
+## Confirm a staged command
+
+The thumbs-up gesture commits a staged command (thumbs-down cancels). Keyboard
+fallback (also lets you test the loop without the camera):
+
+```bash
+python -m control_plane.confirm           # 👍 commit
+python -m control_plane.confirm cancel     # 👎 cancel
+```
+
 ## Setup
 
 ```bash

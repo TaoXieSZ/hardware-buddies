@@ -24,8 +24,15 @@ until that changes.
   `tools/control_plane/README.md`. `route()` auto-focuses the target session
   (`cmux rpc workspace.current`) so it pops to the front as the command lands;
   `demo.py` exercises the full board→stage→confirm→execute path against a
-  throwaway session (no voice/camera needed). (Live voice→gesture→cmux is a
-  user hardware step; StackChan on-screen board is deferred to phase 2.)
+  throwaway session (no voice/camera needed). Voice trigger (Path B): the
+  buddy-voice client parses your transcript turns locally for a session marker
+  (`2号 …` / `第1个 …` / `session 3 …`) and stages the verbatim remainder via
+  `POST /api/stage-route` (opt-in `NEXT_PUBLIC_CONTROL_PLANE=1`) — no exposed
+  endpoint. A staged command is committed by the thumbs-up gesture, or by hand
+  (`python -m control_plane.confirm` / `… cancel`, also the camera-free test
+  path) via new `confirm_route`/`cancel_route` daemon actions. (Live
+  voice→gesture→cmux is a user hardware step; StackChan on-screen board is
+  deferred to phase 2.)
 - **StackChan voice via Agora ConvoAI (Path A2).** The agent's TTS audio now
   plays from StackChan's speaker. The Mac browser stays the RTC client and
   taps the agent's remote audio track, downsamples to 16 kHz mono PCM, and

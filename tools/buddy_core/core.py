@@ -515,6 +515,22 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
             await writer.drain()
             return
 
+        # Voice control-plane: commit / cancel the staged command by hand —
+        # the keyboard/CLI fallback for the thumbs-up gesture (and what makes
+        # the loop testable without the camera). confirm runs the cmux send
+        # off-loop so a blocking subprocess never stalls the event loop.
+        if isinstance(head, dict) and head.get("action") in ("confirm_route", "cancel_route"):
+            fired = False
+            if route_stager is not None:
+                if head["action"] == "cancel_route":
+                    fired = route_stager.cancel()
+                else:
+                    loop = asyncio.get_running_loop()
+                    fired = await loop.run_in_executor(None, route_stager.confirm)
+            writer.write((json.dumps({"ok": True, "fired": bool(fired)}) + "\n").encode())
+            await writer.drain()
+            return
+
         # Otherwise: treat each line as a hook event. Drain the rest of
         # the stream until the client closes — hook clients are
         # write-then-close.

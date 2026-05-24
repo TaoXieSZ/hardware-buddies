@@ -31,11 +31,22 @@ class FakeWriter:
 
 
 class StubStager:
-    def __init__(self):
+    def __init__(self, pending=True):
         self.staged = []
+        self.confirmed = 0
+        self.cancelled = 0
+        self._pending = pending
 
     def stage(self, number, text):
         self.staged.append((number, text))
+
+    def confirm(self):
+        self.confirmed += 1
+        return self._pending
+
+    def cancel(self):
+        self.cancelled += 1
+        return self._pending
 
 
 def _run(line: bytes, *, apply_event, stager) -> FakeWriter:
@@ -84,3 +95,26 @@ def test_ordinary_hook_event_still_applies():
     msg = json.dumps({"hook_event_name": "PreToolUse", "session_id": "abc"}).encode() + b"\n"
     _run(msg, apply_event=lambda s, e: calls.append(e) or False, stager=StubStager())
     assert len(calls) == 1 and calls[0]["hook_event_name"] == "PreToolUse"
+
+
+def test_confirm_route_commits():
+    stager = StubStager(pending=True)
+    msg = json.dumps({"action": "confirm_route"}).encode() + b"\n"
+    w = _run(msg, apply_event=lambda s, e: False, stager=stager)
+    assert stager.confirmed == 1 and stager.cancelled == 0
+    assert json.loads(w.buf.decode().strip()) == {"ok": True, "fired": True}
+
+
+def test_cancel_route_drops():
+    stager = StubStager(pending=True)
+    msg = json.dumps({"action": "cancel_route"}).encode() + b"\n"
+    w = _run(msg, apply_event=lambda s, e: False, stager=stager)
+    assert stager.cancelled == 1 and stager.confirmed == 0
+    assert json.loads(w.buf.decode().strip()) == {"ok": True, "fired": True}
+
+
+def test_confirm_route_nothing_staged_reports_not_fired():
+    stager = StubStager(pending=False)
+    msg = json.dumps({"action": "confirm_route"}).encode() + b"\n"
+    w = _run(msg, apply_event=lambda s, e: False, stager=stager)
+    assert json.loads(w.buf.decode().strip()) == {"ok": True, "fired": False}
