@@ -475,7 +475,7 @@ class MultiBleWriter:
 # ─── socket protocol ───────────────────────────────────────────────────
 async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                         dirty: asyncio.Event, apply_event: Callable,
-                        pending: dict, log: logging.Logger):
+                        pending: dict, log: logging.Logger, route_stager=None):
     try:
         # Read the first frame line-by-line: hook clients write a single
         # JSON-per-line and close; wait_permission writes one line then
@@ -499,6 +499,20 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
 
         if isinstance(head, dict) and head.get("action") == "wait_permission":
             await _handle_wait_permission(head, writer, state, dirty, pending, ble, log)
+            return
+
+        # Voice control-plane: STAGE a routed command (does not send until the
+        # user confirms with a thumbs-up gesture — see control_plane.stager).
+        if isinstance(head, dict) and head.get("action") == "stage_route":
+            ack = {"ok": False, "error": "no route_stager"}
+            if route_stager is not None:
+                try:
+                    route_stager.stage(int(head["session"]), str(head["text"]))
+                    ack = {"ok": True}
+                except Exception as e:  # noqa: BLE001 - report back, don't crash
+                    ack = {"ok": False, "error": str(e)}
+            writer.write((json.dumps(ack) + "\n").encode())
+            await writer.drain()
             return
 
         # Otherwise: treat each line as a hook event. Drain the rest of
@@ -666,6 +680,7 @@ def run(
     extra_tasks: list[Callable] | None = None,
     log_fmt: Callable[[dict], str] | None = None,
     on_loop_start: Callable | None = None,
+    route_stager=None,
 ) -> None:
     """Configure logging, wire everything up, and run the event loop.
 
@@ -736,7 +751,8 @@ def run(
         dirty = asyncio.Event()
 
         server = await asyncio.start_unix_server(
-            lambda r, w: handle_client(r, w, state, ble, dirty, apply_event, pending, log),
+            lambda r, w: handle_client(r, w, state, ble, dirty, apply_event,
+                                       pending, log, route_stager=route_stager),
             path=socket_path,
         )
         os.chmod(socket_path, 0o600)
