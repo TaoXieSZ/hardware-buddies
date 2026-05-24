@@ -54,13 +54,29 @@ constexpr int      CARD_SHADOW_DY = 4;      // shadow vertical offset
 
 constexpr int  HUD_Y         = 2;
 constexpr int  HUD_H         = 50;   // 2-row card; +CARD_SHADOW_DY ends at 56
-constexpr int  CHAR_BOX_X    = 4;
-constexpr int  CHAR_BOX_Y    = 58;
-constexpr int  CHAR_BOX_W    = 176;
+// Mutable (not constexpr) so voice-agent mode can enlarge the box to fill
+// the screen. Defaults are the Claude-Code/daemon ACNH layout values.
+int  CHAR_BOX_X    = 4;
+int  CHAR_BOX_Y    = 58;
+int  CHAR_BOX_W    = 176;
 // Trimmed 16 px from the bottom (was 178) to free a strip for the
 // Zelda-style heart row indicator. GIFs scale into the box via
 // bilinear so the character just renders 16 px shorter — no cropping.
-constexpr int  CHAR_BOX_H    = 162;
+int  CHAR_BOX_H    = 162;
+
+// Voice-agent mode (no Claude Code): hide the ACNH cards/HUD/hearts, fill
+// the screen with the character, and run a scrolling subtitle ticker in a
+// band at the bottom. Toggled at boot via characterSetVoiceMode().
+constexpr int  SUB_H = 46;                 // subtitle band height
+constexpr int  SUB_Y = 240 - SUB_H;        // landscape height = 240
+constexpr int  SUB_W = 320;                // landscape width
+bool       g_voice_mode   = false;
+char       g_subtitle[192] = "";
+M5Canvas   g_sub_spr(&M5.Lcd);             // off-screen band, avoids flicker
+bool       g_sub_spr_ok   = false;
+int        g_sub_scroll_x = SUB_W;         // marquee x, starts off right edge
+int        g_sub_text_w   = 0;
+uint32_t   g_sub_last_ms  = 0;
 constexpr int  BUBBLE_X      = 184;
 constexpr int  BUBBLE_Y      = 60;
 constexpr int  BUBBLE_W      = 132;
@@ -636,6 +652,36 @@ void paintStatusBarIfChanged() {
   M5.Lcd.setFont(&fonts::Font0);
 }
 
+// --- Voice-mode subtitle ticker --------------------------------------------
+void ensureSubSprite() {
+  if (g_sub_spr_ok) return;
+  g_sub_spr.setColorDepth(16);
+  g_sub_spr.setFont(&fonts::efontCN_24);   // CJK-capable: Chinese replies render
+  g_sub_spr.setTextSize(1);
+  if (g_sub_spr.createSprite(SUB_W, SUB_H)) g_sub_spr_ok = true;
+}
+
+// News-ticker scroll of g_subtitle, right-to-left, drawn off-screen then
+// blitted to avoid flicker. Throttled to ~33 fps.
+void drawSubtitleScroll() {
+  uint32_t now = millis();
+  if (now - g_sub_last_ms < 30) return;
+  g_sub_last_ms = now;
+  ensureSubSprite();
+  if (!g_sub_spr_ok) return;
+
+  g_sub_spr.fillSprite(SCREEN_BG);
+  if (g_subtitle[0]) {
+    g_sub_spr.setFont(&fonts::efontCN_24);
+    g_sub_spr.setTextColor(0xFFFF, SCREEN_BG);
+    g_sub_spr.setTextDatum(middle_left);
+    g_sub_spr.drawString(g_subtitle, g_sub_scroll_x, SUB_H / 2);
+    g_sub_scroll_x -= 3;
+    if (g_sub_scroll_x < -g_sub_text_w) g_sub_scroll_x = SUB_W;  // wrap around
+  }
+  g_sub_spr.pushSprite(0, SUB_Y);
+}
+
 }  // namespace
 
 // ===========================================================================
@@ -710,7 +756,11 @@ void characterSetState(uint8_t state) {
 }
 
 void characterTick() {
-  paintStatusBarIfChanged();
+  if (g_voice_mode) {
+    drawSubtitleScroll();          // ticker; cards/HUD are hidden in this mode
+  } else {
+    paintStatusBarIfChanged();
+  }
 
   if (!g_gif_open) return;
   uint32_t now = millis();
@@ -794,4 +844,28 @@ void characterSetBatteryPct(int pct) {
   if (pct < -1) pct = -1;
   if (pct > 100) pct = 100;
   g_battery_pct = pct;
+}
+
+void characterSetVoiceMode(bool on) {
+  g_voice_mode = on;
+  if (!on) return;
+  // Enlarge the character to fill the screen above the subtitle band, and
+  // drop the ACNH cards/HUD/hearts (they're simply not drawn in voice mode).
+  CHAR_BOX_X = 0;
+  CHAR_BOX_Y = 0;
+  CHAR_BOX_W = SUB_W;
+  CHAR_BOX_H = SUB_Y;            // 240 - SUB_H
+  M5.Lcd.fillScreen(SCREEN_BG);
+  ensureSubSprite();
+  // Reopen the current GIF so it rescales into the enlarged box.
+  if (g_cur_state < CHAR_N_STATES) openStateGif(g_cur_state, true);
+}
+
+void characterSetSubtitle(const char* text) {
+  if (!text) text = "";
+  strncpy(g_subtitle, text, sizeof(g_subtitle) - 1);
+  g_subtitle[sizeof(g_subtitle) - 1] = 0;
+  ensureSubSprite();
+  g_sub_text_w   = g_sub_spr_ok ? g_sub_spr.textWidth(g_subtitle) : 0;
+  g_sub_scroll_x = SUB_W;        // restart the marquee from the right edge
 }

@@ -58,6 +58,15 @@ void characterSetStats(int running, int waiting, uint32_t tokens, const char* to
 void characterSetHud(int context_pct, const char* model, uint32_t tokens,
                      int limit_5h, int limit_7d, uint32_t session_ms);
 
+// Voice-agent mode (Path A2, no Claude Code). Hides the ACNH cards/HUD/
+// hearts, enlarges the character to fill the screen, and runs a scrolling
+// subtitle ticker in a band at the bottom. Call once after characterInit().
+void characterSetVoiceMode(bool on);
+
+// Set the scrolling subtitle text (voice mode). UTF-8; CJK renders via the
+// efontCN font. Empty/nullptr clears the ticker.
+void characterSetSubtitle(const char* text);
+
 // Battery indicator at the top-right corner (outside the HUD card).
 // pct = 0..100 ; pass -1 to hide. Drawn as a small horizontal battery
 // glyph + percent text, coloured by level (green/yellow/red). Repainted
