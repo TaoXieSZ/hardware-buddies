@@ -62,6 +62,14 @@ static bool ensureWifi() {
     return true;
 }
 
+bool wifiEnsureUp() {
+    if (placeholdersUnset()) {
+        M5_LOGW("wifiEnsureUp: wifi_secrets.ini placeholders unset, skipping");
+        return false;
+    }
+    return ensureWifi();
+}
+
 bool wifiStreamStart() {
     if (s_connected && s_client.connected()) return true;
 

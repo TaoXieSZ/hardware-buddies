@@ -23,6 +23,18 @@ until that changes.
   repo). Spec: `.omc/specs/deep-interview-voice-control-plane.md`; docs:
   `tools/control_plane/README.md`. (Live voice→gesture→cmux is a user hardware
   step; StackChan on-screen board is deferred to phase 2.)
+- **StackChan voice via Agora ConvoAI (Path A2).** The agent's TTS audio now
+  plays from StackChan's speaker. The Mac browser stays the RTC client and
+  taps the agent's remote audio track, downsamples to 16 kHz mono PCM, and
+  streams it over a WebSocket to a standalone relay (`tools/audio-relay`),
+  which forwards it as sequenced UDP datagrams to the device. Firmware adds a
+  UDP receiver + jitter buffer + `M5.Speaker` streaming
+  (`src/stackchan/audio_play.cpp`, pure logic in `audio_packet.h` /
+  `audio_ringbuf.h` with host tests). WiFi now comes up at boot when
+  `wifi_secrets.ini` has real creds (shared with the camera path). Wire format
+  in REFERENCE.md; bring-up in `docs/agora-stackchan-voice-bringup.md`. Opt-in
+  via `NEXT_PUBLIC_STACKCHAN_RELAY=1`. (Audible-on-device + browser runtime are
+  user-verified hardware steps.)
 - **StackChan Zelda heart-row battery indicator.** 5 hearts under the
   character's feet, each representing 20 % of battery. Binary full/empty
   fill, Hyrule-red on dark-red outline. CHAR_BOX trimmed 16 px to free the

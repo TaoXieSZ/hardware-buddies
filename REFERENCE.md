@@ -268,3 +268,31 @@ nothing you'd mind overwritten.
 The BLE API is only available when the desktop apps are in developer mode
 (**Help → Troubleshooting → Enable Developer Mode**). It's intended for
 makers and developers and isn't an officially supported product feature.
+
+## Audio relay (Path A2, WiFi/UDP)
+
+Separate from the BLE link above: a one-way audio path that plays a voice
+agent's TTS through the device speaker. The Mac stays the RTC client; the
+agent's PCM is relayed to the device over WiFi. Bring-up steps live in
+`docs/agora-stackchan-voice-bringup.md`; this is the wire contract for
+forkers who want to feed StackChan audio from their own source.
+
+**Format.** Signed 16-bit little-endian PCM, 16000 Hz, mono.
+
+**Transport.** UDP datagrams to the device on `STACKCHAN_AUDIO_PORT`
+(default 5005). Each datagram is a 4-byte header followed by up to 640 bytes
+of PCM payload (≤ 320 samples = 20 ms), keeping the datagram under a typical
+1500-byte MTU:
+
+| Offset | Bytes | Field                                            |
+| ------ | ----- | ------------------------------------------------ |
+| 0      | 1     | magic high = `0xA5`                              |
+| 1      | 1     | magic low  = `0xC3`                              |
+| 2–3    | 2     | sequence number, uint16 **little-endian**, wraps |
+| 4…     | ≤640  | PCM payload                                       |
+
+The receiver drops any datagram whose first two bytes aren't the magic.
+Loss/gaps are tolerated (no retransmit); the sequence number is advisory.
+The reference sender is `tools/audio-relay/relay.py` (accepts raw PCM over a
+WebSocket and repackages it into these datagrams); the device side is
+`src/stackchan/audio_play.cpp` (header parse + jitter buffer + speaker feed).

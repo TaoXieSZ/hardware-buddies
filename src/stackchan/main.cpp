@@ -37,6 +37,7 @@
 #include "settings.h"
 #include "camera_chan.h"
 #include "wifi_stream.h"
+#include "audio_play.h"
 #include "camera_arm.h"
 #include "permission_ack.h"
 
@@ -461,8 +462,12 @@ void setup() {
 #endif
   }
   characterInit(char_name);
-  characterSetState(CHAR_SLEEP);
-  characterSetMsg("waking up...");
+  // Voice-agent mode (Path A2, no Claude Code): full-screen Clawd + a
+  // scrolling subtitle ticker, ACNH cards hidden. IDLE so Clawd animates
+  // from boot (SLEEP would just show the sleep pose).
+  characterSetVoiceMode(true);
+  characterSetState(CHAR_IDLE);
+  characterSetSubtitle("");
 
   // Speaker + preloaded WAV clips. Must come after M5.begin (speaker)
   // and after characterInit (which mounts LittleFS — soundInit reuses
@@ -476,8 +481,18 @@ void setup() {
   motionSetTilt(settingsGetTilt());           // before enable so initial park uses correct Y
   motionSetEnabled(settingsGetMotionEnabled());
   motionSetIdleWiggle(settingsGetIdleWiggleEnabled());
+  // Voice-agent mode forces servos ON so Clawd nods while talking — this
+  // build has no dashboard to flip motion, and NVS may have it disabled
+  // (it did: motion=0). Overrides the saved pref for the voice persona.
+  motionSetEnabled(true);
 
   bleStart();
+
+  // Path A2 audio playback: open the UDP PCM socket so the Agora agent's
+  // TTS voice (relayed from the Mac) comes out of StackChan's speaker. When
+  // wifi_secrets.ini still has placeholders this is a no-op; when real creds
+  // are set it associates WiFi here (~6s once) so audio is ready from boot.
+  audioPlayInit();
 }
 
 void loop() {
@@ -485,8 +500,27 @@ void loop() {
   drainRx();          // moved off BTC_TASK — see RxCb comment
   characterTick();
   motionTick();
+  audioPlayPump();    // drain relayed PCM (UDP) → speaker; cheap when idle
 
   uint32_t now = millis();
+
+  // While relayed agent audio is playing, keep the screen awake and showing
+  // the face — otherwise the idle-dwell timer could blank the screen mid-
+  // speech, leaving the agent talking to a black panel. Mirrors tap-to-wake.
+  static bool s_talking = false;
+  if (audioPlayIsActive()) {
+    wakeScreenIfBlanked();
+    g_state_settled_ms = now;  // hold off idle screen-off while talking
+    if (!s_talking) {          // rising edge → Clawd springs to life
+      s_talking = true;
+      characterSetState(CHAR_BUSY);
+      motionSetState(CHAR_BUSY);   // gentle nod cycle while it talks/laughs
+    }
+  } else if (s_talking) {      // falling edge → back to idle animation
+    s_talking = false;
+    characterSetState(CHAR_IDLE);
+    motionSetState(CHAR_IDLE);
+  }
 
   // ── camera/wifi-stream lifecycle (openspec 0003) ─────────────────────
   // Bound to (ATTENTION && have_prompt_id). On the rising edge we bring

@@ -21,6 +21,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Associate with the configured WiFi network if not already up. Returns true
+// when connected. Shared so the audio-playback path (audio_play.cpp) and the
+// camera-stream path use one association instead of re-associating each.
+// No-op when already connected; bounded (~6s) so a hung associate never
+// blocks the firmware. Returns false (and logs) if creds are placeholders.
+bool wifiEnsureUp();
+
 // Bring up WiFi if needed, open the TCP socket to the daemon. Returns true
 // on a connected socket. Tolerates being called when already connected
 // (no-op). Bounded retries internally; on terminal failure logs and

@@ -49,10 +49,14 @@ const Step PAT_IDLE[]      = {
   {0, 0, 0, 0}
 };
 const Step PAT_BUSY[]      = {
-  // ±5° around baseline + 3.5 s rest — same quiet pacing as before.
-  {0,  50, 200, 900},        // gentle nod-up
-  {0, -50, 200, 900},        // gentle nod-down
-  {0,   0, 200, 3500},       // hold baseline, rest (quiet)
+  // Talking/laughing nod: ±15° around baseline, brisk, short rest so it
+  // reads clearly as a nod while the agent speaks. (Was ±5°/3.5s — too
+  // subtle to notice as nodding.)
+  {0,  150, 450, 380},       // nod up
+  {0, -150, 450, 380},       // nod down
+  {0,  150, 450, 380},       // nod up
+  {0, -150, 450, 380},       // nod down
+  {0,    0, 350, 800},       // settle, brief rest, then loop
   {0, 0, 0, 0}
 };
 const Step PAT_ATTENTION[] = {
