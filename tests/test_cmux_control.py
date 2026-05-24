@@ -104,10 +104,12 @@ def test_route_builds_correct_argv_with_uuid_and_enter():
     c = CmuxClient(binary="CMUX", runner=m)
     uuid = c.route(2, "run the tests")
     assert uuid == "7D67FF66-6CB4-40F2-A77E-A774A5644F19"
-    # list -> send text (by UUID, verbatim) -> send-key Enter
+    # list -> focus (bring to front) -> send text (UUID, verbatim) -> Enter
     assert m.calls[0] == ["CMUX", "rpc", "workspace.list", "{}"]
-    assert m.calls[1] == ["CMUX", "send", "--workspace", uuid, "run the tests"]
-    assert m.calls[2] == ["CMUX", "send-key", "--workspace", uuid, "Enter"]
+    assert m.calls[1] == ["CMUX", "rpc", "workspace.current",
+                          '{"workspace_id": "%s"}' % uuid]
+    assert m.calls[2] == ["CMUX", "send", "--workspace", uuid, "run the tests"]
+    assert m.calls[3] == ["CMUX", "send-key", "--workspace", uuid, "Enter"]
 
 
 def test_route_unknown_number_raises_and_sends_nothing():
