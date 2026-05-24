@@ -28,12 +28,19 @@ Nothing reaches a session until the **gesture confirms** — the safety gate.
 ## Pieces (this MVP)
 
 - `cmux_control.py` — `CmuxClient` over the cmux CLI (injectable runner).
-  - `list_sessions()` ← `cmux rpc workspace.list '{}'` (JSON: id/ref/index/title/cwd/selected)
-  - `route(number, text)` → `cmux send --workspace <UUID> "<text>"` + `send-key Enter`
-  - `read_status(number)` → `cmux read-screen` last non-empty line
-  - **targets the stable `id` (UUID), never the positional `workspace:N` ref.**
+  A **session = a terminal surface (pane)**, not a workspace — agents usually run
+  as splits inside one workspace, so addressing is surface-level.
+  - `list_sessions()` ← `cmux rpc workspace.list` + `surface.list` per workspace;
+    numbers terminal panes across all workspaces, excluding the board's own pane
+    (title contains `control_plane.board`) and browser surfaces (the voice agent).
+  - `route(number, text)` → `surface.focus` + `surface.send_text` + `surface.send_key Enter`
+  - `read_surface(surface)` → last non-empty line (board status);
+    `read_surface_text(surface)` → full screen.
+  - **targets the stable surface `id` (UUID), never the positional `surface:N` ref.**
+  - cwd is the owning workspace's `current_directory` (cmux has no per-pane cwd).
 - `stager.py` — `RouteStager`: stage / confirm / cancel, last-wins, TTL auto-expire.
-- `board.py` — Mac board: numbered sessions + status (text/JSON).
+- `board.py` — Mac board: numbered panes + status (text/JSON/`--watch`).
+- `fleet_layout.sh` — one cmux window: board pane + voice-agent browser surface.
 - `smoke_test.py` — safe real-cmux check against a throwaway workspace.
 
 ## Gesture wiring (reuses existing camera pipeline — no firmware change)
