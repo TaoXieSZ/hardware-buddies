@@ -90,6 +90,12 @@ class CmuxClient:
     def _read_argv(self, uuid: str, lines: int) -> list[str]:
         return [self.binary, "read-screen", "--workspace", uuid, "--lines", str(lines)]
 
+    def _focus_argv(self, uuid: str) -> list[str]:
+        # Bring the target workspace to the front so the user watches the
+        # command land (cmux rpc workspace.current is the select/switch setter).
+        return [self.binary, "rpc", "workspace.current",
+                json.dumps({"workspace_id": uuid})]
+
     # --- operations --------------------------------------------------------
     def list_sessions(self) -> list[Session]:
         rc, out, err = self.run([self.binary, "rpc", "workspace.list", "{}"])
@@ -103,16 +109,22 @@ class CmuxClient:
     def send_enter(self, uuid: str) -> "tuple[int, str, str]":
         return self.run(self._send_key_argv(uuid, "Enter"))
 
-    def route(self, number: int, text: str) -> str:
-        """Type `text` verbatim into session `number` and submit (Enter).
+    def focus(self, uuid: str) -> "tuple[int, str, str]":
+        """Bring the workspace to the front (so the user sees the command land)."""
+        return self.run(self._focus_argv(uuid))
 
-        Sends text then a separate Enter key (unambiguous vs. embedding \\n).
-        Returns the target UUID. Raises if the number is unknown.
+    def route(self, number: int, text: str) -> str:
+        """Focus session `number`, type `text` verbatim, and submit (Enter).
+
+        Focuses first so the target pops to the front and the user watches the
+        command appear; sends text then a separate Enter key (unambiguous vs.
+        embedding \\n). Returns the target UUID. Raises if the number is unknown.
         """
         sessions = self.list_sessions()
         uuid = resolve(number, sessions)
         if not uuid:
             raise KeyError(f"no session numbered {number}")
+        self.focus(uuid)
         self.send_text(uuid, text)
         self.send_enter(uuid)
         return uuid

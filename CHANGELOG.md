@@ -21,8 +21,11 @@ until that changes.
   `app/api/stage-route` to forward the agent's `route_to_session` tool to the
   daemon (in the separate `../buddy-voice` Agora quickstart project, not this
   repo). Spec: `.omc/specs/deep-interview-voice-control-plane.md`; docs:
-  `tools/control_plane/README.md`. (Live voice→gesture→cmux is a user hardware
-  step; StackChan on-screen board is deferred to phase 2.)
+  `tools/control_plane/README.md`. `route()` auto-focuses the target session
+  (`cmux rpc workspace.current`) so it pops to the front as the command lands;
+  `demo.py` exercises the full board→stage→confirm→execute path against a
+  throwaway session (no voice/camera needed). (Live voice→gesture→cmux is a
+  user hardware step; StackChan on-screen board is deferred to phase 2.)
 - **StackChan voice via Agora ConvoAI (Path A2).** The agent's TTS audio now
   plays from StackChan's speaker. The Mac browser stays the RTC client and
   taps the agent's remote audio track, downsamples to 16 kHz mono PCM, and
