@@ -22,6 +22,13 @@ from control_plane.cmux_control import CmuxClient, DEFAULT_CMUX  # noqa: E402
 from control_plane.stager import RouteStager  # noqa: E402
 
 
+def _workspace_ids(client) -> set[str]:
+    rc, out, _ = client.run([client.binary, "rpc", "workspace.list", "{}"])
+    if rc != 0:
+        return set()
+    return {w.get("id", "") for w in json.loads(out).get("workspaces", []) if w.get("id")}
+
+
 def main() -> int:
     cmux = shutil.which("cmux") or DEFAULT_CMUX
     if not os.path.exists(cmux):
@@ -30,12 +37,18 @@ def main() -> int:
     client = CmuxClient(binary=cmux)
 
     print("1) Creating a throwaway session 'SECRETARY_DEMO' (your real ones are untouched)…")
+    before_ws = _workspace_ids(client)
     client.run([cmux, "new-workspace", "--name", "SECRETARY_DEMO", "--cwd", "/tmp"])
     time.sleep(1.0)
 
-    target = next((s for s in client.list_sessions() if s.title == "SECRETARY_DEMO"), None)
-    if target is None:
+    new_ws = _workspace_ids(client) - before_ws
+    if not new_ws:
         print("   could not create throwaway; aborting")
+        return 1
+    ws_id = next(iter(new_ws))
+    target = next((s for s in client.list_sessions() if s.workspace == ws_id), None)
+    if target is None:
+        print("   throwaway terminal surface not found; aborting")
         return 1
 
     print("\n2) The board the secretary sees (numbered — you'd say the number):\n")
@@ -52,14 +65,13 @@ def main() -> int:
     stager.confirm()
     time.sleep(1.5)
 
-    print("\n5) That session's screen now (read-screen) — it ran:\n")
-    rc, screen, _ = client.run(
-        [cmux, "read-screen", "--workspace", target.uuid, "--lines", "8"]
-    )
-    print("   " + "\n   ".join(l for l in screen.splitlines() if l.strip()))
+    print("\n5) That pane's screen now — it ran:\n")
+    screen = client.read_surface_text(target.surface)
+    lines = [l for l in screen.splitlines() if l.strip()][-8:]
+    print("   " + "\n   ".join(lines) if lines else "   (no output read)")
 
     print("\n6) Cleaning up the throwaway…")
-    client.run([cmux, "rpc", "workspace.close", json.dumps({"workspace_id": target.uuid})])
+    client.run([cmux, "rpc", "workspace.close", json.dumps({"workspace_id": ws_id})])
     print("   done.")
     return 0
 

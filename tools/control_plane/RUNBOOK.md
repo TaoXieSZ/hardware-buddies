@@ -15,7 +15,9 @@ Architecture + design: `README.md` · `../../.omc/specs/deep-interview-voice-con
 sudo ln -sf "/Applications/cmux.app/Contents/Resources/bin/cmux" /usr/local/bin/cmux
 cmux list-workspaces            # sanity: lists your sessions
 ```
-- Coding-agent sessions run as **cmux workspaces** (one agent per workspace).
+- A **session = a cmux terminal pane (surface)** — agents run as splits or tabs;
+  every terminal pane across all workspaces is numbered (the board's own pane and
+  the voice-agent browser are auto-excluded).
 - The **cc-bridge daemon** must be running (launchd `com.cc-bridge`, runs
   `tools/cc-bridge/bridge.py`). It owns the socket `/tmp/cc-bridge.sock` + the
   RouteStager.
@@ -49,10 +51,24 @@ Open <http://localhost:3000> → **Try it now** (mic permission).
 ## 3. See the fleet (the board)
 
 ```bash
-python3 -m control_plane.board          # numbered sessions + status
+python3 -m control_plane.board          # one-shot numbered sessions + status
+python3 -m control_plane.board --watch  # live board, auto-refresh (leave it open)
 python3 -m control_plane.board --json
 ```
-The **number** is what you say.
+The **number** is what you say. `--watch` highlights the focused session and
+refreshes every 2 s (`--interval N` to change).
+
+### One-window layout (voice agent + board + sessions in cmux)
+
+cmux surfaces can be terminals **or** browsers, so the whole control plane fits
+in one cmux window. One command assembles it:
+
+```bash
+tools/control_plane/fleet_layout.sh     # FLEET_VOICE_URL overrides localhost:3000
+```
+It opens a `fleet board` workspace = live board (terminal) **+** the voice
+secretary (browser surface → the Agora voice UI), split side by side. Your
+coding-agent sessions stay as the other cmux workspaces/tabs in the window.
 
 ## 4. Operate — speak, then confirm
 

@@ -33,6 +33,17 @@ until that changes.
   path) via new `confirm_route`/`cancel_route` daemon actions. (Live
   voice→gesture→cmux is a user hardware step; StackChan on-screen board is
   deferred to phase 2.)
+- **Control plane goes surface-level + glanceable.** A "session" is now a cmux
+  **terminal pane (surface)**, not a workspace — agents commonly run as splits
+  inside one workspace, so workspace-level enumeration missed them. The board
+  numbers every terminal pane across all workspaces (excluding its own pane and
+  the voice-agent browser), and routing targets the stable surface UUID via
+  `surface.focus`/`surface.send_text`/`surface.send_key`. New
+  `board.py --watch` renders a live auto-refreshing board (highlights the active
+  pane); new `fleet_layout.sh` assembles one cmux window = board pane + the voice
+  agent as a browser surface, with coding sessions as the other panes/tabs.
+  (`tools/control_plane/`, surface-model unit tests; cwd is the owning
+  workspace's directory since cmux exposes no per-pane cwd.)
 - **StackChan voice via Agora ConvoAI (Path A2).** The agent's TTS audio now
   plays from StackChan's speaker. The Mac browser stays the RTC client and
   taps the agent's remote audio track, downsamples to 16 kHz mono PCM, and
