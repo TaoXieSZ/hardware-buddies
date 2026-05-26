@@ -71,11 +71,31 @@ def render_text(rows: list[dict]) -> str:
 _WIDTH = 80
 _MIN_WIDTH = 56
 _MAX_WIDTH = 140
-_CLEAR = "\033[2J\033[H"   # clear screen + home cursor
-_HIDE = "\033[?25l"        # hide cursor
-_SHOW = "\033[?25h"        # restore cursor
-_SELECTED = "\033[7m"      # reverse video for the focused session
-_RESET = "\033[0m"
+
+# ANSI sequences. Truncation is always computed on the plain visible text so
+# fixed-width columns line up; colors are wrapped around the already-sized
+# segments.
+_CLEAR    = "\033[2J\033[H"   # clear screen + home cursor
+_HIDE     = "\033[?25l"
+_SHOW     = "\033[?25h"
+_RESET    = "\033[0m"
+_BOLD     = "\033[1m"
+_DIM      = "\033[2m"
+_REVERSE  = "\033[7m"
+_FG_CYAN     = "\033[36m"
+_FG_GREEN    = "\033[32m"
+_FG_YELLOW   = "\033[33m"
+_FG_BLUE     = "\033[34m"
+_FG_MAGENTA  = "\033[35m"
+
+# Per-status-glyph color (what each Claude Code signal "means" at a glance).
+_STATUS_COLOR = {
+    "✻": _FG_YELLOW,   # actively thinking
+    "⏺": _FG_GREEN,    # just spoke
+    "❯": _FG_BLUE,     # user prompt
+    ">": _FG_BLUE,
+    "※": _DIM,         # idle recap (most muted on purpose)
+}
 
 
 def _short_cwd(cwd: str) -> str:
@@ -83,27 +103,71 @@ def _short_cwd(cwd: str) -> str:
     return "~" + cwd[len(home):] if cwd.startswith(home) else cwd
 
 
+def _wrap(s: str, *codes: str) -> str:
+    """Wrap `s` in the given ANSI codes (no-op if `s` empty)."""
+    if not s:
+        return s
+    return "".join(codes) + s + _RESET
+
+
 def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> str:
     """Two lines per session (header + status), header bar with a clock.
 
     `color=False` drops ANSI so the output is plain (tests, pipes, non-TTY).
+    Colour hierarchy: nicknames stand out (bold cyan), focus marker is bright
+    green, status glyphs are colored by meaning (✻ yellow, ⏺ green, ❯ blue,
+    ※ dim), cwd/separators/footer are dim grey so they recede.
     """
-    bar = "─" * width
+    bar_plain = "─" * width
     clock = datetime.now().strftime("%H:%M:%S")
-    out = ["FLEET BOARD" + clock.rjust(width - len("FLEET BOARD")), bar]
+    title = "FLEET BOARD"
+    header_plain = title + clock.rjust(width - len(title))
+
+    out: list[str] = []
+    if color:
+        out.append(f"{_BOLD}{title}{_RESET}{_DIM}{clock.rjust(width - len(title))}{_RESET}")
+        out.append(_wrap(bar_plain, _DIM))
+    else:
+        out.append(header_plain)
+        out.append(bar_plain)
+
     if not rows:
-        out.append("  (no cmux sessions)")
+        out.append(_wrap("  (no cmux sessions)", _DIM) if color else "  (no cmux sessions)")
     for r in rows:
-        sel = r["selected"]
-        nick = (r.get("nickname") or "").ljust(8)
-        head = f'{"*" if sel else " "} {nick}{r["title"][:24]}'
-        line = f"{head}  ➜ {_short_cwd(r['cwd'])}"
-        out.append(f"{_SELECTED}{line}{_RESET}" if color and sel else line)
-        status = r["status"][: width - 6]
-        if status:
-            out.append(f"        {status}")
-    out.append(bar)
-    out.append('say "alpha <cmd>" / "bravo …"  →  👍  /  confirm.py')
+        sel = bool(r["selected"])
+        nick = (r.get("nickname") or "?").ljust(8)
+        title_trunc = (r["title"] or "")[:24]
+        cwd = _short_cwd(r["cwd"] or "")
+        focus_mark = "▶" if sel else " "
+
+        if color:
+            # Same visible layout for every row — mark(1) + ␣(1) + nick(8) —
+            # so titles and arrows line up regardless of focus. Focused row
+            # gets a bright-green ▶ and reverse-video on its bold-cyan
+            # nickname; the inverse block reads as a chip without disturbing
+            # the column grid.
+            mark = (f"{_BOLD}{_FG_GREEN}{focus_mark}{_RESET}"
+                    if sel else focus_mark)
+            nick_disp = (f"{_REVERSE}{_BOLD}{_FG_CYAN}{nick}{_RESET}"
+                         if sel else f"{_BOLD}{_FG_CYAN}{nick}{_RESET}")
+            line = f"{mark} {nick_disp}{title_trunc}  {_DIM}➜ {cwd}{_RESET}"
+        else:
+            line = f'{focus_mark} {nick}{title_trunc}  ➜ {cwd}'
+        out.append(line)
+
+        # Status line — truncated on visible width, then colored by glyph.
+        status_plain = (r["status"] or "")[: max(0, width - 10)]
+        if status_plain:
+            head = status_plain[:1]
+            if color:
+                status_disp = _wrap(status_plain, _STATUS_COLOR.get(head, _DIM))
+            else:
+                status_disp = status_plain
+            out.append(f"        {status_disp}")
+
+    out.append(_wrap(bar_plain, _DIM) if color else bar_plain)
+    footer = 'say "alpha <cmd>" / "bravo …"  →  👍  /  confirm.py'
+    out.append(_wrap(footer, _DIM) if color else footer)
     return "\n".join(out)
 
 
