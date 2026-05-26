@@ -21,16 +21,30 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-# route_fn(number, text) performs the actual cmux send (e.g. CmuxClient.route).
-RouteFn = Callable[[int, str], object]
+from typing import Any  # noqa: E402  (after dataclass import)
+
+# route_fn(target, text) performs the actual cmux send (e.g. CmuxClient.route).
+# `target` may be a nickname str (alpha/bravo/…) or — for back-compat — a
+# 1-based int / numeric str. cmux_control.resolve_target handles all three at
+# fire time.
+RouteFn = Callable[[Any, str], object]
 Clock = Callable[[], float]
 
 
 @dataclass
 class Pending:
-    number: int
+    target: Any          # nickname str (preferred), int, or numeric str (legacy)
     text: str
     staged_at: float
+
+    # Back-compat: existing callers/tests read `.number`. Returns int when the
+    # target is numeric; -1 for nicknames.
+    @property
+    def number(self) -> int:
+        if isinstance(self.target, int):
+            return self.target
+        s = str(self.target)
+        return int(s) if s.isdigit() else -1
 
 
 class RouteStager:
@@ -60,10 +74,16 @@ class RouteStager:
             self._drop_if_expired_locked()
             return self._pending
 
-    def stage(self, number: int, text: str) -> None:
-        """Stage a command (last-wins), resetting the TTL."""
+    def stage(self, target, text: str) -> None:
+        """Stage a command (last-wins), resetting the TTL.
+
+        `target` is passed through unchanged (nickname str / int / numeric str);
+        the resolver in cmux_control.route handles the type at fire time.
+        """
         with self._lock:
-            self._pending = Pending(number=number, text=text, staged_at=self._clock())
+            self._pending = Pending(
+                target=target, text=text, staged_at=self._clock()
+            )
 
     def confirm(self) -> bool:
         """Thumbs-up: fire the staged route. Returns True if something fired.
@@ -78,7 +98,7 @@ class RouteStager:
             self._pending = None
         if p is None:
             return False
-        self._route(p.number, p.text)
+        self._route(p.target, p.text)
         return True
 
     def cancel(self) -> bool:

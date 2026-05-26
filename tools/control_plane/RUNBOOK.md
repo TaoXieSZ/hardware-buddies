@@ -16,8 +16,14 @@ sudo ln -sf "/Applications/cmux.app/Contents/Resources/bin/cmux" /usr/local/bin/
 cmux list-workspaces            # sanity: lists your sessions
 ```
 - A **session = a cmux terminal pane (surface)** — agents run as splits or tabs;
-  every terminal pane across all workspaces is numbered (the board's own pane and
-  the voice-agent browser are auto-excluded).
+  every terminal pane gets a stable **NATO phonetic nickname** (alpha/bravo/…)
+  keyed by surface UUID, persisted in `~/.cache/control-plane/nicknames.json`.
+  Names are forever for the pane's lifetime; the board, daemon and LLM all use
+  the nickname (positional numbers stay for back-compat only).
+- The board now spans **all cmux windows** — splitting the board into its own
+  window no longer hides agent panes.
+- The board's own pane self-registers so the enumerator skips it. The
+  voice-agent browser surface is auto-excluded by type.
 - The **cc-bridge daemon** must be running (launchd `com.cc-bridge`, runs
   `tools/cc-bridge/bridge.py`). It owns the socket `/tmp/cc-bridge.sock` + the
   RouteStager.
@@ -76,9 +82,10 @@ coding-agent sessions stay as the other cmux workspaces/tabs in the window.
 
    | You say | → |
    |---|---|
-   | `2号 跑测试并修复` | session 2 ← "跑测试并修复" |
-   | `第1个 npm run build` | session 1 ← "npm run build" |
-   | `session 3 git status` | session 3 ← "git status" |
+   | `alpha 跑测试并修复` | alpha ← "跑测试并修复" |
+   | `bravo npm run build` | bravo ← "npm run build" |
+   | `charlie git status` | charlie ← "git status" |
+   | `2号 跑测试并修复` | (legacy) session 2 ← "跑测试并修复" |
    | `今天天气怎么样` | ignored (no marker) |
 
    It **stages** (nothing sent yet).

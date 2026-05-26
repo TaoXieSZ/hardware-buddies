@@ -504,15 +504,20 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
         # Voice control-plane: STAGE a routed command (does not send until the
         # user confirms with a thumbs-up gesture — see control_plane.stager).
         if isinstance(head, dict) and head.get("action") == "stage_route":
+            # New protocol: `target: str` (nickname). Legacy: `session: int`.
+            # Either resolves to a surface UUID at fire time inside route().
+            target = head.get("target")
+            if target is None:
+                target = head.get("session")
             ack = {"ok": False, "error": "no route_stager"}
             if route_stager is not None:
                 try:
-                    route_stager.stage(int(head["session"]), str(head["text"]))
+                    route_stager.stage(target, str(head["text"]))
                     ack = {"ok": True}
                 except Exception as e:  # noqa: BLE001 - report back, don't crash
                     ack = {"ok": False, "error": str(e)}
-            log.info("stage_route session=%s text=%r -> %s",
-                     head.get("session"), head.get("text"), ack)
+            log.info("stage_route target=%r text=%r -> %s",
+                     target, head.get("text"), ack)
             writer.write((json.dumps(ack) + "\n").encode())
             await writer.drain()
             return

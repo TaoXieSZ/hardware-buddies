@@ -66,7 +66,19 @@ def _run(line: bytes, *, apply_event, stager) -> FakeWriter:
     return w
 
 
-def test_stage_route_stages_and_acks_ok():
+def test_stage_route_with_nickname_target():
+    stager = StubStager()
+    msg = json.dumps({"action": "stage_route", "target": "alpha",
+                      "text": "run the tests"}).encode() + b"\n"
+    w = _run(msg, apply_event=lambda s, e: False, stager=stager)
+    assert stager.staged == [("alpha", "run the tests")]
+    assert json.loads(w.buf.decode().strip()) == {"ok": True}
+
+
+def test_stage_route_legacy_session_field_still_accepted():
+    # Pre-nickname clients (older say.py, the original voice hook) send
+    # `session: int`. Daemon forwards it untouched so cmux_control.route's
+    # resolver can handle the legacy positional number.
     stager = StubStager()
     msg = json.dumps({"action": "stage_route", "session": 2,
                       "text": "run the tests"}).encode() + b"\n"
