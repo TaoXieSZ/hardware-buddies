@@ -28,20 +28,32 @@ Nothing reaches a session until the **gesture confirms** — the safety gate.
 ## Pieces (this MVP)
 
 - `cmux_control.py` — `CmuxClient` over the cmux CLI (injectable runner).
-  A **session = a terminal surface (pane)**, not a workspace — agents usually run
-  as splits inside one workspace, so addressing is surface-level.
-  - `list_sessions()` ← `cmux rpc workspace.list` + `surface.list` per workspace;
-    numbers terminal panes across all workspaces, excluding the board's own pane
-    (title contains `control_plane.board`) and browser surfaces (the voice agent).
-  - `route(number, text)` → `surface.focus` + `surface.send_text` + `surface.send_key Enter`
-  - `read_surface(surface)` → last non-empty line (board status);
-    `read_surface_text(surface)` → full screen.
+  A **session = a terminal surface (pane)** with a stable **NATO phonetic
+  nickname** (alpha/bravo/…) keyed by surface UUID — addressing never shifts
+  when other panes open or close.
+  - `list_sessions()` fans out across **all cmux windows** (`window.list` →
+    `workspace.list` → `surface.list`), excluding browser surfaces and any
+    surface registered in `~/.cache/control-plane/board-surfaces/` (the live
+    board panes register themselves so they're never targeted).
+  - `route(target, text)` → `surface.focus` + `surface.send_text` +
+    `surface.send_key Enter`; `target` is a nickname (`"alpha"`), an
+    unambiguous prefix (`"alph"`), or — for back-compat — a 1-based number.
+  - `read_surface(surface)` returns a *smart* status line: skips the Claude
+    Code banner / OMC HUD / separators and prefers a recap (`※`) or activity
+    verb (`✻`) when present. `read_surface_text(surface)` is the raw full
+    screen.
   - **targets the stable surface `id` (UUID), never the positional `surface:N` ref.**
   - cwd is the owning workspace's `current_directory` (cmux has no per-pane cwd).
 - `stager.py` — `RouteStager`: stage / confirm / cancel, last-wins, TTL auto-expire.
-- `board.py` — Mac board: numbered panes + status (text/JSON/`--watch`).
+- `board.py` — Mac board: ships by nickname + smart status (text/JSON/`--watch`).
+- `say.py` / `chat.py` — keyboard fleet driver (`alpha echo hi`) and Codex-style
+  LLM REPL persona-driven by **大副 (First Mate)** via `claude --print`.
 - `fleet_layout.sh` — one cmux window: board pane + voice-agent browser surface.
 - `smoke_test.py` — safe real-cmux check against a throwaway workspace.
+
+> The whole `control_plane/` module has been **extracted into the standalone
+> [`agent-fleet`](https://github.com/TaoXieSZ/agent-fleet) project**. This
+> repo will eventually consume it as a dependency.
 
 ## Gesture wiring (reuses existing camera pipeline — no firmware change)
 

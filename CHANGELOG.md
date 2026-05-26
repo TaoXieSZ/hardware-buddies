@@ -8,6 +8,28 @@ until that changes.
 ## [Unreleased]
 
 ### Added
+- **Control plane: stable per-ship nicknames + cross-window enumeration +
+  smart status + LLM REPL.** The fleet board no longer drifts when panes open
+  and close: every cmux terminal pane gets a NATO phonetic nickname
+  (`alpha`, `bravo`, …) keyed by surface UUID and persisted in
+  `~/.cache/control-plane/nicknames.json`. The daemon's `stage_route` action
+  now takes `target: str` (nickname, prefix, or legacy number) and the
+  resolver looks up the surface UUID at fire time, so the user-facing identity
+  never depends on listing order. `list_sessions()` fans out across
+  `window.list` so splitting the board into its own cmux window no longer
+  hides agent panes. The board pane self-registers via `--self-surface
+  <UUID>` so it's reliably excluded from its own enumeration (cmux overrides
+  surface titles, so the title-marker fallback alone is fragile). Status
+  lines now skip Claude Code's persistent banner / OMC HUD / separators and
+  prefer Claude Code's recap (`※`) or activity verb (`✻`) so each row
+  actually shows what the session is doing. New `tools/control_plane/say.py`
+  (keyboard fleet driver — `alpha echo hi`) and `chat.py` (Codex-style
+  **大副 (First Mate)** LLM REPL backed by `claude --print --json-schema`).
+  Persona renamed Secretary → 大副; user addressed as 舰长 (Captain). The
+  whole module has been **extracted into the standalone
+  [`agent-fleet`](https://github.com/TaoXieSZ/agent-fleet) project**; this
+  repo will eventually depend on it instead of vendoring the code.
+
 - **Voice control-plane secretary (MVP core).** Speak to StackChan and a chosen
   Claude/Cursor session running in **cmux** executes your verbatim command,
   gated by a thumbs-up gesture. New `tools/control_plane/`: `cmux_control.py`

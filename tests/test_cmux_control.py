@@ -8,13 +8,60 @@ real cmux needed. JSON samples mirror the real `cmux rpc workspace.list` and
 
 import json
 
+import pytest
+
+from control_plane import cmux_control as cc
 from control_plane.cmux_control import (
     BOARD_MARKER,
+    NATO,
     CmuxClient,
     Session,
     build_sessions,
     resolve,
+    resolve_target,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_nickname_registry(tmp_path, monkeypatch):
+    """Route every NicknameRegistry write to a tmp file so tests don't touch ~/.cache."""
+    monkeypatch.setattr(cc, "NICKNAMES_PATH", tmp_path / "nicknames.json")
+    yield
+
+
+class FakeRegistry:
+    """In-memory nickname registry — no file I/O for tests.
+
+    Mirrors NicknameRegistry's `assign()` / `resolve()` so build_sessions can
+    operate without touching the real ~/.cache file.
+    """
+    def __init__(self):
+        self._m: dict[str, str] = {}
+
+    def assign(self, sid: str) -> str:
+        if sid in self._m:
+            return self._m[sid]
+        used = set(self._m.values())
+        for n in NATO:
+            if n not in used:
+                self._m[sid] = n
+                return n
+        raise RuntimeError("exhausted in test")
+
+    def resolve(self, t: str):
+        t = t.lower().strip()
+        for sid, nick in self._m.items():
+            if nick == t:
+                return sid
+        return None
+
+    def get(self, sid: str):
+        return self._m.get(sid)
+
+
+def _build(ws=None, surf=None):
+    """build_sessions with a fresh FakeRegistry — common test boilerplate."""
+    return build_sessions(ws or WS, surf or SURF, registry=FakeRegistry())
 
 # Two workspaces; the first holds the board pane, a Claude Code pane, and the
 # voice-agent browser; the second holds a plain shell.
@@ -48,20 +95,20 @@ SURF = {
 # ─── build_sessions ────────────────────────────────────────────────────
 
 def test_build_numbers_terminals_across_workspaces():
-    s = build_sessions(WS, SURF)
+    s = _build()
     assert [x.number for x in s] == [1, 2]
     assert [x.surface for x in s] == ["S1", "S2"]
 
 
 def test_build_excludes_board_and_browser():
-    surfaces = {x.surface for x in build_sessions(WS, SURF)}
+    surfaces = {x.surface for x in _build()}
     assert "SB" not in surfaces   # board pane (BOARD_MARKER in title)
     assert "SBR" not in surfaces  # browser surface (voice agent)
     assert BOARD_MARKER == "control_plane.board"
 
 
 def test_build_carries_workspace_cwd_and_focus():
-    s = build_sessions(WS, SURF)
+    s = _build()
     assert s[0].cwd == "/Users/txie/proj/a"  # owning workspace's dir
     assert s[0].workspace == "WSA"
     assert s[0].focused is True and s[0].selected is True  # selected aliases focused
@@ -82,7 +129,7 @@ def test_focus_only_in_selected_workspace():
         "BG": json.dumps({"surfaces": [
             {"id": "bg1", "index": 0, "type": "terminal", "title": "b", "focused": True}]}),
     }
-    s = build_sessions(ws, surf)
+    s = _build(ws, surf)
     assert [(x.surface, x.focused) for x in s] == [("sel1", True), ("bg1", False)]
 
 
@@ -97,22 +144,75 @@ def test_build_orders_by_index_not_array_order():
         "B": json.dumps({"surfaces": [
             {"id": "b1", "index": 0, "type": "terminal", "title": "b"}]}),
     }
-    s = build_sessions(ws, surf)
+    s = _build(ws, surf)
     assert [(x.number, x.surface, x.cwd) for x in s] == [(1, "a1", "/a"), (2, "b1", "/b")]
 
 
 def test_build_empty():
-    assert build_sessions(json.dumps({"workspaces": []}), {}) == []
+    assert _build(json.dumps({"workspaces": []}), {}) == []
+
+
+# ─── nicknames ─────────────────────────────────────────────────────────
+
+def test_nicknames_assigned_in_order():
+    s = _build()
+    assert [x.nickname for x in s] == ["alpha", "bravo"]
+
+
+def test_nicknames_stable_across_calls_with_same_registry():
+    reg = FakeRegistry()
+    s1 = build_sessions(WS, SURF, registry=reg)
+    s2 = build_sessions(WS, SURF, registry=reg)
+    assert [x.nickname for x in s1] == [x.nickname for x in s2]
+
+
+def test_nicknames_dont_recycle_when_pane_disappears():
+    reg = FakeRegistry()
+    build_sessions(WS, SURF, registry=reg)  # assigns alpha→S1, bravo→S2
+    # now S1 disappears (only S2 remains in cmux); a NEW pane appears as S3
+    ws2 = json.dumps({"workspaces": [
+        {"id": "WSB", "index": 0, "selected": True, "current_directory": "/tmp"}]})
+    surf2 = {"WSB": json.dumps({"surfaces": [
+        {"id": "S2", "index": 0, "type": "terminal", "title": "old"},
+        {"id": "S3", "index": 1, "type": "terminal", "title": "new"}]})}
+    s = build_sessions(ws2, surf2, registry=reg)
+    by_surf = {x.surface: x.nickname for x in s}
+    assert by_surf["S2"] == "bravo"     # kept its name
+    assert by_surf["S3"] == "charlie"   # next free, NOT alpha (which is retired)
+
+
+def test_resolve_target_by_nickname_exact():
+    s = _build()
+    assert resolve_target("alpha", s) == "S1"
+    assert resolve_target("BRAVO", s) == "S2"  # case-insensitive
+
+
+def test_resolve_target_by_unambiguous_prefix():
+    s = _build()
+    assert resolve_target("alph", s) == "S1"
+    assert resolve_target("b", s) == "S2"
+
+
+def test_resolve_target_legacy_number_string():
+    s = _build()
+    assert resolve_target("1", s) == "S1"
+    assert resolve_target(2, s) == "S2"
+
+
+def test_resolve_target_unknown_returns_none():
+    s = _build()
+    assert resolve_target("zulu", s) is None
+    assert resolve_target("", s) is None
 
 
 # ─── resolve ───────────────────────────────────────────────────────────
 
 def test_resolve_hit():
-    assert resolve(2, build_sessions(WS, SURF)) == "S2"
+    assert resolve(2, _build()) == "S2"
 
 
 def test_resolve_miss():
-    assert resolve(9, build_sessions(WS, SURF)) is None
+    assert resolve(9, _build()) is None
 
 
 # ─── CmuxClient with mock runner ───────────────────────────────────────
@@ -127,6 +227,9 @@ class MockRunner:
     def __call__(self, argv):
         self.calls.append(list(argv))
         method = argv[2] if len(argv) > 2 and argv[1] == "rpc" else ""
+        if method == "window.list":
+            # Single window in the fake fleet (SURF/WS span one window).
+            return 0, json.dumps({"windows": [{"id": "W1"}]}), ""
         if method == "workspace.list":
             return 0, WS, ""
         if method == "surface.list":
@@ -176,6 +279,44 @@ def test_route_verbatim_text_not_rewritten():
     assert json.loads(send[3])["text"] == payload  # exact, including CJK + quotes
 
 
+def test_list_sessions_spans_multiple_windows():
+    """workspace.list defaults to caller's window; we fan out via window.list
+    so panes in OTHER cmux windows are still enumerable."""
+
+    class MultiWindow:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, argv):
+            self.calls.append(list(argv))
+            m = argv[2] if len(argv) > 2 and argv[1] == "rpc" else ""
+            if m == "window.list":
+                return 0, json.dumps({"windows": [{"id": "WA"}, {"id": "WB"}]}), ""
+            if m == "workspace.list":
+                wid = json.loads(argv[3]).get("window_id")
+                if wid == "WA":
+                    return 0, json.dumps({"workspaces": [
+                        {"id": "WSA", "index": 0, "selected": True,
+                         "current_directory": "/a"}]}), ""
+                if wid == "WB":
+                    return 0, json.dumps({"workspaces": [
+                        {"id": "WSB", "index": 0, "selected": True,
+                         "current_directory": "/b"}]}), ""
+                return 0, json.dumps({"workspaces": []}), ""
+            if m == "surface.list":
+                ws = json.loads(argv[3]).get("workspace_id")
+                payload = {"WSA": [{"id": "a1", "type": "terminal", "title": "a", "index": 0}],
+                           "WSB": [{"id": "b1", "type": "terminal", "title": "b", "index": 0}]}
+                return 0, json.dumps({"surfaces": payload.get(ws, [])}), ""
+            return 0, "", ""
+
+    c = CmuxClient(binary="CMUX", runner=MultiWindow())
+    sessions = c.list_sessions()
+    surfaces = [s.surface for s in sessions]
+    assert "a1" in surfaces and "b1" in surfaces  # both windows visible
+    assert len(sessions) == 2
+
+
 def test_read_status_returns_last_nonempty_line():
     m = MockRunner(screen="line one\n\n  last meaningful line  \n\n")
     c = CmuxClient(binary="CMUX", runner=m)
@@ -195,7 +336,7 @@ def test_build_board_rows_from_client():
 
     class FakeClient:
         def list_sessions(self):
-            return build_sessions(WS, SURF)
+            return _build()
 
         def read_surface(self, surface):
             return {"S1": "$ npm test", "S2": "ready"}.get(surface, "")
@@ -213,7 +354,7 @@ def test_build_board_tolerates_read_error():
 
     class FlakyClient:
         def list_sessions(self):
-            return build_sessions(WS, SURF)
+            return _build()
 
         def read_surface(self, surface):
             raise RuntimeError("boom")

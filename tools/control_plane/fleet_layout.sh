@@ -20,12 +20,13 @@ set -uo pipefail
 CMUX="${CMUX:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 VOICE_URL="${FLEET_VOICE_URL:-http://localhost:3000}"
 TOOLS_DIR="$(cd "$(dirname "$0")/.." && pwd)"          # .../tools
-BOARD_CMD="cd '$TOOLS_DIR' && python3 -m control_plane.board --watch"
 
 [ -x "$CMUX" ] || { echo "cmux not found at $CMUX (set \$CMUX)"; exit 1; }
 
-# 1. board workspace (terminal running the live board). Output is "OK workspace:N".
-WS_OUT="$("$CMUX" new-workspace --name "fleet board" --command "$BOARD_CMD")" || {
+# 1. board workspace (bare shell — we'll send the watch command AFTER we know
+#    the surface UUID so the watcher can register-and-exclude itself). Output
+#    is "OK workspace:N".
+WS_OUT="$("$CMUX" new-workspace --name "fleet board")" || {
   echo "new-workspace failed: $WS_OUT"; exit 1; }
 WS_REF="$(printf '%s' "$WS_OUT" | grep -oE 'workspace:[0-9]+' | head -1)"
 
@@ -42,7 +43,16 @@ ss = json.load(sys.stdin).get('surfaces', [])
 print(next((s['id'] for s in ss if s.get('type') == 'terminal'), ss[0]['id'] if ss else ''))
 " 2>/dev/null)"
 
-# 3. voice secretary as a browser split BESIDE the board (same workspace).
+# 3. start the board watcher in that pane, passing --self-surface so the
+#    enumerator skips the board's own pane (cmux overrides surface titles so
+#    the title-marker fallback alone misses it once frames start rendering).
+if [ -n "$SURF_ID" ]; then
+  BOARD_CMD="cd '$TOOLS_DIR' && python3 -m control_plane.board --watch --self-surface $SURF_ID"
+  "$CMUX" rpc surface.send_text "{\"surface_id\":\"$SURF_ID\",\"text\":$(python3 -c "import json,sys;print(json.dumps(sys.argv[1]))" "$BOARD_CMD")}" >/dev/null
+  "$CMUX" rpc surface.send_key "{\"surface_id\":\"$SURF_ID\",\"key\":\"Enter\"}" >/dev/null
+fi
+
+# 4. voice secretary as a browser split BESIDE the board (same workspace).
 if [ -n "$SURF_ID" ]; then
   "$CMUX" rpc browser.open_split "{\"surface_id\":\"$SURF_ID\",\"url\":\"$VOICE_URL\"}" >/dev/null
 else
@@ -50,10 +60,10 @@ else
   "$CMUX" rpc surface.create "{\"type\":\"browser\",\"url\":\"$VOICE_URL\"}" >/dev/null
 fi
 
-# 4. focus the finished layout so the user lands on it.
+# 5. focus the finished layout so the user lands on it.
 [ -n "$WS_ID" ] && "$CMUX" rpc workspace.current "{\"workspace_id\":\"$WS_ID\"}" >/dev/null 2>&1
 
 echo "Fleet layout ready (${WS_REF:-workspace ?}):"
-echo "  - board : terminal, $TOOLS_DIR  ->  python -m control_plane.board --watch"
+echo "  - board : terminal, $TOOLS_DIR  ->  python -m control_plane.board --watch --self-surface $SURF_ID"
 echo "  - voice : browser  ->  $VOICE_URL"
 echo "Coding sessions remain separate cmux workspaces/tabs in this window."
