@@ -65,7 +65,12 @@ def render_text(rows: list[dict]) -> str:
 
 # --- live watch board ------------------------------------------------------
 
-_WIDTH = 56
+# Default board width when no terminal is attached (JSON output, pipes, tests).
+# The watch loop overrides this from the live terminal size each frame so the
+# board fills the pane and status lines don't get clipped at 50 chars.
+_WIDTH = 80
+_MIN_WIDTH = 56
+_MAX_WIDTH = 140
 _CLEAR = "\033[2J\033[H"   # clear screen + home cursor
 _HIDE = "\033[?25l"        # hide cursor
 _SHOW = "\033[?25h"        # restore cursor
@@ -124,19 +129,27 @@ def register_self_as_board(surface_id: str) -> None:
     atexit.register(lambda: marker.unlink(missing_ok=True))
 
 
+def _term_width() -> int:
+    """Live terminal width, clamped to a sensible range for the board."""
+    cols = shutil.get_terminal_size((_WIDTH, 24)).columns
+    return max(_MIN_WIDTH, min(_MAX_WIDTH, cols - 2))
+
+
 def watch(client, interval: float = 2.0, color: bool = True,
           self_surface: str = "") -> None:
     """Re-render the board every `interval` seconds until Ctrl-C.
 
     Pass `self_surface` (this pane's cmux surface UUID, supplied by the
     launcher) so the enumerator excludes this pane from the session list.
+    Board width is sampled from the live terminal each frame so the layout
+    follows pane resizes.
     """
     register_self_as_board(self_surface)
     try:
         if color:
             sys.stdout.write(_HIDE)
         while True:
-            board = render_board(build_board(client), color=color)
+            board = render_board(build_board(client), width=_term_width(), color=color)
             sys.stdout.write(_CLEAR + board + "\n")
             sys.stdout.flush()
             time.sleep(interval)
