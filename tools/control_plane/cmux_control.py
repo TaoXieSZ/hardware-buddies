@@ -281,18 +281,31 @@ _NOISE_PATTERNS = [
     _re.compile(r"^[─━═╌╍┄┅\-]{8,}$"),       # horizontal rules
     _re.compile(r"^[❯>]\xa0?$"),               # bare prompt char only
 ]
-# Priority labels — when multiple meaningful lines are present, prefer those
-# that summarise *what's happening*. `※` is Claude Code's "recap", `✻` is the
-# spinner verb ("Brewed for 7s"). Both beat raw response/prompt lines.
-_PREFERRED_HEADS = ("※", "✻")
+# Claude Code's signal glyphs. We split them into "live" and "recap" so the
+# board prefers what the session is actually DOING now over Claude's static
+# summary (which Claude Code rewrites on idle and so always wins a naive
+# "most recent priority line" walk):
+#   live:  ✻ spinner verb · ⏺ response · ❯ prompt
+#   recap: ※ (fallback only — same head treated separately)
+_LIVE_HEADS = ("✻", "⏺", "❯", ">")
+_RECAP_HEAD = "※"
+_ALL_HEADS = _LIVE_HEADS + (_RECAP_HEAD,)
+
+# A glyph line needs SOME content after the glyph to be useful — cmux often
+# captures a half-rendered spinner frame like "✻ C" while text is animating.
+# Below this many post-glyph chars, treat the line as noise.
+_MIN_GLYPH_CONTENT = 4
 
 
 def _smart_status(text: str, scan_lines: int = 60) -> str:
     """Most informative status line for a pane's last `scan_lines` lines.
 
-    Walks the tail in reverse, dropping noise (banner, HUD, separators), and
-    returns the first meaningful line — preferring a recap (`※`) or activity
-    verb (`✻`) over a raw prompt/response if one appears within the window.
+    Walks the tail in reverse and returns, in order of preference:
+      1. the most recent LIVE-signal line (✻ / ⏺ / ❯) — what's happening now;
+      2. otherwise the most recent recap (※) — the idle summary;
+      3. otherwise any non-noise line — generic fallback for non-Claude panes.
+    Banner / HUD / separator rules and half-rendered glyph fragments are
+    filtered out throughout.
     """
     lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
     if not lines:
@@ -300,16 +313,26 @@ def _smart_status(text: str, scan_lines: int = 60) -> str:
     tail = lines[-scan_lines:]
 
     def is_noise(s: str) -> bool:
-        return any(p.search(s) for p in _NOISE_PATTERNS)
+        if any(p.search(s) for p in _NOISE_PATTERNS):
+            return True
+        # Half-rendered spinner fragment: glyph head but almost nothing after.
+        if s[:1] in _ALL_HEADS and len(s[1:].lstrip()) < _MIN_GLYPH_CONTENT:
+            return True
+        return False
 
-    # Pass 1: preferred summary lines (most recent first).
+    # Pass 1: live conversation signal — overrides recap even when older.
     for ln in reversed(tail):
         s = ln.strip()
         if is_noise(s):
             continue
-        if s[:1] in _PREFERRED_HEADS:
+        if s[:1] in _LIVE_HEADS:
             return s
-    # Pass 2: any non-noise line.
+    # Pass 2: recap is the idle fallback.
+    for ln in reversed(tail):
+        s = ln.strip()
+        if not is_noise(s) and s[:1] == _RECAP_HEAD:
+            return s
+    # Pass 3: any non-noise line (plain shell output, build progress, etc.).
     for ln in reversed(tail):
         s = ln.strip()
         if not is_noise(s):
