@@ -27,27 +27,41 @@ from control_plane.cmux_control import (  # noqa: E402
 
 
 def build_board(client) -> list[dict]:
-    """Return [{nickname,number,title,cwd,selected,status}] for each cmux session.
+    """Return one row dict per cmux session.
 
-    Pure of argv/printing — takes any object exposing list_sessions() +
-    read_surface(surface), so it is unit-testable with a fake client. Reads
-    each pane directly by surface UUID (one list_sessions(), not one per row).
-    The user-facing identifier is `nickname` (stable across pane open/close);
-    `number` is retained for layout and legacy callers.
+    Pure of argv/printing — takes any object exposing list_sessions() plus
+    either read_surface_details() (preferred) or just read_surface(). Each
+    row carries:
+      nickname, number, title, cwd, selected      # session identity
+      activity, response, prompt, recap, hud      # rich card fields
+      status                                       # legacy single line (smart-status)
     """
     rows = []
     for s in client.list_sessions():
-        try:
-            status = client.read_surface(s.surface)
-        except Exception:
-            status = ""
+        details = None
+        status = ""
+        if hasattr(client, "read_surface_details"):
+            try:
+                details = client.read_surface_details(s.surface)
+            except Exception:
+                details = None
+        if hasattr(client, "read_surface"):
+            try:
+                status = client.read_surface(s.surface)
+            except Exception:
+                status = ""
         rows.append({
             "nickname": s.nickname,
             "number": s.number,
             "title": s.title,
             "cwd": s.cwd,
             "selected": s.selected,
-            "status": status,
+            "activity": getattr(details, "activity", ""),
+            "response": getattr(details, "response", ""),
+            "prompt":   getattr(details, "prompt", ""),
+            "recap":    getattr(details, "recap", ""),
+            "hud":      getattr(details, "hud", ""),
+            "status":   status,
         })
     return rows
 
@@ -110,13 +124,26 @@ def _wrap(s: str, *codes: str) -> str:
     return "".join(codes) + s + _RESET
 
 
+_INDENT = "     "  # 5 spaces — under "▶ alpha " column
+
+
+def _truncate(s: str, max_w: int) -> str:
+    """Truncate a plain-text string to `max_w` visible chars, adding `…` if cut."""
+    return s if len(s) <= max_w else s[: max(0, max_w - 1)] + "…"
+
+
 def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> str:
-    """Two lines per session (header + status), header bar with a clock.
+    """Rich multi-line card per session.
+
+    Each card:
+      L1  ▶ <nickname>   <title>           [HUD right-aligned, if present]
+      L2  ➜ <cwd>                                         (dim)
+      L3  ❯ <last user prompt>                            (if any, blue)
+      L4  ⏺ <last assistant response>                     (if any, green)
+      L5  ✻ <current activity verb>                       (if any, yellow)
+      L*  ※ <recap>                                       (only when L3-L5 all empty)
 
     `color=False` drops ANSI so the output is plain (tests, pipes, non-TTY).
-    Colour hierarchy: nicknames stand out (bold cyan), focus marker is bright
-    green, status glyphs are colored by meaning (✻ yellow, ⏺ green, ❯ blue,
-    ※ dim), cwd/separators/footer are dim grey so they recede.
     """
     bar_plain = "─" * width
     clock = datetime.now().strftime("%H:%M:%S")
@@ -133,37 +160,67 @@ def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> s
 
     if not rows:
         out.append(_wrap("  (no cmux sessions)", _DIM) if color else "  (no cmux sessions)")
-    for r in rows:
+
+    for i, r in enumerate(rows):
         sel = bool(r["selected"])
         nick = (r.get("nickname") or "?").ljust(8)
-        title_trunc = (r["title"] or "")[:24]
-        cwd = _short_cwd(r["cwd"] or "")
         focus_mark = "▶" if sel else " "
+        hud = (r.get("hud") or "").strip()
+        cwd = _short_cwd(r.get("cwd") or "")
 
+        # ── L1: focus mark + nickname + title  [HUD right-aligned]
+        # Visible header layout (always the same widths so columns align):
+        #   mark(1) + ␣(1) + nickname(8) = 10 visible before title
+        # Title gets the remaining width minus HUD chip + 1ch gap.
+        lead_visible = 2 + len(nick)  # mark + space + nickname width
+        hud_visible = (len(hud) + 2) if hud else 0  # "[hud]" eats 2 brackets too… we use bare hud
+        max_title = max(8, width - lead_visible - hud_visible - 1)
+        title_trunc = _truncate(r.get("title") or "", max_title)
+        title_padded = title_trunc.ljust(max_title)
         if color:
-            # Same visible layout for every row — mark(1) + ␣(1) + nick(8) —
-            # so titles and arrows line up regardless of focus. Focused row
-            # gets a bright-green ▶ and reverse-video on its bold-cyan
-            # nickname; the inverse block reads as a chip without disturbing
-            # the column grid.
-            mark = (f"{_BOLD}{_FG_GREEN}{focus_mark}{_RESET}"
-                    if sel else focus_mark)
-            nick_disp = (f"{_REVERSE}{_BOLD}{_FG_CYAN}{nick}{_RESET}"
-                         if sel else f"{_BOLD}{_FG_CYAN}{nick}{_RESET}")
-            line = f"{mark} {nick_disp}{title_trunc}  {_DIM}➜ {cwd}{_RESET}"
+            mark_c = (f"{_BOLD}{_FG_GREEN}{focus_mark}{_RESET}"
+                      if sel else focus_mark)
+            nick_c = (f"{_REVERSE}{_BOLD}{_FG_CYAN}{nick}{_RESET}"
+                      if sel else f"{_BOLD}{_FG_CYAN}{nick}{_RESET}")
+            hud_c = _wrap(hud, _DIM, _FG_MAGENTA) if hud else ""
+            l1 = f"{mark_c} {nick_c}{title_padded}{hud_c}"
         else:
-            line = f'{focus_mark} {nick}{title_trunc}  ➜ {cwd}'
-        out.append(line)
+            l1 = f"{focus_mark} {nick}{title_padded}{hud}"
+        out.append(l1)
 
-        # Status line — truncated on visible width, then colored by glyph.
-        status_plain = (r["status"] or "")[: max(0, width - 10)]
-        if status_plain:
-            head = status_plain[:1]
+        # ── L2: cwd
+        cwd_line = f"{_INDENT}➜ {cwd}"
+        out.append(_wrap(cwd_line, _DIM) if color else cwd_line)
+
+        # ── L3-L5: glyph signals (only when populated; conversational order)
+        max_status = max(20, width - len(_INDENT) - 2)
+        glyph_rows = [
+            ("prompt",   r.get("prompt") or ""),
+            ("response", r.get("response") or ""),
+            ("activity", r.get("activity") or ""),
+        ]
+        any_live = False
+        for _kind, line in glyph_rows:
+            if not line:
+                continue
+            any_live = True
+            s_trunc = _truncate(line, max_status)
+            head = s_trunc[:1]
             if color:
-                status_disp = _wrap(status_plain, _STATUS_COLOR.get(head, _DIM))
+                disp = _wrap(s_trunc, _STATUS_COLOR.get(head, _DIM))
             else:
-                status_disp = status_plain
-            out.append(f"        {status_disp}")
+                disp = s_trunc
+            out.append(f"{_INDENT}{disp}")
+
+        # ── L_recap: only when nothing live is showing.
+        recap = r.get("recap") or ""
+        if not any_live and recap:
+            s_trunc = _truncate(recap, max_status)
+            out.append(f"{_INDENT}{_wrap(s_trunc, _DIM) if color else s_trunc}")
+
+        # Thin separator between ships (not after the last one).
+        if i < len(rows) - 1:
+            out.append(_wrap(bar_plain, _DIM) if color else bar_plain)
 
     out.append(_wrap(bar_plain, _DIM) if color else bar_plain)
     footer = 'say "alpha <cmd>" / "bravo …"  →  👍  /  confirm.py'
