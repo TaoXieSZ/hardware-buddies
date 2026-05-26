@@ -24,6 +24,7 @@ from control_plane.cmux_control import (  # noqa: E402
     CmuxClient,
     DEFAULT_CMUX,
 )
+from control_plane import clawd as _clawd  # noqa: E402
 
 
 def build_board(client) -> list[dict]:
@@ -132,7 +133,8 @@ def _truncate(s: str, max_w: int) -> str:
     return s if len(s) <= max_w else s[: max(0, max_w - 1)] + "…"
 
 
-def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> str:
+def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True,
+                 renderer: "Optional[_clawd.ClawdRenderer]" = None) -> str:
     """Rich multi-line card per session.
 
     Each card:
@@ -142,6 +144,11 @@ def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> s
       L4  ⏺ <last assistant response>                     (if any, green)
       L5  ✻ <current activity verb>                       (if any, yellow)
       L*  ※ <recap>                                       (only when L3-L5 all empty)
+
+    When `renderer` is supplied (Kitty-graphics terminal + clawd-on-desk
+    assets), a small live Clawd image sits at the left of each card and the
+    text is right-positioned past it via ANSI cursor moves. Otherwise an
+    emoji glyph stands in for the Clawd (zero-graphics fallback).
 
     `color=False` drops ANSI so the output is plain (tests, pipes, non-TTY).
     """
@@ -161,6 +168,11 @@ def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> s
     if not rows:
         out.append(_wrap("  (no cmux sessions)", _DIM) if color else "  (no cmux sessions)")
 
+    # When a Clawd renderer is present, text is laid out beside the image
+    # (left margin = renderer.indent_cols). Without, the title sits at col 1
+    # and content rows have the legacy 5-space indent.
+    text_offset = renderer.indent_cols if renderer else 0
+
     for i, r in enumerate(rows):
         sel = bool(r["selected"])
         nick = (r.get("nickname") or "?").ljust(8)
@@ -168,37 +180,30 @@ def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> s
         hud = (r.get("hud") or "").strip()
         cwd = _short_cwd(r.get("cwd") or "")
 
-        # ── L1: focus mark + nickname + title  [HUD right-aligned]
-        # Visible header layout (always the same widths so columns align):
-        #   mark(1) + ␣(1) + nickname(8) = 10 visible before title
-        # Title gets the remaining width minus HUD chip + 1ch gap.
-        lead_visible = 2 + len(nick)  # mark + space + nickname width
-        hud_visible = (len(hud) + 2) if hud else 0  # "[hud]" eats 2 brackets too… we use bare hud
-        max_title = max(8, width - lead_visible - hud_visible - 1)
+        # ── L1 (title): focus + nickname + title  [HUD right-aligned]
+        lead_visible = 2 + len(nick)
+        hud_visible = len(hud) if hud else 0
+        max_title = max(8, width - text_offset - lead_visible - hud_visible - 1)
         title_trunc = _truncate(r.get("title") or "", max_title)
         title_padded = title_trunc.ljust(max_title)
         if color:
-            mark_c = (f"{_BOLD}{_FG_GREEN}{focus_mark}{_RESET}"
-                      if sel else focus_mark)
+            mark_c = f"{_BOLD}{_FG_GREEN}{focus_mark}{_RESET}" if sel else focus_mark
             nick_c = (f"{_REVERSE}{_BOLD}{_FG_CYAN}{nick}{_RESET}"
                       if sel else f"{_BOLD}{_FG_CYAN}{nick}{_RESET}")
             hud_c = _wrap(hud, _DIM, _FG_MAGENTA) if hud else ""
             l1 = f"{mark_c} {nick_c}{title_padded}{hud_c}"
         else:
             l1 = f"{focus_mark} {nick}{title_padded}{hud}"
-        out.append(l1)
 
-        # ── L2: cwd
-        cwd_line = f"{_INDENT}➜ {cwd}"
-        out.append(_wrap(cwd_line, _DIM) if color else cwd_line)
-
-        # ── L3-L5: glyph signals (only when populated; conversational order)
-        max_status = max(20, width - len(_INDENT) - 2)
+        # ── L2 (cwd) + L3+ (glyph rows) — content only, no leading indent.
+        cwd_content = _wrap(f"➜ {cwd}", _DIM) if color else f"➜ {cwd}"
+        max_status = max(20, width - text_offset - len(_INDENT) - 2)
         glyph_rows = [
             ("prompt",   r.get("prompt") or ""),
             ("response", r.get("response") or ""),
             ("activity", r.get("activity") or ""),
         ]
+        body_contents: list[str] = [cwd_content]
         any_live = False
         for _kind, line in glyph_rows:
             if not line:
@@ -206,17 +211,24 @@ def render_board(rows: list[dict], width: int = _WIDTH, color: bool = True) -> s
             any_live = True
             s_trunc = _truncate(line, max_status)
             head = s_trunc[:1]
-            if color:
-                disp = _wrap(s_trunc, _STATUS_COLOR.get(head, _DIM))
-            else:
-                disp = s_trunc
-            out.append(f"{_INDENT}{disp}")
-
-        # ── L_recap: only when nothing live is showing.
+            disp = _wrap(s_trunc, _STATUS_COLOR.get(head, _DIM)) if color else s_trunc
+            body_contents.append(disp)
         recap = r.get("recap") or ""
         if not any_live and recap:
             s_trunc = _truncate(recap, max_status)
-            out.append(f"{_INDENT}{_wrap(s_trunc, _DIM) if color else s_trunc}")
+            body_contents.append(_wrap(s_trunc, _DIM) if color else s_trunc)
+
+        # ── Emit. Renderer (Kitty or BlockArt) composes image alongside text;
+        # without one we keep the legacy text-only layout (title at col 1,
+        # content rows 5-space-indented).
+        if renderer is not None:
+            state = _clawd.state_for(r.get("activity") or "", r.get("response") or "",
+                                     r.get("prompt") or "",   r.get("recap") or "")
+            out.extend(renderer.render_card(state, [l1] + body_contents))
+        else:
+            out.append(l1)
+            for c in body_contents:
+                out.append(f"{_INDENT}{c}")
 
         # Thin separator between ships (not after the last one).
         if i < len(rows) - 1:
@@ -263,14 +275,20 @@ def watch(client, interval: float = 2.0, color: bool = True,
     Pass `self_surface` (this pane's cmux surface UUID, supplied by the
     launcher) so the enumerator excludes this pane from the session list.
     Board width is sampled from the live terminal each frame so the layout
-    follows pane resizes.
+    follows pane resizes. When the terminal speaks the Kitty graphics
+    protocol AND clawd-on-desk assets are available, a small live Clawd is
+    embedded in each card (env: AGENT_FLEET_CLAWD, AGENT_FLEET_CLAWD_ASSETS).
     """
     register_self_as_board(self_surface)
+    renderer = _clawd.maybe_renderer() if color else None
+    if renderer is not None:
+        renderer.preload()  # avoid first-frame stutter from cold PNG decode
     try:
         if color:
             sys.stdout.write(_HIDE)
         while True:
-            board = render_board(build_board(client), width=_term_width(), color=color)
+            board = render_board(build_board(client), width=_term_width(),
+                                 color=color, renderer=renderer)
             sys.stdout.write(_CLEAR + board + "\n")
             sys.stdout.flush()
             time.sleep(interval)
