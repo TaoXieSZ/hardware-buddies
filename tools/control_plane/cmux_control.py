@@ -297,6 +297,83 @@ _ALL_HEADS = _LIVE_HEADS + (_RECAP_HEAD,)
 _MIN_GLYPH_CONTENT = 4
 
 
+@dataclass(frozen=True)
+class PaneDetails:
+    """Multi-signal extract from a pane — what to put on a board card."""
+    activity: str = ""   # most recent ✻ verb (live thinking)
+    response: str = ""   # most recent ⏺ assistant response
+    prompt: str = ""     # most recent ❯ user prompt
+    recap: str = ""      # most recent ※ idle summary
+    hud: str = ""        # OMC HUD reformatted compactly (e.g. "ctx 5% · 5h 24% · sn 30m"); "" if absent
+
+
+_HUD_CTX_RE   = _re.compile(r"ctx:(\d+%)")
+_HUD_5H_RE    = _re.compile(r"5h:(\d+%)")
+_HUD_WK_RE    = _re.compile(r"wk:(\d+%)")
+_HUD_SESS_RE  = _re.compile(r"session:(\d+)m")
+
+
+def _parse_hud(line: str) -> str:
+    """Reformat an OMC HUD line into a compact dim-grey-friendly summary.
+
+    Raw:  `[OMC#4.13.4] | 5h:24%(2h48m) wk:5%(0h18m) sn:0% | session:1069m | ctx:5%`
+    Out:  `ctx 5% · 5h 24% · wk 5% · sn 17.8h`
+    Empty if `line` isn't a recognisable HUD line.
+    """
+    if not line.lstrip().startswith("[OMC#"):
+        return ""
+    parts: list[str] = []
+    if (m := _HUD_CTX_RE.search(line)):
+        parts.append(f"ctx {m.group(1)}")
+    if (m := _HUD_5H_RE.search(line)):
+        parts.append(f"5h {m.group(1)}")
+    if (m := _HUD_WK_RE.search(line)):
+        parts.append(f"wk {m.group(1)}")
+    if (m := _HUD_SESS_RE.search(line)):
+        mins = int(m.group(1))
+        parts.append(f"sn {mins / 60:.1f}h" if mins >= 60 else f"sn {mins}m")
+    return " · ".join(parts)
+
+
+def _extract_details(text: str, scan_lines: int = 80) -> PaneDetails:
+    """Pull the most recent live signal of each kind from a pane's tail.
+
+    Walks reverse, filling each field once with the most recent qualifying
+    line. OMC HUD is read from `[OMC#…]` lines (otherwise noise) and
+    reformatted via `_parse_hud`.
+    """
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return PaneDetails()
+    tail = lines[-scan_lines:]
+    bag = {"activity": "", "response": "", "prompt": "", "recap": "", "hud": ""}
+    for ln in reversed(tail):
+        s = ln.strip()
+        # HUD is technically noise to _smart_status but useful here — check first.
+        if not bag["hud"] and s.lstrip().startswith("[OMC#"):
+            hud = _parse_hud(s)
+            if hud:
+                bag["hud"] = hud
+            continue
+        # Skip banner / separator / half-rendered spinner noise.
+        if any(p.search(s) for p in _NOISE_PATTERNS):
+            continue
+        head = s[:1]
+        if head in _ALL_HEADS and len(s[1:].lstrip()) < _MIN_GLYPH_CONTENT:
+            continue
+        if head == "✻" and not bag["activity"]:
+            bag["activity"] = s
+        elif head == "⏺" and not bag["response"]:
+            bag["response"] = s
+        elif head in ("❯", ">") and not bag["prompt"]:
+            bag["prompt"] = s
+        elif head == "※" and not bag["recap"]:
+            bag["recap"] = s
+        if all(bag.values()):
+            break
+    return PaneDetails(**bag)
+
+
 def _smart_status(text: str, scan_lines: int = 60) -> str:
     """Most informative status line for a pane's last `scan_lines` lines.
 
@@ -426,6 +503,10 @@ class CmuxClient:
         verb (`✻`) over a raw prompt/response line.
         """
         return _smart_status(self.read_surface_text(surface))
+
+    def read_surface_details(self, surface: str) -> PaneDetails:
+        """Structured multi-signal extract for a rich board card."""
+        return _extract_details(self.read_surface_text(surface))
 
     def route(self, target, text: str) -> str:
         """Focus the targeted ship, type `text` verbatim, and submit (Enter).
