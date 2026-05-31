@@ -67,6 +67,11 @@ class BuddyState:
     limit_7d: int = 0      # rolling 7d rate-limit used %
     session_ms: int = 0    # session elapsed time, milliseconds
 
+    # Stick health snapshot from periodic {"cmd":"telemetry"} push. Not
+    # part of the heartbeat payload — internal-only for dashboards. dict
+    # shape: {"bat": {"pct","mV","usb"}, "imu": {"ax","ay","az"}, "ts": float}.
+    stick_telemetry: dict | None = None
+
     # internal — not sent
     # session_id -> {"running": bool, ...}  (bridges may add "last_seen")
     _sessions: dict = field(default_factory=dict)
@@ -167,7 +172,8 @@ def _send_key(keycode: int, down: bool) -> None:
 
 
 def make_on_stick_line(ptt_keycode: int, ptt_mode: str,
-                       log: logging.Logger) -> tuple[Callable[[str], None], dict]:
+                       log: logging.Logger,
+                       state: "BuddyState | None" = None) -> tuple[Callable[[str], None], dict]:
     """Factory: returns (on_stick_line callback, PENDING dict).
 
     Keeping PENDING inside the closure means each daemon gets an isolated
@@ -216,19 +222,32 @@ def make_on_stick_line(ptt_keycode: int, ptt_mode: str,
                 fut.get_loop().call_soon_threadsafe(_safe_set, fut, decision)
             return
 
+        if cmd == "telemetry":
+            # Periodic stick health beat: battery + IMU. Logged + stashed
+            # on BuddyState for dashboard surfacing. Stays None if no
+            # state was passed (older callers).
+            bat = obj.get("bat") or {}
+            imu = obj.get("imu") or {}
+            log.info("telem bat=%s%%/%smV usb=%s imu=(%s,%s,%s)",
+                     bat.get("pct"), bat.get("mV"), bat.get("usb"),
+                     imu.get("ax"), imu.get("ay"), imu.get("az"))
+            if state is not None:
+                state.stick_telemetry = {"bat": bat, "imu": imu, "ts": time.time()}
+            return
+
         if cmd == "mic":
-            state = (obj.get("state") or "").lower()
-            if state not in ("down", "up"):
+            mic_state = (obj.get("state") or "").lower()
+            if mic_state not in ("down", "up"):
                 return
             if mode == "hold":
-                log.info("mic %s → key %d %s", state, ptt_keycode,
-                         "down" if state == "down" else "up")
-                _send_key(ptt_keycode, state == "down")
+                log.info("mic %s → key %d %s", mic_state, ptt_keycode,
+                         "down" if mic_state == "down" else "up")
+                _send_key(ptt_keycode, mic_state == "down")
             elif mode == "double_tap":
-                log.info("mic %s → double-tap key %d", state, ptt_keycode)
+                log.info("mic %s → double-tap key %d", mic_state, ptt_keycode)
                 _double_tap()
             else:  # tap
-                log.info("mic %s → tap key %d", state, ptt_keycode)
+                log.info("mic %s → tap key %d", mic_state, ptt_keycode)
                 _send_key(ptt_keycode, True)
                 _send_key(ptt_keycode, False)
             return
@@ -464,6 +483,22 @@ class MultiBleWriter:
             *(p.write(payload) for p in self._peers),
             return_exceptions=True,
         )
+
+    async def write_to(self, prefix: str, payload: dict):
+        """Send `payload` to the single peer whose device_prefix matches.
+
+        Used for peer-specific control frames (e.g. RoverC drive/dance to
+        the Claude-RC- peer only) so we don't broadcast to — and spam
+        "write skipped" for — peers that don't understand the cmd. Matches
+        exact prefix first, then substring. No-op (warns) if no such peer.
+        """
+        peer = next((p for p in self._peers if p._device_prefix == prefix), None)
+        if peer is None:
+            peer = next((p for p in self._peers if prefix in p._device_prefix), None)
+        if peer is None:
+            self._log.warning("write_to: no peer matching %s", prefix)
+            return
+        await peer.write(payload)
 
     async def close(self):
         await asyncio.gather(
@@ -737,7 +772,11 @@ def run(
     )
     log = logging.getLogger(name)
 
-    on_stick_line, pending = make_on_stick_line(ptt_keycode, ptt_mode, log)
+    # Single shared BuddyState — created here (not inside _main) so the
+    # on_stick_line telemetry callback and the _main server/emit/dashboard
+    # all mutate and read the *same* instance.
+    state = BuddyState()
+    on_stick_line, pending = make_on_stick_line(ptt_keycode, ptt_mode, log, state=state)
 
     # device_prefix is comma-separated for multi-peer (Plus2 + StackChan).
     # A single token (no comma) preserves the original single-peer
@@ -771,7 +810,6 @@ def run(
         except FileNotFoundError:
             pass
 
-        state = BuddyState()
         dirty = asyncio.Event()
 
         server = await asyncio.start_unix_server(
