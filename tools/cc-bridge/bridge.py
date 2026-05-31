@@ -40,6 +40,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from buddy_core import run, BuddyState
 from buddy_core.frame_server import FrameServer
 from dashboard import start_dashboard, DEFAULT_PORT as DASH_DEFAULT_PORT
+from rover_dashboard import (
+    start_rover_dashboard,
+    DEFAULT_PORT as ROVER_DEFAULT_PORT,
+    DEFAULT_TARGET_PREFIX as ROVER_DEFAULT_PREFIX,
+)
 
 # ─── config ────────────────────────────────────────────────────────────
 SOCKET_PATH = os.environ.get("CC_BRIDGE_SOCKET", "/tmp/cc-bridge.sock")
@@ -315,11 +320,25 @@ if __name__ == "__main__":
     # a gesture. At ~10 fps capture this is roughly half a second of hold.
     GESTURE_HOLD = int(os.environ.get("CC_BRIDGE_GESTURE_HOLD", "5"))
 
+    # RoverC control/telemetry dashboard port; 0 disables. Only started when
+    # a rover peer (prefix containing "RC") is actually configured.
+    ROVER_PORT = int(os.environ.get("CC_BRIDGE_ROVER_PORT", str(ROVER_DEFAULT_PORT)))
+
     def _on_loop_start(ble, loop, log, state: BuddyState):
         if DASH_PORT > 0:
             start_dashboard(ble, loop, log=log, port=DASH_PORT)
         else:
             log.info("dashboard disabled (CC_BRIDGE_DASH_PORT=0)")
+        # Rover dashboard: derive the target peer prefix from the configured
+        # BLE peers (the one containing "RC"); skip entirely if no rover peer.
+        rover_prefix = next(
+            (p._device_prefix for p in getattr(ble, "_peers", [])
+             if "RC" in p._device_prefix), None)
+        if ROVER_PORT > 0 and rover_prefix:
+            start_rover_dashboard(state, ble, loop, log=log,
+                                  target_prefix=rover_prefix, port=ROVER_PORT)
+        elif ROVER_PORT > 0:
+            log.info("rover dashboard skipped (no RC peer in BLE prefixes)")
         if FRAME_PORT > 0:
             _start_frame_server(ble, loop, log, state)
         else:
