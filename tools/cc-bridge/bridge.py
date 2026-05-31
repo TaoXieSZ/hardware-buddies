@@ -28,6 +28,7 @@ Run as launchd daemon:
 """
 
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -103,6 +104,47 @@ def _clear_waiting(state: BuddyState) -> None:
     state.prompt = None
 
 
+# ─── RoverC dance linkage ──────────────────────────────────────────────
+# apply_event has a fixed (state, ev) signature and no BLE handle, so the
+# rover writer/loop/prefix are stashed module-level by _on_loop_start once
+# the BLE loop is up. apply_event then fires a one-shot dance on Stop /
+# PostToolUse. None until wired (single-stick / no-rover deployments).
+_ROVER_BLE = None
+_ROVER_LOOP = None
+_ROVER_PREFIX = None
+_rover_last_dance = 0.0
+# PostToolUse fires many times per turn — cap auto-dances to one per N s so
+# the rover doesn't churn nonstop (and drain its battery). 0 disables all
+# event-linked dancing.
+ROVER_DANCE_COOLDOWN_S = float(os.environ.get("CC_BRIDGE_ROVER_DANCE_COOLDOWN", "8"))
+
+
+def _rover_dance(ms: int, respect_cooldown: bool = True) -> None:
+    """Schedule a one-shot rover dance from sync code (apply_event).
+
+    No-op unless a rover peer is wired. Targets only the rover peer via
+    MultiBleWriter.write_to (falls back to broadcast write for a single
+    BleWriter). Cooldown guards against PostToolUse spam.
+    """
+    global _rover_last_dance
+    if _ROVER_BLE is None or _ROVER_LOOP is None or _ROVER_PREFIX is None:
+        return
+    if ROVER_DANCE_COOLDOWN_S <= 0:
+        return  # disabled
+    now = time.time()
+    if respect_cooldown and (now - _rover_last_dance) < ROVER_DANCE_COOLDOWN_S:
+        return
+    _rover_last_dance = now
+    payload = {"cmd": "dance", "ms": int(ms)}
+    try:
+        coro = (_ROVER_BLE.write_to(_ROVER_PREFIX, payload)
+                if hasattr(_ROVER_BLE, "write_to") else _ROVER_BLE.write(payload))
+        asyncio.run_coroutine_threadsafe(coro, _ROVER_LOOP)
+        logging.getLogger("cc-bridge").info("rover dance ms=%d", int(ms))
+    except Exception:
+        pass
+
+
 def apply_event(state: BuddyState, ev: dict) -> bool:
     """Mutate state from a Claude Code hook event. Returns True if the
     payload changed materially (= we should re-emit immediately)."""
@@ -168,6 +210,7 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
             state.running = max(0, state.running - 1)
             state.msg = "ready"
             changed = True
+            _rover_dance(3000, respect_cooldown=False)  # end-of-turn celebration
 
     elif name == "PreToolUse":
         # A tool starting means a pending permission was granted.
@@ -185,6 +228,7 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
         tool = ev.get("tool_name") or "tool"
         state.msg = f"done: {tool}"
         changed = True
+        _rover_dance(1200)  # short wiggle; cooldown caps the per-turn frequency
 
     elif name in ("PermissionRequest", "Notification"):
         # Permission ask blocks the session — surface it.
@@ -331,9 +375,21 @@ if __name__ == "__main__":
             log.info("dashboard disabled (CC_BRIDGE_DASH_PORT=0)")
         # Rover dashboard: derive the target peer prefix from the configured
         # BLE peers (the one containing "RC"); skip entirely if no rover peer.
-        rover_prefix = next(
-            (p._device_prefix for p in getattr(ble, "_peers", [])
-             if "RC" in p._device_prefix), None)
+        # Derive the rover peer prefix from either a MultiBleWriter (._peers)
+        # or a single BleWriter (._device_prefix, when only Claude-RC- is
+        # configured). Without the single-writer branch the dashboard +
+        # event-linked dance silently no-op in single-peer deployments.
+        _peers = getattr(ble, "_peers", None)
+        if _peers is not None:
+            rover_prefix = next((p._device_prefix for p in _peers
+                                 if "RC" in p._device_prefix), None)
+        else:
+            _pfx = getattr(ble, "_device_prefix", "")
+            rover_prefix = _pfx if "RC" in _pfx else None
+        if rover_prefix:
+            # Wire the event-linked dance (apply_event reads these).
+            global _ROVER_BLE, _ROVER_LOOP, _ROVER_PREFIX
+            _ROVER_BLE, _ROVER_LOOP, _ROVER_PREFIX = ble, loop, rover_prefix
         if ROVER_PORT > 0 and rover_prefix:
             start_rover_dashboard(state, ble, loop, log=log,
                                   target_prefix=rover_prefix, port=ROVER_PORT)
