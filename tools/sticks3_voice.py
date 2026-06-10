@@ -176,6 +176,10 @@ class Sink:
             self.tee.append(pcm)         # DEBUG tee of everything pushed
             self.pushed += len(pcm)
 
+    def pending(self):
+        with self.lock:
+            return sum(len(c) for c in self.buf)
+
     def _cb(self, outdata, frames, t, status):
         if status:
             self.cb_status += 1
@@ -254,6 +258,7 @@ def main():
                 if state["sink"]: state["sink"].close()
                 state["sink"] = Sink(sr)
             state["active"] = True
+            state["gen"] = state.get("gen", 0) + 1   # cancels any pending delayed key-up
             ptt_trigger(True)
             print(f"\n=== audio_begin sr={sr} → PTT key {PTT_KEYCODE} DOWN, speak ===")
         elif evt == "audio":
@@ -274,12 +279,29 @@ def main():
         elif evt == "audio_end":
             if not state["active"]:
                 return
-            ptt_trigger(False)
             state["active"] = False
+            # Do NOT release the PTT key yet: BLE delivery lags real time, so
+            # the sink still holds the tail of the utterance. Releasing now
+            # makes Doubao stop listening before the last words reach
+            # BlackHole — the dictation loses its ending. Wait for the sink
+            # to drain (+ a margin for Doubao to consume), then key-up.
+            # A new audio_begin bumps state["gen"], cancelling this key-up so
+            # rapid re-records don't release the freshly-pressed key.
+            gen = state.get("gen", 0)
+            sink = state["sink"]
+            def _drain_then_keyup():
+                t0 = time.time()
+                while time.time() - t0 < 6.0 and sink and sink.pending() > 0:
+                    time.sleep(0.05)
+                time.sleep(0.3)
+                if state.get("gen", 0) == gen:
+                    ptt_trigger(False)
+                    print(f"[ptt] key UP after drain ({time.time()-t0:.2f}s)")
+            threading.Thread(target=_drain_then_keyup, daemon=True).start()
             print(f"=== audio_end reason={o.get('reason')} frames={state['frames']} "
-                  f"→ PTT key UP ===")
-            if state["sink"]:
-                state["sink"].dump_tee()
+                  f"→ draining, key UP deferred ===")
+            if sink:
+                sink.dump_tee()
 
     def on_notify(_char, data: bytearray):
         buf.extend(data)
