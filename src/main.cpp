@@ -1,6 +1,7 @@
 #include <M5Unified.h>
 #include "m5_compat.h"
 #include <LittleFS.h>
+#include <esp_mac.h>   // esp_read_mac/ESP_MAC_BT — no longer transitively included
 #include <stdarg.h>
 #include "ble_bridge.h"
 #include "bugc2.h"
@@ -1120,6 +1121,13 @@ void setup() {
   Serial.println(bugc2Present ? "bugc2: present" : "bugc2: not present");
   // (motor diag removed; calibration now done over BLE via the HTML tool —
   // see tools/motor-calib.html and {"cmd":"motor","s":[...]} in data.h)
+
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Voice-mic build: drop to 80 MHz — roughly halves active draw vs the
+  // default 240 MHz, and is still plenty for NimBLE (its floor) + 16 kHz
+  // ADPCM encode + the mic UI. Set last so all init runs at full speed.
+  setCpuFrequencyMhz(80);
+#endif
 }
 
 #if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
@@ -1676,12 +1684,24 @@ void loop() {
 
   // millis() not the cached `now`: wake() runs after `now` is captured,
   // so now - lastInteractMs underflows when a button is held → flicker.
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Voice-mic build power policy: an active recording holds the screen awake
+  // (a >30s dictation must not blank mid-hold), otherwise blank after 15s —
+  // USB included, there's no clock face worth keeping lit. Battery is tiny;
+  // the backlight is the dominant drain.
+  if (micActive) lastInteractMs = millis();
+  if (!screenOff && millis() - lastInteractMs > 15000) {
+    axpSetLDO2(false);
+    screenOff = true;
+  }
+#else
   // No auto-off on USB power — clock face wants to stay visible while charging.
   if (!screenOff && !inPrompt && !_onUsb
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     axpSetLDO2(false);
     screenOff = true;
   }
+#endif
 
   delay(screenOff ? 100 : 16);
 }
