@@ -57,6 +57,9 @@ PTT_KEYCODE = int(os.environ.get("CC_BRIDGE_PTT_KEYCODE", "61"))  # right Option
 # "tap" = Typeless toggle (default); "hold" = Doubao 长按 / classic PTT;
 # "double_tap" = Doubao 免按. See tools/buddy_core/core.py:make_on_stick_line.
 PTT_MODE = os.environ.get("CC_BRIDGE_PTT_MODE", "tap")
+# Wired Tab5 peer (USB-CDC serial). Empty = disabled. The same NDJSON
+# heartbeat goes down the wire; {"cmd":"permission"...} / btn lines come back.
+TAB5_SERIAL = os.environ.get("CC_BRIDGE_TAB5_SERIAL", "")
 
 # cc-bridge talks to the firmware's debug service (unencrypted) instead
 # of the encrypted NUS that Claude Desktop uses. Same line-JSON protocol;
@@ -510,4 +513,5 @@ if __name__ == "__main__":
         on_loop_start=_on_loop_start,
         extra_tasks=[reaper_loop],
         route_stager=_route_stager,
+        serial_port=TAB5_SERIAL or None,
     )

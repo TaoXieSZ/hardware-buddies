@@ -507,6 +507,165 @@ class MultiBleWriter:
         )
 
 
+class SerialPortWriter:
+    """NDJSON over a USB-CDC serial port — the Tab5's default link.
+
+    Same duck-typed surface as BleWriter (any_connected / connected_prefixes /
+    ensure_connected / write / close). The port comes and goes (flashing,
+    unplug): ensure_connected() reopens it, the rx task exits on error and is
+    respawned on the next successful open. connected_prefixes deliberately
+    lacks the "SC" substring so _handle_wait_permission treats the Tab5 as a
+    permission-capable peer (it has on-screen Allow/Deny buttons).
+    """
+
+    def __init__(self, port: str, on_tx_line=None,
+                 log: logging.Logger | None = None, baud: int = 115200):
+        self._port_path = port
+        self._baud = baud
+        self._on_tx_line = on_tx_line
+        self._log = log or _log
+        self._ser = None
+        self._rx_task = None
+        self._tx_lock = asyncio.Lock()
+        self._on_connect_cb: Callable | None = None
+
+    @property
+    def any_connected(self) -> bool:
+        return self._ser is not None and getattr(self._ser, "is_open", False)
+
+    @property
+    def connected_prefixes(self) -> list[str]:
+        return ["Tab5-serial"] if self.any_connected else []
+
+    async def ensure_connected(self) -> bool:
+        if self.any_connected:
+            return True
+        try:
+            import serial  # pyserial — lazy so BLE-only deployments don't need it
+            self._ser = serial.Serial(self._port_path, self._baud, timeout=0)
+        except Exception as e:
+            self._ser = None
+            self._log.debug("serial open failed (%s): %s", self._port_path, e)
+            return False
+        self._log.info("serial connected: %s", self._port_path)
+        if self._rx_task is None or self._rx_task.done():
+            self._rx_task = asyncio.create_task(self._rx_loop())
+        if self._on_connect_cb:
+            try:
+                self._on_connect_cb()
+            except Exception:
+                self._log.exception("serial on_connect_cb failed")
+        return True
+
+    async def _rx_loop(self):
+        buf = b""
+        loop = asyncio.get_event_loop()
+        while True:
+            ser = self._ser
+            if ser is None or not getattr(ser, "is_open", False):
+                return
+            try:
+                chunk = await loop.run_in_executor(None, ser.read, 4096)
+            except Exception as e:
+                self._log.info("serial dropped: %s", e)
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                if self._ser is ser:
+                    self._ser = None
+                return
+            if chunk:
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="replace").strip()
+                    # the same port carries the firmware's debug prints —
+                    # only JSON lines go to the dispatcher
+                    if text.startswith("{") and self._on_tx_line:
+                        try:
+                            self._on_tx_line(text)
+                        except Exception:
+                            self._log.exception("serial rx line failed")
+            else:
+                await asyncio.sleep(0.05)
+
+    async def write(self, payload: dict):
+        ser = self._ser
+        if ser is None or not getattr(ser, "is_open", False):
+            return
+        data = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
+        async with self._tx_lock:
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, ser.write, data)
+            except Exception as e:
+                self._log.info("serial write failed: %s", e)
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                if self._ser is ser:
+                    self._ser = None
+
+    async def close(self):
+        ser, self._ser = self._ser, None
+        if ser:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+
+class CompositeWriter:
+    """Fan-out across heterogeneous writers (BLE peers + serial ports)."""
+
+    def __init__(self, writers: list, log: logging.Logger | None = None):
+        self._writers = writers
+        self._log = log or _log
+        self._on_connect_cb: Callable | None = None
+
+    def _propagate_on_connect(self):
+        for w in self._writers:
+            w._on_connect_cb = self._on_connect_cb
+            if hasattr(w, "_propagate_on_connect"):
+                w._propagate_on_connect()
+
+    @property
+    def any_connected(self) -> bool:
+        return any(w.any_connected for w in self._writers)
+
+    @property
+    def connected_prefixes(self) -> list[str]:
+        out: list[str] = []
+        for w in self._writers:
+            out.extend(w.connected_prefixes)
+        return out
+
+    async def ensure_connected(self) -> bool:
+        rs = await asyncio.gather(
+            *(w.ensure_connected() for w in self._writers),
+            return_exceptions=True,
+        )
+        return all((not isinstance(r, Exception)) and bool(r) for r in rs)
+
+    async def write(self, payload: dict):
+        await asyncio.gather(
+            *(w.write(payload) for w in self._writers),
+            return_exceptions=True,
+        )
+
+    async def write_to(self, prefix: str, payload: dict):
+        for w in self._writers:
+            if hasattr(w, "write_to"):
+                await w.write_to(prefix, payload)
+
+    async def close(self):
+        await asyncio.gather(
+            *(w.close() for w in self._writers),
+            return_exceptions=True,
+        )
+
+
 # ─── socket protocol ───────────────────────────────────────────────────
 async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                         dirty: asyncio.Event, apply_event: Callable,
@@ -740,6 +899,7 @@ def run(
     log_fmt: Callable[[dict], str] | None = None,
     on_loop_start: Callable | None = None,
     route_stager=None,
+    serial_port: str | None = None,
 ) -> None:
     """Configure logging, wire everything up, and run the event loop.
 
@@ -802,6 +962,15 @@ def run(
         )
         if on_connect_cb:
             ble._on_connect_cb = on_connect_cb
+
+    # Optional wired peer (Tab5 over USB-CDC) — same heartbeat fan-out, same
+    # inbound dispatcher. Composes with whatever BLE writer was built above.
+    if serial_port:
+        ser_w = SerialPortWriter(serial_port, on_tx_line=on_stick_line, log=log)
+        if on_connect_cb:
+            ser_w._on_connect_cb = on_connect_cb
+        log.info("serial peer enabled: %s", serial_port)
+        ble = CompositeWriter([ble, ser_w], log=log)
 
     async def _main():
         # Clean up stale socket.
