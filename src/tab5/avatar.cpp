@@ -153,7 +153,7 @@ bool avatarTick() {
   int delayMs = 0;
   int more = g_gif.playFrame(false, &delayMs);
   applyChrome();
-  if (delayMs < 40) delayMs = 40;
+  if (delayMs < 16) delayMs = 16;   // same floor as the stackchan renderer
   g_nextFrame = now + delayMs;
   if (!more) g_gif.reset();                  // loop
   return true;

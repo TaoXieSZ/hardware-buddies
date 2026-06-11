@@ -490,13 +490,23 @@ void uiTick(const UiStatus& st) {
   avatarSetState(g_sess[g_sel].state);
   bool avFrame = avatarTick();
 
-  // Full 1280x720 redraw+push is expensive (~1.8MB over DSI) — only on real
-  // changes plus a 500ms heartbeat (blink dot, pills). The GIF avatar gets
-  // its own fast path: a 220x220 direct blit per decoded frame, so the
-  // animation runs at native cadence regardless of full-frame rate.
-  static uint32_t lastFull = 0;
-  if (dirty || now - lastFull >= 500) {
-    lastFull = now;
+  // Full 1280x720 redraw+push is expensive (~1.8MB over DSI) and visibly
+  // stalls the GIF, so it runs only when something on screen actually
+  // changed: feed dirty, or the "chrome" (wifi/battery pills, ATTN breathe,
+  // vector-face blink). The old unconditional 500ms repaint hitched the
+  // avatar twice a second for nothing. The GIF keeps its own fast path:
+  // a 220x220 direct blit per decoded frame, native cadence.
+  uint32_t chromeKey = (st.wifiUp ? 1u : 0u)
+                     | ((uint32_t)(uint8_t)st.battPct << 1)
+                     | (((uint32_t)((st.rssi / 5) & 0x3F)) << 9);  // 5dBm steps — raw RSSI jitters every read
+  if (g_sess[0].state == ST_ATTN || g_sess[1].state == ST_ATTN)
+    chromeKey |= ((now / 450) & 1) << 16;            // statusDot breathe
+  if (!avatarReady())
+    chromeKey |= ((now / 130) & 7) << 17;            // vector-face blink/mouth
+  static uint32_t lastChrome = 0xFFFFFFFF;
+  if (chromeKey != lastChrome) { lastChrome = chromeKey; dirty = true; }
+
+  if (dirty) {
     spr.fillSprite(th::BG);
     drawSidebar(st, now);
     drawMain(st, now);
