@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "ui.h"
+#include "sound.h"
 
 static char     g_buf[4608];
 static size_t   g_len = 0;
@@ -13,6 +14,11 @@ static uint32_t g_doneUntil = 0;
 static int      g_prevRunning = 0;
 
 static void handleHeartbeat(JsonDocument& doc) {
+  // One-shot sound trigger — daemon sets "play" for exactly one heartbeat
+  // per hook event (same contract as the stackchan firmware).
+  const char* play = doc["play"] | (const char*)nullptr;
+  if (play && play[0]) soundPlay(play);
+
   int running = doc["running"] | 0;
   int total   = doc["total"] | 0;
   uint32_t tokens = doc["tokens"] | 0;

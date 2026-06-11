@@ -15,6 +15,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include "ui.h"
+#include "sound.h"
 
 static int16_t micBuf[256];
 static int micPeak = 0;
@@ -47,6 +48,7 @@ void setup() {
   Serial.printf("[tab5] wifi: joining %s ...\n", TAB5_WIFI_SSID);
 
   uiInit();
+  soundInit();   // after uiInit — LittleFS is mounted there
   kbdInit();   // USB-A HID keyboard host
   Serial.printf("[tab5] board=%d display=%dx%d psram=%u mic=%d\n",
                 (int)M5.getBoard(), M5.Display.width(), M5.Display.height(),
@@ -57,6 +59,7 @@ void loop() {
   M5.update();
   feedPoll();   // drain cc-bridge heartbeats + push touch verdicts
   kbdPoll();    // decoded USB keyboard keys → UI
+  soundTick();  // hand I2S back to the mic when a clip finishes
 
   if (M5.Mic.record(micBuf, 256, 16000)) {
     int peak = 0;
