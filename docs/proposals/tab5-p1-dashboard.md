@@ -104,8 +104,9 @@ cursor-bridge ─────┘ TCP NDJSON :8772                              �
 | # | Deliverable | Gate |
 |---|---|---|
 | **M0** | ✅ **DONE 2026-06-11.** WiFi smoke: hello-world + WiFi join + RSSI on screen | PASSED — IP obtained over the C6 radio path. Required a one-shot C6 firmware update first: factory units ship esp-hosted slave 1.4.1, incompatible with the Arduino 2.8.x host (scans fail silently); `tools/tab5-c6-updater/` flashes esp32c6-v2.8.5 over SDIO (see its README for the full landmine list). Board must be `m5stack-tab5-p4`, NOT esp32-p4-evboard (wrong SDIO pins → WL_STOPPED). |
-| **M1** | `TcpServerWriter` in buddy_core + cc-bridge flag; Tab5 single feed renders header+transcript live | Real Claude Code session visible on Tab5 |
-| **M2** | Touch Approve/Deny round-trip | A real PreToolUse permission resolved by tapping the screen |
+| **M1** | ✅ **DONE 2026-06-11.** Transport changed to **USB-CDC serial** (device is always plugged in; zero config, and the firmware-side protocol is identical) — `SerialPortWriter`+`CompositeWriter` in buddy_core, `CC_BRIDGE_TAB5_SERIAL` env. Live heartbeats render state/transcript/tokens; gotcha: HWCDC default 256 B RX ring silently corrupted >1 KB snapshots — `setRxBufferSize(8192)`. WiFi remains the wireless option. | PASSED — live session visible, user-verified |
+| **M1.5** | ✅ **DONE 2026-06-11.** Keyboards: Tab5 Keyboard accessory (ExtPort1 I2C @0x6D, HID mode, SDA0/SCL1 per upstream example) + USB-A HID host (usb_host stack). Arrows switch session, Enter/y allow, Esc/n deny. | PASSED — user-verified |
+| **M2** | Touch/keyboard Approve/Deny round-trip against a REAL permission prompt | A real PreToolUse permission resolved from the device |
 | **M3** | Second feed (cursor-bridge) + sidebar switching + ATTN cross-flash | Both agents monitored simultaneously |
 | **M4** | clawd avatar + screen-off/tap-wake + polish | Daily-drivable desk device |
 ```

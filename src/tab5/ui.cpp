@@ -1,0 +1,507 @@
+// Tab5 dashboard UI — design pass (P1 layout C).
+// 1280x720 landscape, full-frame PSRAM sprite, M5GFX primitives only.
+// Visual language: dark blue-grey surfaces in three elevations, Claude
+// coral accent, semantic state colors, rounded cards with 1px lift
+// borders, efontCN for CJK-safe transcript text.
+#include <M5Unified.h>
+#include "ui.h"
+#include "avatar.h"
+
+extern "C" const uint16_t logo40[];   // logo_data.c (generated from the SVG mark)
+
+// ---------- theme ----------
+#define C565(r,g,b) (uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3))
+namespace th {
+  constexpr uint16_t BG        = C565(0x0E,0x11,0x16);  // app background
+  constexpr uint16_t PANEL     = C565(0x14,0x19,0x20);  // sidebar
+  constexpr uint16_t CARD      = C565(0x1C,0x23,0x2E);  // cards
+  constexpr uint16_t CARD_HI   = C565(0x24,0x2D,0x3A);  // card lift border
+  constexpr uint16_t ACCENT    = C565(0xD9,0x77,0x57);  // Claude coral
+  constexpr uint16_t ACCENT_DK = C565(0x8A,0x4A,0x36);
+  constexpr uint16_t TEXT      = C565(0xE6,0xED,0xF3);
+  constexpr uint16_t DIM       = C565(0x8B,0x94,0x9E);
+  constexpr uint16_t FAINT     = C565(0x4A,0x55,0x62);
+  constexpr uint16_t IDLE      = C565(0x6E,0x76,0x81);
+  constexpr uint16_t BUSY      = C565(0x44,0x93,0xF8);
+  constexpr uint16_t ATTN      = C565(0xD2,0x99,0x22);
+  constexpr uint16_t DONE      = C565(0x3F,0xB9,0x50);
+  constexpr uint16_t ERR       = C565(0xF8,0x51,0x49);
+  constexpr uint16_t BTN_OK    = C565(0x2E,0xA0,0x43);
+  constexpr uint16_t BTN_OK_HI = C565(0x3F,0xB9,0x50);
+}
+
+// layout
+static constexpr int W = 1280, H = 720;
+static constexpr int SB_W = 300;                  // sidebar width
+static constexpr int PAD  = 24;
+static constexpr int AV_CX = SB_W / 2;            // avatar center on screen
+static constexpr int AV_CY = H - 222;
+
+// ---------- demo model (replaced by live feeds in M1) ----------
+enum AState : uint8_t { ST_IDLE, ST_BUSY, ST_ATTN, ST_DONE, ST_ERR };
+static const char* stateWord(uint8_t s) {
+  switch (s) { case ST_BUSY: return "BUSY"; case ST_ATTN: return "ACTION";
+               case ST_DONE: return "DONE"; case ST_ERR: return "ERROR";
+               default: return "IDLE"; }
+}
+static uint16_t stateColor(uint8_t s) {
+  switch (s) { case ST_BUSY: return th::BUSY; case ST_ATTN: return th::ATTN;
+               case ST_DONE: return th::DONE; case ST_ERR: return th::ERR;
+               default: return th::IDLE; }
+}
+
+struct Session {
+  const char* name;
+  uint8_t  state;
+  char     tool[48];
+  char     lines[14][72];
+  int      lineCount;
+  bool     permPending;
+  char     permTool[56];
+  uint32_t tokens;
+};
+
+static Session g_sess[2];
+static int  g_sel = 0;
+static M5Canvas spr;
+
+// live-feed bookkeeping (M1)
+static bool     g_live = false;        // first heartbeat retires the demo
+static bool     g_dirtyFeed = false;   // set by uiFeed* → full redraw
+static uint32_t g_lastFeedMs = 0;
+static char     g_permId[48] = "";
+static char     g_decisionId[48] = "";
+static int      g_decision = -1;       // -1 none, 0 deny, 1 allow
+
+// demo script: cycles the Claude session through the visual states and
+// appends transcript lines so the design can be judged live.
+static const char* kDemoLines[] = {
+  "Read src/tab5/ui.cpp",
+  "Edit drawSidebar() — rounded cards",
+  "Bash pio run -e m5stack-tab5",
+  "build SUCCESS (12.4s)  RAM 18%",
+  "Read docs/proposals/tab5-p1-dashboard.md",
+  "Edit theme.h 调整强调色为珊瑚橙",
+  "TodoWrite (3 items)",
+  "Bash pio test -e native — 41 passed",
+  "Grep \"stateColor\" src/tab5/",
+  "Edit avatar mouth tracks mic level",
+};
+
+static void demoPush(Session& s, const char* text) {
+  if (s.lineCount == 14) {
+    memmove(s.lines[0], s.lines[1], sizeof(s.lines[0]) * 13);
+    s.lineCount = 13;
+  }
+  snprintf(s.lines[s.lineCount++], sizeof(s.lines[0]), "%s", text);
+}
+
+static void demoInit() {
+  g_sess[0] = {};
+  g_sess[0].name = "Claude Code";
+  g_sess[0].state = ST_BUSY;
+  snprintf(g_sess[0].tool, sizeof(g_sess[0].tool), "Bash(pio run)");
+  g_sess[0].tokens = 12300;
+  for (int i = 0; i < 4; i++) demoPush(g_sess[0], kDemoLines[i]);
+
+  g_sess[1] = {};
+  g_sess[1].name = "Cursor";
+  g_sess[1].state = ST_IDLE;
+  snprintf(g_sess[1].tool, sizeof(g_sess[1].tool), "—");
+  g_sess[1].tokens = 2100;
+  demoPush(g_sess[1], "等待任务…");
+}
+
+static bool demoTick(uint32_t now) {
+  bool changed = false;
+  static uint32_t lastLine = 0, lastPhase = 0;
+  static int li = 4, phase = 0;
+  Session& s = g_sess[0];
+  if (s.state == ST_BUSY && now - lastLine > 2600) {
+    lastLine = now;
+    demoPush(s, kDemoLines[li % 10]); li++;
+    s.tokens += 137;
+    changed = true;
+  }
+  if (now - lastPhase > 9000) {
+    lastPhase = now;
+    phase = (phase + 1) % 4;
+    changed = true;
+    switch (phase) {
+      case 0: s.state = ST_BUSY; s.permPending = false;
+              snprintf(s.tool, sizeof(s.tool), "Bash(pio run)"); break;
+      case 1: s.state = ST_ATTN; s.permPending = true;
+              snprintf(s.permTool, sizeof(s.permTool), "Bash(git push origin main)");
+              snprintf(s.tool, sizeof(s.tool), "awaiting permission"); break;
+      case 2: s.state = ST_DONE; s.permPending = false;
+              snprintf(s.tool, sizeof(s.tool), "turn finished");
+              demoPush(s, "✓ 已批准 — push 完成"); break;
+      case 3: s.state = ST_IDLE;
+              snprintf(s.tool, sizeof(s.tool), "—"); break;
+    }
+  }
+  return changed;
+}
+
+// ---------- drawing helpers ----------
+static void card(int x, int y, int w, int h, uint16_t fill, uint16_t border, int r = 14) {
+  spr.fillRoundRect(x, y, w, h, r, fill);
+  spr.drawRoundRect(x, y, w, h, r, border);
+}
+
+static void statusDot(int x, int y, uint8_t state, uint32_t now) {
+  uint16_t c = stateColor(state);
+  if (state == ST_ATTN && ((now / 450) & 1)) c = th::ACCENT;   // breathe
+  spr.fillCircle(x, y, 7, c);
+  if (state == ST_BUSY || state == ST_ATTN) spr.drawCircle(x, y, 11, c);
+}
+
+// clawd-ish vector face: coral squircle, eyes + mouth follow state,
+// mouth opens with the mic level (it "hears" the room).
+static void avatar(int cx, int cy, int size, uint8_t state, int micLevel, uint32_t now) {
+  int r = size / 2;
+  spr.fillRoundRect(cx - r, cy - r, size, size, size / 4, th::ACCENT);
+  spr.drawRoundRect(cx - r, cy - r, size, size, size / 4, th::ACCENT_DK);
+  uint16_t ink = C565(0x21, 0x13, 0x0D);
+  int ey = cy - size / 8;
+  int ex = size / 4;
+  bool blink = ((now / 3100) % 7) == 3 && ((now / 130) & 1);
+  switch (state) {
+    case ST_IDLE:   // sleepy: lid lines
+      spr.fillRect(cx - ex - 12, ey, 24, 5, ink);
+      spr.fillRect(cx + ex - 12, ey, 24, 5, ink);
+      break;
+    case ST_ATTN:   // wide open + raised
+      spr.fillCircle(cx - ex, ey - 4, 11, ink);
+      spr.fillCircle(cx + ex, ey - 4, 11, ink);
+      spr.fillCircle(cx - ex + 3, ey - 7, 3, th::ACCENT);
+      spr.fillCircle(cx + ex + 3, ey - 7, 3, th::ACCENT);
+      break;
+    case ST_DONE:   // happy arcs ^ ^
+      for (int i = -10; i <= 10; i++) {
+        int dy = (i * i) / 14;
+        spr.drawPixel(cx - ex + i, ey + dy - 4, ink);
+        spr.drawPixel(cx - ex + i, ey + dy - 3, ink);
+        spr.drawPixel(cx + ex + i, ey + dy - 4, ink);
+        spr.drawPixel(cx + ex + i, ey + dy - 3, ink);
+      }
+      break;
+    default:        // busy/err: round eyes (with occasional blink)
+      if (blink) {
+        spr.fillRect(cx - ex - 9, ey - 2, 18, 4, ink);
+        spr.fillRect(cx + ex - 9, ey - 2, 18, 4, ink);
+      } else {
+        spr.fillCircle(cx - ex, ey, 9, ink);
+        spr.fillCircle(cx + ex, ey, 9, ink);
+      }
+  }
+  // mouth: height tracks mic level; DONE gets a smile arc
+  int my = cy + size / 5;
+  if (state == ST_DONE) {
+    for (int i = -16; i <= 16; i++) {
+      int dy = 8 - (i * i) / 22;
+      spr.fillRect(cx + i, my + dy, 2, 3, ink);
+    }
+  } else {
+    int mh = 6 + (micLevel * 22) / 100;
+    spr.fillRoundRect(cx - 12, my, 24, mh, 5, ink);
+  }
+}
+
+// Claude starburst mark — 12 tapered rays around a hub.
+static void starburst(int cx, int cy, int R, uint16_t c) {
+  for (int k = 0; k < 12; k++) {
+    float a = k * (2 * (float)PI / 12);
+    float ca = cosf(a), sa = sinf(a);
+    float r0 = R * 0.22f, w = R * 0.16f;
+    int x0 = (int)(cx + ca * r0 - sa * w), y0 = (int)(cy + sa * r0 + ca * w);
+    int x1 = (int)(cx + ca * r0 + sa * w), y1 = (int)(cy + sa * r0 - ca * w);
+    int x2 = (int)(cx + ca * R), y2 = (int)(cy + sa * R);
+    spr.fillTriangle(x0, y0, x1, y1, x2, y2, c);
+  }
+}
+
+static void pill(int x, int y, int w, int h, uint16_t bg, uint16_t fg,
+                 const char* txt, const lgfx::IFont* f) {
+  spr.fillRoundRect(x, y, w, h, h / 2, bg);
+  spr.setFont(f);
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(fg, bg);
+  spr.drawString(txt, x + w / 2, y + h / 2 + 1);
+}
+
+// touch hit rects (screen coords), refreshed every frame
+struct Hit { int x, y, w, h; };
+static Hit g_hitCard[2], g_hitAllow, g_hitDeny;
+static bool inHit(const Hit& r, int x, int y) {
+  return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+// ---------- panels ----------
+static void drawSidebar(const UiStatus& st, uint32_t now) {
+  spr.fillRect(0, 0, SB_W, H, th::PANEL);
+  spr.drawFastVLine(SB_W - 1, 0, H, th::CARD_HI);
+
+  spr.pushImage(22, 20, 40, 40, logo40);
+  spr.setFont(&fonts::FreeSansBold12pt7b);
+  spr.setTextDatum(ML_DATUM);
+  spr.setTextColor(th::TEXT, th::PANEL);
+  spr.drawString("Claude Buddy", 72, 41);
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(g_live ? th::DONE : th::FAINT, th::PANEL);
+  spr.drawString(g_live ? "AGENTS · LIVE" : "AGENTS · DEMO", PAD, 74);
+
+  int y = 106;
+  for (int i = 0; i < 2; i++) {
+    Session& s = g_sess[i];
+    bool sel = (i == g_sel);
+    int ch = 116;
+    card(16, y, SB_W - 32, ch, sel ? th::CARD : th::PANEL,
+         sel ? th::ACCENT : th::CARD_HI, 16);
+    g_hitCard[i] = {16, y, SB_W - 32, ch};
+    statusDot(42, y + 36, s.state, now);
+    spr.setFont(&fonts::FreeSansBold18pt7b);
+    spr.setTextDatum(TL_DATUM);
+    spr.setTextColor(sel ? th::TEXT : th::DIM, sel ? th::CARD : th::PANEL);
+    spr.drawString(s.name, 64, y + 20);
+    spr.setFont(&fonts::efontCN_16);
+    spr.setTextColor(stateColor(s.state), sel ? th::CARD : th::PANEL);
+    spr.drawString(stateWord(s.state), 64, y + 72);
+    char tok[24];
+    snprintf(tok, sizeof(tok), "%.1fk tok", s.tokens / 1000.0f);
+    spr.setTextColor(th::FAINT, sel ? th::CARD : th::PANEL);
+    spr.setTextDatum(TR_DATUM);
+    spr.drawString(tok, SB_W - 28, y + 72);
+    y += ch + 14;
+  }
+
+  // clawd avatar — the project GIF pack, vector face as fallback
+  if (avatarReady()) avatarDraw(spr, AV_CX, AV_CY);
+  else avatar(AV_CX, AV_CY, 170, g_sess[g_sel].state, st.micLevel, now);
+
+  // status strip: wifi + battery pills
+  char wifiTxt[28];
+  if (st.wifiUp) snprintf(wifiTxt, sizeof(wifiTxt), "%s  %ddBm", st.ip, st.rssi);
+  else           snprintf(wifiTxt, sizeof(wifiTxt), "WiFi connecting…");
+  pill(16, H - 104, SB_W - 32, 42, th::CARD,
+       st.wifiUp ? th::DIM : th::ATTN, wifiTxt, &fonts::efontCN_16);
+  char battTxt[20];
+  snprintf(battTxt, sizeof(battTxt), "BAT %d%%", st.battPct);
+  pill(16, H - 54, SB_W - 32, 42, th::CARD,
+       st.battPct <= 20 ? th::ERR : th::DIM, battTxt, &fonts::efontCN_16);
+}
+
+static void drawMain(const UiStatus& st, uint32_t now) {
+  Session& s = g_sess[g_sel];
+  int x0 = SB_W + PAD;
+  int wMain = W - SB_W - PAD * 2;
+
+  spr.fillRect(SB_W, 0, W - SB_W, H, th::BG);
+
+  // header: name + state chip + current tool + clock
+  spr.setFont(&fonts::FreeSansBold24pt7b);
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(th::TEXT, th::BG);
+  spr.drawString(s.name, x0, 24);
+
+  int chipX = x0 + spr.textWidth(s.name) + 24;
+  pill(chipX, 26, 140, 44, stateColor(s.state), C565(0x10, 0x12, 0x16),
+       stateWord(s.state), &fonts::FreeSansBold12pt7b);
+
+  spr.setFont(&fonts::efontCN_24);
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(th::DIM, th::BG);
+  spr.drawString(s.tool, W - PAD, 34);
+  spr.drawFastHLine(x0, 96, wMain, th::CARD_HI);
+
+  // transcript: newest pinned at the bottom; older lines fade out
+  int rowH = 52;
+  int botY = (s.permPending ? H - 220 : H - 40);
+  spr.setFont(&fonts::efontCN_24);
+  spr.setTextDatum(TL_DATUM);
+  int shown = 0;
+  for (int i = s.lineCount - 1; i >= 0 && shown < 13; i--, shown++) {
+    int yy = botY - (shown + 1) * rowH;
+    if (yy < 112) break;
+    uint16_t fg = (shown == 0) ? th::TEXT : (shown < 4 ? th::DIM : th::FAINT);
+    spr.setTextColor(shown == 0 ? th::ACCENT : th::FAINT, th::BG);
+    spr.drawString(">", x0, yy);
+    spr.setTextColor(fg, th::BG);
+    spr.drawString(s.lines[i], x0 + 28, yy);
+  }
+
+  // permission banner
+  g_hitAllow = {0,0,0,0}; g_hitDeny = {0,0,0,0};
+  if (s.permPending) {
+    int by = H - 188, bh = 156;
+    card(x0, by, wMain, bh, th::CARD, th::ATTN, 18);
+    spr.fillRoundRect(x0, by, 8, bh, 4, th::ATTN);
+    spr.setFont(&fonts::efontCN_24);
+    spr.setTextDatum(TL_DATUM);
+    spr.setTextColor(th::ATTN, th::CARD);
+    spr.drawString("权限请求", x0 + 32, by + 22);
+    spr.setFont(&fonts::FreeSansBold18pt7b);
+    spr.setTextColor(th::TEXT, th::CARD);
+    spr.drawString(s.permTool, x0 + 32, by + 64);
+    int bw = 220, bhgt = 72;
+    int axe = x0 + wMain - bw * 2 - 48;
+    int dxe = x0 + wMain - bw - 24;
+    spr.fillRoundRect(axe, by + 42, bw, bhgt, 18, th::BTN_OK);
+    spr.setFont(&fonts::efontCN_24);
+    spr.setTextDatum(MC_DATUM);
+    spr.setTextColor(C565(0xFF,0xFF,0xFF), th::BTN_OK);
+    spr.drawString("✓ 允许", axe + bw / 2, by + 42 + bhgt / 2);
+    spr.drawRoundRect(dxe, by + 42, bw, bhgt, 18, th::ERR);
+    spr.setTextColor(th::ERR, th::CARD);
+    spr.drawString("✗ 拒绝", dxe + bw / 2, by + 42 + bhgt / 2);
+    g_hitAllow = {axe, by + 42, bw, bhgt};
+    g_hitDeny  = {dxe, by + 42, bw, bhgt};
+  }
+}
+
+static bool handleTouch() {
+  auto t = M5.Touch.getDetail();
+  if (!t.wasClicked()) return false;
+  for (int i = 0; i < 2; i++)
+    if (inHit(g_hitCard[i], t.x, t.y)) { g_sel = i; return true; }
+  Session& s = g_sess[g_sel];
+  if (s.permPending) {
+    bool hitA = inHit(g_hitAllow, t.x, t.y);
+    bool hitD = inHit(g_hitDeny, t.x, t.y);
+    if (g_live && g_sel == 0 && (hitA || hitD)) {
+      // queue the verdict for feed.cpp; optimistic UI clear — the next
+      // heartbeat carries the authoritative state
+      snprintf(g_decisionId, sizeof(g_decisionId), "%s", g_permId);
+      g_decision = hitA ? 1 : 0;
+      s.permPending = false;
+      demoPush(s, hitA ? "✓ 已允许（待确认）" : "✗ 已拒绝（待确认）");
+    } else if (hitA) {
+      s.permPending = false; s.state = ST_BUSY;
+      demoPush(s, "✓ 已批准");
+      snprintf(s.tool, sizeof(s.tool), "Bash(git push)");
+    } else if (hitD) {
+      s.permPending = false; s.state = ST_BUSY;
+      demoPush(s, "✗ 已拒绝");
+    }
+  }
+  return true;
+}
+
+// ---------- public ----------
+void uiInit() {
+  spr.setPsram(true);
+  spr.setColorDepth(16);
+  spr.createSprite(W, H);
+  if (!avatarInit(th::PANEL)) Serial.println("[ui] GIF avatar unavailable — vector fallback");
+  demoInit();
+}
+
+void uiFeedAlive() {
+  if (!g_live) {
+    g_live = true;
+    // retire the demo: session 0 becomes the live Claude Code feed
+    g_sess[0].lineCount = 0;
+    g_sess[0].permPending = false;
+    g_dirtyFeed = true;
+  }
+  g_lastFeedMs = millis();
+}
+
+void uiFeedState(uint8_t state, const char* tool, uint32_t tokens) {
+  Session& s = g_sess[0];
+  if (s.state != state) g_dirtyFeed = true;
+  s.state = state;
+  if (strncmp(s.tool, tool, sizeof(s.tool) - 1) != 0) {
+    snprintf(s.tool, sizeof(s.tool), "%s", tool);
+    g_dirtyFeed = true;
+  }
+  s.tokens = tokens;
+}
+
+void uiFeedLine(const char* line) {
+  demoPush(g_sess[0], line);
+  g_dirtyFeed = true;
+}
+
+void uiFeedPrompt(bool pending, const char* id, const char* text) {
+  Session& s = g_sess[0];
+  if (pending != s.permPending) g_dirtyFeed = true;
+  s.permPending = pending;
+  if (pending) {
+    snprintf(g_permId, sizeof(g_permId), "%s", id);
+    snprintf(s.permTool, sizeof(s.permTool), "%s", text);
+  }
+}
+
+// HID usage codes: 0x28 Enter, 0x29 Esc, 0x4F→ 0x50← 0x51↓ 0x52↑, y=0x1C n=0x11
+void uiKeyEvent(uint8_t hidKey, uint8_t mods) {
+  (void)mods;
+  Session& s = g_sess[g_sel];
+  switch (hidKey) {
+    case 0x4F: case 0x51:                       // right/down → next session
+      g_sel = (g_sel + 1) % 2; g_dirtyFeed = true; break;
+    case 0x50: case 0x52:                       // left/up → prev session
+      g_sel = (g_sel + 1) % 2; g_dirtyFeed = true; break;
+    case 0x28: case 0x1C:                       // Enter / y → allow
+      if (s.permPending) {
+        if (g_live && g_sel == 0) {
+          snprintf(g_decisionId, sizeof(g_decisionId), "%s", g_permId);
+          g_decision = 1;
+        }
+        s.permPending = false;
+        demoPush(s, "✓ 已允许（键盘）");
+        g_dirtyFeed = true;
+      }
+      break;
+    case 0x29: case 0x11:                       // Esc / n → deny
+      if (s.permPending) {
+        if (g_live && g_sel == 0) {
+          snprintf(g_decisionId, sizeof(g_decisionId), "%s", g_permId);
+          g_decision = 0;
+        }
+        s.permPending = false;
+        demoPush(s, "✗ 已拒绝（键盘）");
+        g_dirtyFeed = true;
+      }
+      break;
+  }
+}
+
+bool uiTakeDecision(char* idOut, unsigned idCap, bool* allow) {
+  if (g_decision < 0) return false;
+  snprintf(idOut, idCap, "%s", g_decisionId);
+  *allow = (g_decision == 1);
+  g_decision = -1;
+  return true;
+}
+
+void uiTick(const UiStatus& st) {
+  uint32_t now = millis();
+  bool dirty = g_dirtyFeed;
+  g_dirtyFeed = false;
+  if (!g_live) dirty |= demoTick(now);
+  else if (now - g_lastFeedMs > 30000 && g_sess[0].state != ST_IDLE) {
+    // REFERENCE.md: no snapshot for ~30s = link dead
+    g_sess[0].state = ST_IDLE;
+    snprintf(g_sess[0].tool, sizeof(g_sess[0].tool), "link lost");
+    dirty = true;
+  }
+  dirty |= handleTouch();
+  avatarSetState(g_sess[g_sel].state);
+  bool avFrame = avatarTick();
+
+  // Full 1280x720 redraw+push is expensive (~1.8MB over DSI) — only on real
+  // changes plus a 500ms heartbeat (blink dot, pills). The GIF avatar gets
+  // its own fast path: a 220x220 direct blit per decoded frame, so the
+  // animation runs at native cadence regardless of full-frame rate.
+  static uint32_t lastFull = 0;
+  if (dirty || now - lastFull >= 500) {
+    lastFull = now;
+    spr.fillSprite(th::BG);
+    drawSidebar(st, now);
+    drawMain(st, now);
+    spr.pushSprite(&M5.Display, 0, 0);
+  } else if (avFrame && avatarReady()) {
+    avatarPushDirect(AV_CX, AV_CY);
+  }
+}
