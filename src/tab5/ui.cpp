@@ -327,16 +327,23 @@ static void drawSidebar(const UiStatus& st, uint32_t now) {
   if (avatarReady()) avatarDraw(spr, AV_CX, AV_CY);
   else avatar(AV_CX, AV_CY, 170, g_sess[g_sel].state, st.micLevel, now);
 
-  // status strip: wifi + battery pills
-  char wifiTxt[28];
-  if (st.wifiUp) snprintf(wifiTxt, sizeof(wifiTxt), "%s  %ddBm", st.ip, st.rssi);
-  else           snprintf(wifiTxt, sizeof(wifiTxt), "WiFi connecting…");
-  pill(16, H - 104, SB_W - 32, 42, th::CARD,
-       st.wifiUp ? th::DIM : th::ATTN, wifiTxt, uifont(F_SMALL22));
-  char battTxt[20];
-  snprintf(battTxt, sizeof(battTxt), "BAT %d%%", st.battPct);
-  pill(16, H - 54, SB_W - 32, 42, th::CARD,
-       st.battPct <= 20 ? th::ERR : th::DIM, battTxt, uifont(F_SMALL22));
+  // status strip. USB-fed (the normal desk mode): a single link pill —
+  // wifi is irrelevant and the battery reading is meaningless on USB power
+  // (the PMIC flaps 0/100 while charging), so neither is shown.
+  if (g_live) {
+    pill(16, H - 54, SB_W - 32, 42, th::CARD, th::DIM,
+         "USB · 已连接", uifont(F_SMALL22));
+  } else {
+    char wifiTxt[28];
+    if (st.wifiUp) snprintf(wifiTxt, sizeof(wifiTxt), "%s  %ddBm", st.ip, st.rssi);
+    else           snprintf(wifiTxt, sizeof(wifiTxt), "等待 USB 连接…");
+    pill(16, H - 104, SB_W - 32, 42, th::CARD,
+         st.wifiUp ? th::DIM : th::FAINT, wifiTxt, uifont(F_SMALL22));
+    char battTxt[20];
+    snprintf(battTxt, sizeof(battTxt), "BAT %d%%", st.battPct);
+    pill(16, H - 54, SB_W - 32, 42, th::CARD,
+         st.battPct <= 20 ? th::ERR : th::DIM, battTxt, uifont(F_SMALL22));
+  }
 }
 
 static void drawMain(const UiStatus& st, uint32_t now) {
@@ -554,9 +561,11 @@ void uiTick(const UiStatus& st) {
   // or the "chrome" (wifi/battery pills, ATTN breathe, vector-face blink).
   // The GIF keeps its own fast path: a 220x220 direct blit per decoded
   // frame, native cadence.
-  uint32_t chromeKey = (st.wifiUp ? 1u : 0u)
+  // battery/wifi only repaint the sidebar while they're actually shown
+  uint32_t chromeKey = g_live ? 0
+                     : ((st.wifiUp ? 1u : 0u)
                      | ((uint32_t)(uint8_t)st.battPct << 1)
-                     | (((uint32_t)((st.rssi / 5) & 0x3F)) << 9);  // 5dBm steps — raw RSSI jitters every read
+                     | (((uint32_t)((st.rssi / 5) & 0x3F)) << 9));  // 5dBm steps — raw RSSI jitters every read
   if (g_sess[0].state == ST_ATTN || g_sess[1].state == ST_ATTN)
     chromeKey |= ((now / 450) & 1) << 16;            // statusDot breathe
   if (!avatarReady())

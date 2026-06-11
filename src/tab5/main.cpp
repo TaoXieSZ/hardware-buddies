@@ -77,8 +77,25 @@ void loop() {
   if (st.wifiUp) snprintf(st.ip, sizeof(st.ip), "%s", WiFi.localIP().toString().c_str());
   else st.ip[0] = 0;
   st.rssi = st.wifiUp ? WiFi.RSSI() : 0;
-  int batt = M5.Power.getBatteryLevel();
-  st.battPct = batt < 0 ? 0 : (batt > 100 ? 100 : batt);
+  // PMIC reads occasionally return 0/100 outliers (worse when hammered —
+  // this used to poll every loop tick). Sample every 2s, report the median
+  // of the last three so a single bad read never reaches the UI.
+  static int  battS[3] = {-1, -1, -1};
+  static int  battIdx = 0, battShown = 100;
+  static uint32_t battAt = 0;
+  if (millis() - battAt >= 2000) {
+    battAt = millis();
+    int b = M5.Power.getBatteryLevel();
+    battS[battIdx++ % 3] = b < 0 ? 0 : (b > 100 ? 100 : b);
+    if (battS[0] >= 0 && battS[1] >= 0 && battS[2] >= 0) {
+      int lo = min(battS[0], min(battS[1], battS[2]));
+      int hi = max(battS[0], max(battS[1], battS[2]));
+      battShown = battS[0] + battS[1] + battS[2] - lo - hi;
+    } else if (battS[0] >= 0) {
+      battShown = battS[0];
+    }
+  }
+  st.battPct = battShown;
   st.micLevel = micPeak * 100 / 32767;
 
   uiTick(st);
