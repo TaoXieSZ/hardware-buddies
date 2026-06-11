@@ -8,11 +8,19 @@ Format matches M5GFX's VLWfont::loadFont (lgfx_fonts.cpp): 24-byte header,
 loader binary-searches), then concatenated 8-bit alpha bitmaps in the same
 order. BMP code points only (loader stores uint16).
 
-Uses PIL's FreeType binding — no extra deps beyond Pillow.
+Uses PIL's FreeType binding — no extra deps beyond Pillow (+fontTools when
+mixing faces, for exact cmap lookups).
+
+Supports the Apple-style two-face mix: --latin-font renders every glyph it
+actually covers below U+3000 (ASCII, digits, punctuation, symbols) while
+--font keeps the CJK. Baselines align because VLW stores per-glyph dY
+relative to each face's own baseline. --variation / --latin-variation pick
+a named instance of a variable font (e.g. SF Pro "Semibold").
 
 Examples (the exact set the firmware expects):
-  python3 tools/make_vlw.py --font "/System/Library/Fonts/Hiragino Sans GB.ttc" \
-      --index 0 --px 30 --charset full --out data/fonts/main30.vlw
+  python3 tools/make_vlw.py --font PingFang.ttc --index 3 \
+      --latin-font /System/Library/Fonts/SFNS.ttf --px 30 \
+      --charset full --out data/fonts/main30.vlw
   ... see tools/make_vlw.py --help and src/tab5/ui.cpp for the full list.
 """
 
@@ -69,22 +77,46 @@ def render_glyph(font: ImageFont.FreeTypeFont, ch: str, ascent: int):
     return w, h, xadv, dY, dX, g.tobytes()
 
 
+def font_cmap(path: str, index: int) -> set[int]:
+    from fontTools.ttLib import TTFont
+    tf = TTFont(path, fontNumber=index if path.lower().endswith(".ttc") else -1)
+    return set(tf.getBestCmap().keys())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--font", required=True, help="TTF/TTC path")
+    ap.add_argument("--font", required=True, help="TTF/TTC path (CJK / main face)")
     ap.add_argument("--index", type=int, default=0, help="face index in a TTC")
+    ap.add_argument("--variation", default="", help="named instance (variable font)")
+    ap.add_argument("--latin-font", default="", help="optional second face for <U+3000")
+    ap.add_argument("--latin-index", type=int, default=0)
+    ap.add_argument("--latin-variation", default="")
     ap.add_argument("--px", type=int, required=True, help="pixel size")
     ap.add_argument("--charset", default="ui", help="ui | full (ASCII+GB2312-L1)")
     ap.add_argument("--out", required=True, help="output .vlw path")
     a = ap.parse_args()
 
     font = ImageFont.truetype(a.font, a.px, index=a.index)
+    if a.variation:
+        font.set_variation_by_name(a.variation)
     ascent, descent = font.getmetrics()
+
+    latin, latin_cmap, latin_ascent = None, set(), 0
+    if a.latin_font:
+        latin = ImageFont.truetype(a.latin_font, a.px, index=a.latin_index)
+        if a.latin_variation:
+            latin.set_variation_by_name(a.latin_variation)
+        latin_ascent = latin.getmetrics()[0]
+        latin_cmap = font_cmap(a.latin_font, a.latin_index)
+
     chars = sorted(c for c in charset_chars(a.charset) if 0x20 <= ord(c) <= 0xFFFF)
 
     meta, bitmaps = [], []
     for ch in chars:
-        w, h, xadv, dY, dX, bm = render_glyph(font, ch, ascent)
+        if latin and ord(ch) < 0x3000 and ord(ch) in latin_cmap:
+            w, h, xadv, dY, dX, bm = render_glyph(latin, ch, latin_ascent)
+        else:
+            w, h, xadv, dY, dX, bm = render_glyph(font, ch, ascent)
         meta.append(struct.pack(">7i", ord(ch), h, w, xadv, dY, dX, 0))
         bitmaps.append(bm)
 
