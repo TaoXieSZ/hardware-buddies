@@ -270,8 +270,32 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
                         state.running = max(0, state.running - 1)
                 changed = True
 
+    elif name == "PreCompact":
+        # Compaction can take tens of seconds — explain the pause instead of
+        # leaving stale state on screen. openspec change 0005.
+        state.msg = "compacting…"
+        state.add_entry("compacting context…")
+        changed = True
+
     elif name == "PostCompact":
+        state.msg = "compacted"
         state.add_entry("compacted")
+        changed = True
+
+    elif name == "SubagentStart":
+        agent = ev.get("agent_type") or ev.get("subagent_type") or ""
+        state.add_entry(f"subagent: {agent}" if agent else "subagent started")
+        changed = True
+
+    elif name == "SubagentStop":
+        state.add_entry("subagent done")
+        changed = True
+
+    elif name == "PostToolUseFailure":
+        tool = ev.get("tool_name") or "tool"
+        err = (ev.get("error") or ev.get("message") or "")[:60]
+        state.msg = f"failed: {tool}"
+        state.add_entry(f"✗ {tool} {err}".rstrip())
         changed = True
 
     elif name == "hud":

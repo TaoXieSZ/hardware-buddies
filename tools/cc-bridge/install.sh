@@ -35,9 +35,14 @@ HOOK_EVENTS_ASYNC=(
   Stop
   SessionEnd
   PostToolUse
+  PostToolUseFailure
   PermissionRequest
   Notification
   UserPromptSubmit
+  PreCompact
+  PostCompact
+  SubagentStart
+  SubagentStop
 )
 # Synchronous events → hook_permission.py. PreToolUse waits up to a few
 # seconds for the user to press A on the stick, then returns a Claude
