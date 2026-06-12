@@ -45,3 +45,9 @@ pause instead of showing stale state.
 `install.sh` SHALL register `PreCompact`, `PostCompact`, `SubagentStart`,
 `SubagentStop`, `PostToolUseFailure` as async hooks alongside the existing set,
 so the daemon actually receives them.
+
+#### Scenario: Fresh install registers the lifecycle events
+- GIVEN a fresh run of `tools/cc-bridge/install.sh`
+- WHEN the hook entries are written to `~/.claude/settings.json`
+- THEN `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop` and
+  `PostToolUseFailure` each carry an async hook invoking `hook.py`

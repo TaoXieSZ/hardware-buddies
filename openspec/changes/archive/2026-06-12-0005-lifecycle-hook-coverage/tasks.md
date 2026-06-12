@@ -7,5 +7,5 @@
 - [x] Add the five events to `HOOK_EVENTS_ASYNC` in `tools/cc-bridge/install.sh`.
 - [x] Wire the five events into the live `~/.claude/settings.json`.
 - [x] `pytest -q` green.
-- [ ] `openspec archive 0005-lifecycle-hook-coverage` — merge the delta into
+- [x] `openspec archive 0005-lifecycle-hook-coverage` — merge the delta into
       `openspec/specs/daemon-event-mapping/spec.md`.
