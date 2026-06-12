@@ -102,3 +102,26 @@ def test_mod_flags_cover_modifier_keycodes(core):
     assert 57 not in core._MOD_FLAGS
     # Right Option (61, the PTT default) is kCGEventFlagMaskAlternate.
     assert core._MOD_FLAGS[61] == 0x080000
+
+
+# ─── BleWriter.write fast-skip ─────────────────────────────────────────
+
+def test_ble_write_never_reconnects_inline(core):
+    """write() must skip an offline peer instantly. The old inline
+    ensure_connected() ran a BleakScanner.discover (SCAN_TIMEOUT=8s) and
+    MultiBleWriter gathers all peers — one absent stick stalled every
+    heartbeat emit (serial included), so permission prompts reached the
+    Tab5 after the 8s approval window had burned. reconnect_loop owns
+    reconnection."""
+    w = core.BleWriter("Claude-TEST")
+    w.client = None
+
+    async def boom():
+        raise AssertionError("write() must not call ensure_connected()")
+
+    w.ensure_connected = boom
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(w.write({"running": 0}))   # returns, no scan
+    finally:
+        loop.close()

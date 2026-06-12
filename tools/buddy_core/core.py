@@ -370,7 +370,14 @@ class BleWriter:
 
     async def write(self, payload: dict):
         async with self._lock:
-            if not await self.ensure_connected():
+            # Never scan inline: ensure_connected() for an offline peer runs
+            # a BleakScanner.discover(SCAN_TIMEOUT=8s), and MultiBleWriter
+            # gathers all peers — so one absent stick stalled every heartbeat
+            # emit (serial included) behind its scan. Permission prompts then
+            # reached the Tab5 after the 8s approval window had already
+            # burned. reconnect_loop owns reconnection; write() only ever
+            # uses an already-live client.
+            if not self.any_connected:
                 self._log.warning("write skipped: not connected")
                 return
             line = (json.dumps(payload, separators=(",", ":")) + "\n").encode()
