@@ -235,8 +235,39 @@ internal specs (`tab5-dashboard-ui`, `tab5-keyboard-relay`, `tab5-ptt-dictation`
   WiFi second transport is the path. Today: single owner per tab.
 - **Volume**: speaker volume hardcoded 160/255 in `sound.cpp` — wants a
   settings module (stackchan's NVS settings.cpp is the template).
-- **Tear-free rendering**: dirty-band pushes killed the visible wipe; true
-  vsync would need the P4 PPA — noted, not needed so far.
+- **Smooth scrolling (open — dirty-band is NOT enough).** Symptom: dragging the
+  transcript still shows an ugly full-width horizontal sweep, not a smooth
+  scroll. Root cause is `M5.Display.setRotation(3)` = **software** rotation —
+  the panel's native scan is portrait, so M5GFX transposes every blit and
+  `pushSprite` writes panel **columns** in sequence. Any sizable region push
+  therefore *looks* like a right-to-left horizontal wipe. Shrinking the pushed
+  region to the body band (`DR_BODY`, ~980×620, done 2026-06-14) only reduces
+  area — the transcript body is still ~76% of the width, so a columnar push of
+  it still sweeps most of the screen, and scrolling repaints it every drag step.
+  Real fixes to evaluate (none cheap):
+    1. Hardware rotation via the **ESP32-P4 PPA** (Pixel-Processing Accelerator)
+       so blits aren't software-transposed → fast row-order DMA, sweep gone.
+    2. Framebuffer **pan / scroll**. Driver facts (M5GFX `Panel_DSI`):
+       it is a `Panel_FrameBufferBase` with **`num_fbs = 1`** — a single PSRAM
+       framebuffer the DSI scans continuously (no DMA-wait, no vsync, no back
+       buffer). That single live buffer is *why* every write is visible as it
+       paints. Two sub-flavors:
+       - **copyRect scroll (no lib fork, recommended first).** `copyRect` is a
+         row-wise `memcpy` between line buffers and works in rotated logical
+         coords. On scroll: `M5.Display.copyRect` to shift the body by N px,
+         then repaint only the newly-exposed strip — skips the costly
+         full-body transposed push and full re-compose. Big improvement; not
+         fully tear-free (still one live fb).
+       - **True double-buffer flip (tear-free, needs lib patch).** Set
+         `num_fbs = 2` in `Panel_DSI.cpp` and add a flip path — but that file
+         lives in `.pio/libdeps` (clobbered on lib refresh), so it needs a
+         vendored fork or build-flag patch. Kills tearing everywhere, not just
+         scroll. Higher effort + maintenance.
+    3. Render the UI in the panel's **native orientation** (portrait 720×1280)
+       so pushes are row-order; big layout rework.
+    4. Stopgap: coarse/throttled scroll (page/few-lines per gesture) so it reads
+       as deliberate steps instead of a continuous sweep.
+  Tear-free vsync would also want the PPA — same lever as #1.
 - **Emit keepalive**: heartbeat keepalive only logs at DEBUG; if the Tab5
   ever looks frozen check `/tmp/cc-bridge-dev.log` for `serial` lines first.
 

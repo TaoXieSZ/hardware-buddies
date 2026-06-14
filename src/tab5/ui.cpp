@@ -105,7 +105,8 @@ struct Session {
   char     tool[48];
   char     lines[SCROLLBACK][LINEW];
   int      lineCount;
-  int      scroll;       // display rows scrolled up from bottom (0 = pinned)
+  int      scroll;        // display rows scrolled up from bottom (0 = pinned)
+  int      scrollRendered;// scroll value currently shown on panel (for copyRect pan)
   bool     permPending;
   char     permTool[56];
   uint32_t tokens;
@@ -120,7 +121,10 @@ static M5Canvas spr;
 // sequence), so each producer marks only the screen band it touched and
 // uiTick pushes just those. DR_ALL still happens on layout-level changes
 // (session switch, demo retire) where everything moves anyway.
-enum : uint8_t { DR_SIDEBAR = 1, DR_HEADER = 2, DR_BODY = 4, DR_ALL = 7 };
+// DR_SCROLL: a pure transcript scroll (no content change). Handled by panning
+// the on-panel body with copyRect + a thin strip push instead of a full-body
+// transposed push — that full push is what made scrolling look like a wipe.
+enum : uint8_t { DR_SIDEBAR = 1, DR_HEADER = 2, DR_BODY = 4, DR_ALL = 7, DR_SCROLL = 8 };
 static constexpr int HDR_H = 100;      // header band height (divider at 96)
 
 // live-feed bookkeeping (M1 / M3 dual-feed) — one slot per session
@@ -583,15 +587,19 @@ static void drawMain(const UiStatus& st, uint32_t now) {
   if (g_micHeld) spr.fillRect(SB_W, 0, W - SB_W, 6, th::ERR);
 }
 
-static bool handleTouch() {
+// Returns the dirty-region mask the touch produced (0 = nothing). Scrolling
+// returns DR_BODY only — repainting just the transcript band — so a drag does
+// NOT trigger the whole-screen DR_ALL push (that full-frame wipe was what made
+// scrolling look like a horizontal page-flip).
+static uint8_t handleTouch() {
   auto t = M5.Touch.getDetail();
 
   // hold-to-talk: press inside the mic button starts dictation, release ends it
   if (t.wasPressed() && inHit(g_hitMic, t.x, t.y)) {
-    g_micHeld = true; feedSendMic(true); return true;
+    g_micHeld = true; feedSendMic(true); return DR_ALL;
   }
   if (g_micHeld && t.wasReleased()) {
-    g_micHeld = false; feedSendMic(false); return true;
+    g_micHeld = false; feedSendMic(false); return DR_ALL;
   }
 
   // drag-to-scroll anywhere in the transcript body (right of the sidebar).
@@ -605,15 +613,16 @@ static bool handleTouch() {
       Session& sc = g_sess[g_sel];
       sc.scroll += rows;
       if (sc.scroll < 0) sc.scroll = 0;
-      return true;
+      return DR_SCROLL;   // pan via copyRect — no full-body push
     }
+    return 0;
   } else {
     dragAccum = 0;
   }
 
-  if (!t.wasClicked()) return false;
+  if (!t.wasClicked()) return 0;
   for (int i = 0; i < 2; i++)
-    if (inHit(g_hitCard[i], t.x, t.y)) { g_sel = i; return true; }
+    if (inHit(g_hitCard[i], t.x, t.y)) { g_sel = i; return DR_ALL; }
   Session& s = g_sess[g_sel];
   if (s.permPending) {
     bool hitA = inHit(g_hitAllow, t.x, t.y);
@@ -635,7 +644,7 @@ static bool handleTouch() {
       demoPush(s, "✗ 已拒绝");
     }
   }
-  return true;
+  return DR_ALL;
 }
 
 // ---------- public ----------
@@ -712,11 +721,11 @@ void uiKeyEvent(uint8_t hidKey, uint8_t mods) {
     case 0x4F: case 0x50:                       // right/left → switch session
       g_sel = (g_sel + 1) % 2; g_dirtyFeed |= DR_ALL; break;
     case 0x52:                                  // up → scroll into history
-      g_sess[g_sel].scroll += 3; g_dirtyFeed |= DR_BODY; break;
+      g_sess[g_sel].scroll += 3; g_dirtyFeed |= DR_SCROLL; break;
     case 0x51:                                  // down → scroll toward newest
       g_sess[g_sel].scroll -= 3;
       if (g_sess[g_sel].scroll < 0) g_sess[g_sel].scroll = 0;
-      g_dirtyFeed |= DR_BODY; break;
+      g_dirtyFeed |= DR_SCROLL; break;
     case 0x28: case 0x1C:                       // Enter / y → allow
       if (s.permPending) {
         if (g_live[g_sel]) {
@@ -745,6 +754,12 @@ void uiKeyEvent(uint8_t hidKey, uint8_t mods) {
 }
 
 bool uiMicHeld() { return g_micHeld; }
+
+void uiToggleMic() {
+  g_micHeld = !g_micHeld;
+  feedSendMic(g_micHeld);     // down = press+hold dictation hotkey; up = release
+  g_dirtyFeed |= DR_ALL;      // refresh REC bar + mic button
+}
 
 void uiScreenshot() {
   // Stream the composited frame back over serial: downsample ×2 to 640×360,
@@ -803,6 +818,34 @@ static void pushRegion(int x, int y, int w, int h) {
   M5.Display.clearClipRect();
 }
 
+// Smooth scroll. The transcript is a fixed-pitch row list, so a scroll is a
+// pure vertical translation — the overlap region is identical, only one edge
+// strip is new. Slide the on-panel content with copyRect (an in-framebuffer
+// memcpy, no per-pixel transpose) and push just the newly-exposed strip,
+// rather than re-pushing the whole ~980x620 body (the columnar DSI sweep).
+// `spr` must already be recomposed at the new scroll. dyPix > 0 reveals older
+// lines (content slides down); < 0 reveals newer (slides up). Returns false
+// when the delta is too large to reuse anything (caller pushes the full body).
+static bool panBody(int dyPix) {
+  if (dyPix == 0) return true;                       // clamped to a no-op
+  Session& s = g_sess[g_sel];
+  const int botY = (s.permPending ? H - 200 : H - 28);
+  const int HB = botY - TRANS_TOP;
+  const int bx = SB_W, bw = W - SB_W;
+  int ady = dyPix < 0 ? -dyPix : dyPix;
+  if (ady >= HB) return false;                       // nothing reusable
+  if (dyPix > 0) {                                   // older → slide content down
+    M5.Display.copyRect(bx, TRANS_TOP + dyPix, bw, HB - dyPix, bx, TRANS_TOP);
+    pushRegion(bx, TRANS_TOP, bw, dyPix);            // fresh rows fill the top
+  } else {                                           // newer → slide content up
+    M5.Display.copyRect(bx, TRANS_TOP, bw, HB - ady, bx, TRANS_TOP + ady);
+    pushRegion(bx, botY - ady, bw, ady);             // fresh rows fill the bottom
+  }
+  pushRegion(W - 8, TRANS_TOP, 8, HB);               // scroll thumb moved
+  pushRegion(bx, H - 30, bw, 30);                    // "more below" hint toggles
+  return true;
+}
+
 void uiTick(const UiStatus& st) {
   uint32_t now = millis();
   uint8_t dirty = g_dirtyFeed;
@@ -819,7 +862,7 @@ void uiTick(const UiStatus& st) {
       }
     }
   }
-  if (handleTouch()) dirty |= DR_ALL;
+  dirty |= handleTouch();
   // NOTE: no periodic repaint while holding PTT — full-frame pushes would
   // starve the 16 kHz mic capture loop (audio would arrive in sparse bursts).
   // The REC indicator is drawn solid (not blinking) for the same reason.
@@ -848,16 +891,30 @@ void uiTick(const UiStatus& st) {
   }
 
   if (dirty) {
-    spr.fillSprite(th::BG);
-    drawSidebar(st, now);
-    drawMain(st, now);
+    Session& cs = g_sess[g_sel];
+    // A pure scroll (no content change) is panned, not re-pushed. Content
+    // changes (feed DR_BODY) can't be panned, so they force a full body push.
+    bool scrollPan = (dirty & DR_SCROLL) && !(dirty & DR_BODY);
+    if (dirty == DR_SCROLL) {
+      drawMain(st, now);          // light recompose: main column only
+    } else {
+      spr.fillSprite(th::BG);
+      drawSidebar(st, now);
+      drawMain(st, now);
+    }
     if (dirty == DR_ALL) {
       spr.pushSprite(&M5.Display, 0, 0);
     } else {
       if (dirty & DR_SIDEBAR) pushRegion(0, 0, SB_W, H);
       if (dirty & DR_HEADER)  pushRegion(SB_W, 0, W - SB_W, HDR_H);
-      if (dirty & DR_BODY)    pushRegion(SB_W, HDR_H, W - SB_W, H - HDR_H);
+      if (scrollPan) {
+        int dyPix = (cs.scroll - cs.scrollRendered) * TRANS_ROWH;
+        if (!panBody(dyPix)) pushRegion(SB_W, HDR_H, W - SB_W, H - HDR_H);
+      } else if (dirty & (DR_BODY | DR_SCROLL)) {
+        pushRegion(SB_W, HDR_H, W - SB_W, H - HDR_H);
+      }
     }
+    cs.scrollRendered = cs.scroll;
   } else if (avFrame && avatarReady()) {
     avatarPushDirect(AV_CX, AV_CY, AV_SIZE);
   }

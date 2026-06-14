@@ -25,6 +25,10 @@
 static constexpr uint8_t KB_ADDR = 0x6D;
 static bool s_kbFound = false;
 
+// HID usage code of the dedicated record-toggle key (Del = 0x4C). Pressing it
+// toggles dictation/recording instead of relaying to the Mac.
+static constexpr uint8_t KBD_RECORD_CODE = 0x4C;
+
 static bool kbRead(uint8_t reg, uint8_t* buf, size_t len) {
   Wire.beginTransmission(KB_ADDR);
   Wire.write(reg);
@@ -60,10 +64,15 @@ static void tab5kbdPoll() {
     if (!kbRead(0x02, &n, 1) || n == 0) return;
     uint8_t ev[2] = {0xFF, 0xFF};
     if (!kbRead(0x30, ev, 2)) return;
-    if (ev[1] != 0xFF && ev[1] != 0x00) {
-      Serial.printf("[kbd] key mod=%02x code=%02x\n", ev[0], ev[1]);
-      feedSendKey(ev[1], ev[0]);   // relay to the Mac (dashboard is touch-driven)
+    uint8_t mod = ev[0], code = ev[1];
+    if (code == 0xFF || code == 0x00) continue;   // empty slot / key-release idle
+    if (code == KBD_RECORD_CODE) {                // Del → record toggle (consumed)
+      Serial.println("[kbd] record toggle");
+      uiToggleMic();
+      continue;
     }
+    Serial.printf("[kbd] key mod=%02x code=%02x\n", mod, code);
+    feedSendKey(code, mod);   // relay to the Mac (dashboard is touch-driven)
   }
 }
 

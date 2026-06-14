@@ -43,8 +43,12 @@ void uiScreenshot();
 // reuses the stick's {"cmd":"mic","state":"down|up"} which the daemon relays
 // to the Mac dictation hotkey via _send_key.
 void feedSendMic(bool down);
-// True while the hold-to-talk button is held (main.cpp streams mic audio then).
+// True while recording (touch hold-to-talk OR keyboard toggle); main.cpp
+// streams mic audio while true.
 bool uiMicHeld();
+// Keyboard record key (toggle): flips recording on/off, sends the dictation
+// hotkey down/up, and refreshes the REC indicator.
+void uiToggleMic();
 // Stream a captured PCM chunk to the daemon as an `A<base64>` audio frame.
 void feedSendAudio(const int16_t* pcm, int n);
 // Tab5 keyboard → Mac second keyboard. Translates a HID usage code + modifier
