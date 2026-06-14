@@ -1,0 +1,35 @@
+# NOTE: ESP_HOSTED_ENABLED is promptless — it cannot be set here. It derives
+# from ESP_WIFI_REMOTE_ENABLED && ESP_WIFI_REMOTE_LIBRARY_HOSTED, which the
+# espressif/esp_wifi_remote dependency (src/idf_component.yml) provides.
+
+# Tab5 P4↔C6 SDIO wiring — mirrored from M5Tab5-UserDemo platforms/tab5/
+# sdkconfig (the factory pairing's exact values).
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_PIN_CLK=12
+CONFIG_ESP_HOSTED_SDIO_PIN_CMD=13
+CONFIG_ESP_HOSTED_SDIO_PIN_D0=11
+# PIN_D1 is a derived symbol — the settable one is the PRIV_*_4BIT_BUS key.
+# Without it D1 falls back to the EV-board default (15) and 4-bit SDIO
+# enumeration silently never completes (transport stuck down).
+CONFIG_ESP_HOSTED_SDIO_PRIV_PIN_D1_4BIT_BUS=10
+CONFIG_ESP_HOSTED_SDIO_PIN_D1=10
+CONFIG_ESP_HOSTED_SDIO_PIN_D2=9
+CONFIG_ESP_HOSTED_SDIO_PIN_D3=8
+# Slave co-processor selection (esp_wifi_remote choice) — drives
+# ESP_HOSTED_IDF_SLAVE_TARGET; defaults to "esp32" otherwise.
+CONFIG_IDF_SLAVE_TARGET="esp32c6"
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
+
+# 16MB flash; custom table with a 4M factory app — the embedded 1.15MB C6
+# image doesn't fit the stock 1M single-app layout.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# The actual user-settable choice behind IDF_SLAVE_TARGET (esp_wifi_remote
+# Kconfig.slave_select.in) — defaults to plain ESP32, making the host reject
+# the C6 at the INIT-event identity check ("Identified slave [esp32c6] !=
+# Expected [esp32]").
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y

@@ -21,6 +21,8 @@ src/
     sound.cpp           # preload /sounds/*.wav, M5.Speaker.playWav
     motion.cpp          # servo dance patterns via StackChan-BSP
     settings.cpp        # NVS-backed runtime settings (dashboard target)
+  tab5/                 # Tab5 (ESP32-P4) flagship dashboard — separate target,
+                        # own main(); FULL DEV HANDBOOK: docs/tab5-buddy-dev.md
 tools/
   buddy_core/core.py    # ~340 LOC shared module: BleWriter, BuddyState,
                         # make_on_stick_line (permission+mic dispatch),
@@ -39,6 +41,14 @@ PlatformIO envs — two firmware targets:
   `BUDDY_BRAND_NAME` build flags.
 - **CoreS3/StackChan** (compile from `src/stackchan/*.cpp`):
   `cores3-stackchan`, `cores3-stackchan-claude`, `cores3-stackchan-cursor`.
+- **Tab5** (compile from `src/tab5/*.cpp`): `m5stack-tab5` — ESP32-P4
+  flagship dashboard, custom partition table, USB-CDC serial feed.
+  **Everything Tab5 (status, hardware landmines, build/flash loop, daemon
+  runbook, M2 permission state, branch topology) is in
+  `docs/tab5-buddy-dev.md` — read it before touching `src/tab5/` or
+  `tools/buddy_core/`.** Headline traps: Mac reboot resurrects the stale
+  launchd bridge (no SerialPortWriter) and the Tab5 goes dark; Tab5 work
+  lives on `feat/sticks3-buddy`, diverged from local `main`.
 - `audio_selftest` (PDM mic bringup, dormant) and `native` (host-side
   Unity test runner) are non-device envs.
 

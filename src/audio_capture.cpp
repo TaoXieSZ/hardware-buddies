@@ -2,10 +2,21 @@
 #include "adpcm.h"
 
 #include <Arduino.h>
-#include <driver/i2s.h>
 #include <math.h>
 
-// ---- Hardware config ----
+// Two capture backends share one ADPCM ring + public API:
+//   * Plus2 / Plus (default): raw I2S PDM-RX from the SPM1423 mic on GPIO0/34.
+//   * StickS3 (BUDDY_BOARD_STICKS3): the ES8311 codec mic via M5Unified's
+//     M5.Mic (M5.begin() auto-configures the ES8311 I2C/I2S on this board, so
+//     no manual pin/register setup — the upstream-correct path). 16 kHz.
+// The ring buffer, ADPCM encoder, and Read/Fill/IsCapturing are board-agnostic.
+
+#ifdef BUDDY_BOARD_STICKS3
+#include <M5Unified.h>
+#define AC_SAMPLE_RATE   16000           // ES8311 native; best for speech STT
+#else
+#include <driver/i2s.h>
+// ---- Hardware config (PDM mic) ----
 #define AC_I2S_PORT      I2S_NUM_0
 #define AC_BCK_GPIO      GPIO_NUM_0   // CLK (bit clock / PDM CLK)
 #define AC_DIN_GPIO      GPIO_NUM_34  // DATA (PDM data)
@@ -13,6 +24,7 @@
 #define AC_DMA_BUFS      4
 #define AC_DMA_BUF_SAMPS 256         // samples per DMA buffer
 // Total DMA buffering: 4 × 256 = 1024 samples ≈ 85 ms at 12 kHz
+#endif
 
 // ---- Ring buffer ----
 // 64 KB heap — power-of-2 allows mask-based wrap (no modulo).
@@ -57,6 +69,146 @@ static inline void ring_push(uint8_t b) {
 static bool s_initialized = false;
 static bool s_capturing   = false;
 static adpcm_state_t s_enc;
+static int16_t s_peak     = 0;   // decaying peak for the UI VU meter
+
+uint8_t audioCaptureLevel() { return (uint8_t)(((int32_t)s_peak * 100) / 32767); }
+
+uint32_t audioCaptureSampleRate() { return AC_SAMPLE_RATE; }
+
+// ===========================================================================
+//  StickS3 backend — ES8311 mic via M5.Mic
+// ===========================================================================
+#ifdef BUDDY_BOARD_STICKS3
+
+// Double-buffered record pool. M5.Mic.record() queues a buffer and returns
+// true once the buffer submitted ~2 calls earlier has finished filling
+// (queue depth 2, per the upstream Microphone.ino idiom: rec idx leads the
+// process idx by 2). NBUF must be >= 3; 4 keeps the two indices a fixed 2
+// apart with no aliasing.
+static constexpr size_t S3_CHUNK = 200;          // samples/record (even → ADPCM pairs)
+static constexpr size_t S3_NBUF  = 4;
+static int16_t s_recPool[S3_NBUF][S3_CHUNK];
+static size_t  s_recIdx = 2;   // next buffer to submit (leads)
+static size_t  s_encIdx = 0;   // buffer to encode (trails by 2)
+
+bool audioCaptureInit() {
+    if (s_initialized) return true;
+    adpcmRing = (uint8_t*)heap_caps_malloc(RING_SIZE, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (!adpcmRing) {
+        Serial.printf("[audio] ring alloc failed (need %u bytes)\n", RING_SIZE);
+        return false;
+    }
+    adpcm_encode_init(&s_enc);
+    ringHead = ringTail = droppedBytes = 0;
+    s_capturing   = false;
+
+    // Bring the ES8311 mic up ONCE here, at boot — and never end() it.
+    //
+    // Why not lazily in Start()/end() in Stop()? Because installing/uninstalling
+    // the I2S peripheral (M5.Mic.begin / M5.Mic.end) from inside the live
+    // render+BLE loop spins with interrupts off long enough to trip the TG1
+    // interrupt watchdog (rst:0x8 TG1WDT_SYS_RST) — pinned by the audioprobe.
+    // The begin/end dance only existed so the speaker could reclaim the ES8311
+    // for beeps; but the StickS3 build disables the internal speaker entirely
+    // (cfg.internal_spk=false in main.cpp), so the mic can own the codec
+    // permanently. Bringing it up at boot — before startBt(), no loop running,
+    // heap still high — is exactly the context where M5.Mic.begin succeeds.
+    // Start()/Stop() then just flip s_capturing; the DMA keeps running, which
+    // also removes warm-up latency on the first PTT chunk.
+    auto cfg = M5.Mic.config();
+    cfg.sample_rate = AC_SAMPLE_RATE;
+    M5.Mic.config(cfg);
+    if (!M5.Mic.begin()) {
+        Serial.println("[audio] M5.Mic.begin FAILED");
+        heap_caps_free(adpcmRing);
+        adpcmRing = nullptr;
+        return false;
+    }
+
+    // PRIME the mic here, at boot, BEFORE any load — critical.
+    //
+    // M5Unified's Mic_Class::record() calls begin() internally every time, and
+    // begin() only fast-returns when _rec_sample_rate already matches. But the
+    // initial begin() above (_task_running was false) takes a code path that
+    // NEVER sets _rec_sample_rate — it stays 0. So the FIRST record() at
+    // runtime sees 0 != 16000, falls into begin()'s slow path and calls end()
+    // → i2s_driver_uninstall + a full I2S re-install. That uninstall spins with
+    // interrupts off long enough to trip the TG1 interrupt watchdog when the
+    // render+BLE loop is live (rst:0x8 TG1WDT_SYS_RST — exactly what crashed
+    // the first pump). Doing a few throwaway record()s now forces that one-time
+    // end()+reinstall while we're still single-threaded at boot (safe, like the
+    // isolated probe), syncing _rec_sample_rate. Afterwards every runtime
+    // record() hits begin()'s fast-return and never touches the I2S driver.
+    {
+        // ONE record only. The first record() triggers begin()'s slow path
+        // (end()+reinstall) because _rec_sample_rate is unset — but at this
+        // instant nothing is in-flight, so end() finds the mic_task idle and
+        // exits cleanly (no hang). Piling on more records here is what wedged
+        // setup() before: the 2nd record's end() hit the 1st record's in-flight
+        // DMA and the task never exited. So: one record, then drain it fully
+        // (bounded) before returning, leaving nothing queued.
+        static int16_t prime[S3_CHUNK];
+        M5.Mic.record(prime, S3_CHUNK, AC_SAMPLE_RATE);
+        for (int i = 0; i < 60 && M5.Mic.isRecording(); i++) delay(5);
+    }
+
+    s_initialized = true;
+    Serial.printf("[audio] StickS3 ES8311 mic up + primed @ %d Hz (always-on)\n", AC_SAMPLE_RATE);
+    return true;
+}
+
+void audioCaptureStart() {
+    if (!s_initialized) return;
+    ringHead = ringTail = droppedBytes = 0;
+    adpcm_encode_init(&s_enc);
+    // Mic DMA is already running (begun at boot). Just zero the encode pool so
+    // a fresh utterance starts with ~25ms of silence rather than a stale tail,
+    // reset the submit/encode indices, and arm the pump.
+    memset(s_recPool, 0, sizeof(s_recPool));
+    s_recIdx = 2;
+    s_encIdx = 0;
+    s_capturing = true;
+}
+
+void audioCaptureStop() {
+    // Leave the mic running (see audioCaptureInit) — just stop draining it into
+    // the ring. The DMA buffers recycle harmlessly until the next Start().
+    s_capturing = false;
+    s_peak = 0;
+}
+
+void audioCapturePump() {
+    if (!s_initialized || !s_capturing) return;
+    if (!M5.Mic.isEnabled()) return;
+
+    s_peak -= s_peak >> 3;   // VU fall-off (~200 ms time constant at loop rate)
+
+    // Submit as many chunks as the queue accepts this tick; encode each
+    // freshly-completed buffer into the ring. Bounded by S3_NBUF so a single
+    // pump call can't hog the loop.
+    for (size_t guard = 0; guard < S3_NBUF; guard++) {
+        int16_t* sub = s_recPool[s_recIdx];
+        if (!M5.Mic.record(sub, S3_CHUNK, AC_SAMPLE_RATE)) break;  // queue full
+
+        // record() returned true → buffer at s_encIdx (2 behind) is now filled.
+        int16_t* done = s_recPool[s_encIdx];
+        for (size_t i = 0; i < S3_CHUNK; i++) {
+            int16_t a = done[i] < 0 ? -done[i] : done[i];
+            if (a > s_peak) s_peak = a;
+        }
+        uint8_t local[S3_CHUNK / 2];   // 100 ADPCM bytes per 200 samples
+        size_t enc = adpcm_encode(&s_enc, done, S3_CHUNK, local);
+        for (size_t i = 0; i < enc; i++) ring_push(local[i]);
+
+        s_recIdx = (s_recIdx + 1) % S3_NBUF;
+        s_encIdx = (s_encIdx + 1) % S3_NBUF;
+    }
+}
+
+// ===========================================================================
+//  Plus2 / Plus backend — raw I2S PDM-RX (unchanged)
+// ===========================================================================
+#else
 
 // Scratch DMA read buffer: sized for one DMA buffer worth of int16 samples.
 // Stack allocation in pump() would be 512 bytes — fine, but static is safer on ESP32.
@@ -241,26 +393,6 @@ void audioCaptureStop() {
     s_capturing = false;
 }
 
-size_t audioCaptureRead(uint8_t* out, size_t max) {
-    if (!adpcmRing) return 0;
-    size_t limit = (max < 1024u) ? max : 1024u;
-    size_t avail = ring_fill();
-    size_t count = (avail < limit) ? avail : limit;
-    for (size_t i = 0; i < count; i++) {
-        out[i] = adpcmRing[ringTail & RING_MASK];
-        ringTail = (ringTail + 1u) & RING_MASK;
-    }
-    return count;
-}
-
-size_t audioCaptureFill() {
-    return ring_fill();
-}
-
-bool audioCaptureIsCapturing() {
-    return s_capturing;
-}
-
 void audioCapturePump() {
     if (!s_initialized || !s_capturing) return;
 
@@ -301,4 +433,30 @@ void audioCapturePump() {
         }
         adpcm_written += enc_bytes;
     }
+}
+
+#endif  // BUDDY_BOARD_STICKS3
+
+// ===========================================================================
+//  Board-agnostic ring readers
+// ===========================================================================
+
+size_t audioCaptureRead(uint8_t* out, size_t max) {
+    if (!adpcmRing) return 0;
+    size_t limit = (max < 1024u) ? max : 1024u;
+    size_t avail = ring_fill();
+    size_t count = (avail < limit) ? avail : limit;
+    for (size_t i = 0; i < count; i++) {
+        out[i] = adpcmRing[ringTail & RING_MASK];
+        ringTail = (ringTail + 1u) & RING_MASK;
+    }
+    return count;
+}
+
+size_t audioCaptureFill() {
+    return ring_fill();
+}
+
+bool audioCaptureIsCapturing() {
+    return s_capturing;
 }

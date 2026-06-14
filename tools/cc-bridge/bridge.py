@@ -57,6 +57,9 @@ PTT_KEYCODE = int(os.environ.get("CC_BRIDGE_PTT_KEYCODE", "61"))  # right Option
 # "tap" = Typeless toggle (default); "hold" = Doubao 长按 / classic PTT;
 # "double_tap" = Doubao 免按. See tools/buddy_core/core.py:make_on_stick_line.
 PTT_MODE = os.environ.get("CC_BRIDGE_PTT_MODE", "tap")
+# Wired Tab5 peer (USB-CDC serial). Empty = disabled. The same NDJSON
+# heartbeat goes down the wire; {"cmd":"permission"...} / btn lines come back.
+TAB5_SERIAL = os.environ.get("CC_BRIDGE_TAB5_SERIAL", "")
 
 # cc-bridge talks to the firmware's debug service (unencrypted) instead
 # of the encrypted NUS that Claude Desktop uses. Same line-JSON protocol;
@@ -267,8 +270,32 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
                         state.running = max(0, state.running - 1)
                 changed = True
 
+    elif name == "PreCompact":
+        # Compaction can take tens of seconds — explain the pause instead of
+        # leaving stale state on screen. openspec change 0005.
+        state.msg = "compacting…"
+        state.add_entry("compacting context…")
+        changed = True
+
     elif name == "PostCompact":
+        state.msg = "compacted"
         state.add_entry("compacted")
+        changed = True
+
+    elif name == "SubagentStart":
+        agent = ev.get("agent_type") or ev.get("subagent_type") or ""
+        state.add_entry(f"subagent: {agent}" if agent else "subagent started")
+        changed = True
+
+    elif name == "SubagentStop":
+        state.add_entry("subagent done")
+        changed = True
+
+    elif name == "PostToolUseFailure":
+        tool = ev.get("tool_name") or "tool"
+        err = (ev.get("error") or ev.get("message") or "")[:60]
+        state.msg = f"failed: {tool}"
+        state.add_entry(f"✗ {tool} {err}".rstrip())
         changed = True
 
     elif name == "hud":
@@ -510,4 +537,6 @@ if __name__ == "__main__":
         on_loop_start=_on_loop_start,
         extra_tasks=[reaper_loop],
         route_stager=_route_stager,
+        serial_port=TAB5_SERIAL or None,
+        app="claude",
     )

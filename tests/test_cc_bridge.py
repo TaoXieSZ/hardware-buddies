@@ -138,11 +138,41 @@ def test_waiting_clears_on_new_user_prompt(cc, fresh_state):
     assert fresh_state.prompt is None
 
 
-# ─── post-compact ─────────────────────────────────────────────────────
+# ─── compaction / subagents / tool failures (Change 0005) ────────────
 
 def test_post_compact_adds_entry(cc, fresh_state):
     cc.apply_event(fresh_state, ev("PostCompact"))
     assert fresh_state.entries[0] == "compacted"
+    assert fresh_state.msg == "compacted"
+
+
+def test_pre_compact_sets_msg_and_entry(cc, fresh_state):
+    assert cc.apply_event(fresh_state, ev("PreCompact")) is True
+    assert fresh_state.msg == "compacting…"
+    assert "compact" in fresh_state.entries[0]
+
+
+def test_subagent_start_names_agent_type(cc, fresh_state):
+    assert cc.apply_event(fresh_state, ev("SubagentStart", agent_type="Explore")) is True
+    assert "Explore" in fresh_state.entries[0]
+
+
+def test_subagent_start_without_type_still_logs(cc, fresh_state):
+    cc.apply_event(fresh_state, ev("SubagentStart"))
+    assert "subagent" in fresh_state.entries[0]
+
+
+def test_subagent_stop_adds_entry(cc, fresh_state):
+    cc.apply_event(fresh_state, ev("SubagentStop"))
+    assert fresh_state.entries[0] == "subagent done"
+
+
+def test_post_tool_use_failure_sets_msg_and_entry(cc, fresh_state):
+    assert cc.apply_event(
+        fresh_state, ev("PostToolUseFailure", tool_name="Bash", error="exit 1")
+    ) is True
+    assert fresh_state.msg == "failed: Bash"
+    assert fresh_state.entries[0].startswith("✗ Bash")
 
 
 # ─── hud metrics event (Change 0002) ─────────────────────────────────

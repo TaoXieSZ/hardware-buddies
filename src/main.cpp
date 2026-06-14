@@ -1,6 +1,7 @@
 #include <M5Unified.h>
 #include "m5_compat.h"
 #include <LittleFS.h>
+#include <esp_mac.h>   // esp_read_mac/ESP_MAC_BT — no longer transitively included
 #include <stdarg.h>
 #include "ble_bridge.h"
 #include "bugc2.h"
@@ -75,6 +76,11 @@ bool     dimmed = false;
 bool     screenOff = false;
 bool     swallowBtnA = false;
 bool     swallowBtnB = false;
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+// Voice-mic UI: brief on-screen ack of the last B action (SENT / UNDO).
+uint32_t g_micActionMs = 0;
+uint8_t  g_micAction   = 0;   // 0=none 1=sent 2=undo
+#endif
 bool     gifAvailable = false;
 // BugC2 chassis presence latched at boot. When attached, its base
 // physically blocks the side button B, so we remap A:
@@ -108,9 +114,19 @@ uint32_t promptArrivedMs = 0;
 
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
+#ifdef BUDDY_BOARD_STICKS3
+  // StickS3: BMI270 IMU shares the internal I2C bus with the ES8311 audio
+  // codec (speaker AND mic). Any concurrent ES8311 access (a button beep or
+  // mic capture) vs a per-loop IMU read wedges the bus → TG1 watchdog reboot.
+  // The buddy's audio (beeps + the vibecoding mic) is the priority, so the
+  // IMU gimmicks (face-down, shake→dizzy, clock auto-orient) are disabled on
+  // S3 to free the bus. Idle-only IMU was fine; it's the audio overlap that kills.
+  return false;
+#else
   float ax, ay, az;
   imuGetAccel(&ax, &ay, &az);
   return az < -0.7f && fabsf(ax) < 0.4f && fabsf(ay) < 0.4f;
+#endif
 }
 
 static void applyBrightness() { axpScreenBreath(20 + brightLevel * 20); }
@@ -379,6 +395,9 @@ static void clockRefreshRtc() {
 }
 
 static void clockUpdateOrient() {
+#ifdef BUDDY_BOARD_STICKS3
+  return;  // S3: IMU disabled (ES8311 audio shares the I2C bus) — see isFaceDown
+#else
   float ax, ay, az;
   imuGetAccel(&ax, &ay, &az);
   uint8_t lock = settings().clockRot;
@@ -415,6 +434,7 @@ static void clockUpdateOrient() {
     if (want != clockOrient) { if (++swapFrames >= 8) { clockOrient = want; swapFrames = 0; } }
     else swapFrames = 0;
   }
+#endif  // BUDDY_BOARD_STICKS3
 }
 
 // Clock face: shown when charging on USB with nothing else going on.
@@ -500,12 +520,16 @@ void triggerOneShot(PersonaState s, uint32_t durMs) {
 }
 
 bool checkShake() {
+#ifdef BUDDY_BOARD_STICKS3
+  return false;  // S3: IMU disabled (ES8311 audio shares the I2C bus) — see isFaceDown
+#else
   float ax, ay, az;
   imuGetAccel(&ax, &ay, &az);
   float mag = sqrtf(ax*ax + ay*ay + az*az);
   float delta = fabsf(mag - accelBaseline);
   accelBaseline = accelBaseline * 0.95f + mag * 0.05f;
   return delta > 0.8f;
+#endif  // BUDDY_BOARD_STICKS3
 }
 
 
@@ -993,6 +1017,27 @@ void setup() {
   delay(50);
   Serial.println("[setup] entering");
   auto cfg = M5.config();
+#ifdef BUDDY_BOARD_STICKS3
+  // StickS3 is SILENT: do not bring up the internal ES8311 speaker at all.
+  //
+  // Root cause (pinned by a CORE_DEBUG_LEVEL=5 audioprobe, 2026-06-09): the
+  // earlier "any ES8311 access reboots" theory was WRONG. An isolated beep AND
+  // an isolated M5.Mic begin→record→end both run fine at boot. What actually
+  // crashes is M5.Speaker.end() when called from the live render+BLE loop:
+  // it spins in i2s_driver_uninstall with interrupts off long enough to trip
+  // the TG1 *interrupt* watchdog (rst:0x8 TG1WDT_SYS_RST). The mic-capture
+  // path calls Speaker.end() first (mic & speaker share the ES8311), so the
+  // gesture rebooted — not the mic itself.
+  //
+  // Disabling the internal speaker means: (1) the stick never beeps — the user
+  // wants it silent; (2) there is no speaker task / I2S0 driver to uninstall,
+  // so audioCaptureStart()'s M5.Speaker.end() becomes a cheap no-op and the
+  // watchdog reboot is gone — which also unblocks the on-device mic path.
+  cfg.internal_spk = false;
+  // IMU off too: its In_I2C polling in M5.update() is pure overhead here (all
+  // the buddy's IMU gimmicks are already no-ops on S3).
+  cfg.internal_imu = false;
+#endif
   Serial.println("[setup] cfg ok, calling M5.begin");
   M5.begin(cfg);
   M5.Lcd.setRotation(0);
@@ -1007,9 +1052,17 @@ void setup() {
   // Audio disabled on Plus2 build — eats ~68KB of 8-bit heap which starves the
   // M5Canvas sprite allocation. Re-enable after sprite path is verified, with
   // a smaller buffer if needed.
-  // audioCaptureInit();
+  // audioCaptureInit();  // Plus2: 64KB ring starves the M5Canvas sprite on ESP32 DRAM
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // StickS3 is ESP32-S3 (512KB SRAM) + 8MB PSRAM, so the 64KB ADPCM ring fits
+  // alongside the sprite. Brings up the ES8311 mic-capture path for the
+  // on-device vibecoding dictation stream (lazy mic begin happens in Start()).
+  // GATED: M5.Mic.begin() wedges the IMU's shared internal I2C bus → WDT
+  // bootloop. Disabled until the I2C coexistence is fixed.
+  audioCaptureInit();
+#endif
   uint32_t freeHeapPost = ESP.getFreeHeap();
-  Serial.printf("[audio] disabled; heap pre/post = %u/%u\n", freeHeapPre, freeHeapPost);
+  Serial.printf("[audio] heap pre/post = %u/%u\n", freeHeapPre, freeHeapPost);
   beepBegin();
   startBt();
   pinMode(LED_PIN, OUTPUT);
@@ -1068,13 +1121,109 @@ void setup() {
   Serial.println(bugc2Present ? "bugc2: present" : "bugc2: not present");
   // (motor diag removed; calibration now done over BLE via the HTML tool —
   // see tools/motor-calib.html and {"cmd":"motor","s":[...]} in data.h)
+
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Voice-mic build: drop to 80 MHz — roughly halves active draw vs the
+  // default 240 MHz, and is still plenty for NimBLE (its floor) + 16 kHz
+  // ADPCM encode + the mic UI. Set last so all init runs at full speed.
+  setCpuFrequencyMhz(80);
+#endif
 }
+
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+// Dedicated voice-mic UI — replaces the buddy character/HUD on the StickS3
+// dictation build. Portrait 135×240, drawn to the shared sprite `spr`.
+// Idle: mic glyph + READY. Recording: blinking REC dot, big timer, live VU
+// meter fed by audioCaptureLevel(). B actions flash a SENT/UNDO banner.
+// Bottom: BLE dot + battery gauge, then button hints.
+void drawMicUI() {
+  const uint16_t BG=0x0000, WHITE=0xFFFF, DIM=0x52AA, RED=0xF800,
+                 GREEN=0x05E0, GREY=0x8410, AMBER=0xFD20, LINE=0x2104,
+                 DARKRED=0x8000;
+  static bool wasRec=false; static uint32_t recStart=0;
+  if (micActive && !wasRec) recStart = millis();
+  wasRec = micActive;
+
+  spr.fillSprite(BG);
+
+  spr.setTextDatum(TC_DATUM);
+  spr.setTextSize(1); spr.setTextColor(DIM, BG);
+  spr.drawString("VOICE MIC", W/2, 8);
+  spr.drawFastHLine(14, 22, W-28, LINE);
+
+  spr.setTextDatum(MC_DATUM);
+  if (micActive) {
+    bool blink = (millis()/300)&1;
+    spr.fillCircle(W/2-34, 60, 6, blink?RED:DARKRED);
+    spr.setTextSize(3); spr.setTextColor(blink?RED:DARKRED, BG);
+    spr.drawString("REC", W/2+10, 60);
+    uint32_t s=(millis()-recStart)/1000;
+    char t[8]; snprintf(t,sizeof(t),"%lu:%02lu",(unsigned long)(s/60),(unsigned long)(s%60));
+    spr.setTextSize(3); spr.setTextColor(WHITE,BG); spr.drawString(t, W/2, 104);
+    // Live VU bar — green→amber→red as the ES8311 peak approaches clipping.
+    int lvl = audioCaptureLevel();
+    const int vx=14, vy=138, vw=W-28, vh=12;
+    spr.drawRoundRect(vx, vy, vw, vh, 3, GREY);
+    int fill = (vw-4)*lvl/100;
+    if (fill > 0) {
+      uint16_t vc = lvl>=85 ? RED : lvl>=60 ? AMBER : GREEN;
+      spr.fillRoundRect(vx+2, vy+2, fill, vh-4, 2, vc);
+    }
+  } else {
+    // Mic glyph: capsule + U holder + stem + base, all primitives.
+    int cx = W/2;
+    spr.fillRoundRect(cx-13, 54, 26, 48, 13, GREY);
+    spr.fillArc(cx, 98, 19, 22, 0, 180, GREY);
+    spr.fillRect(cx-1, 120, 3, 10, GREY);
+    spr.fillRect(cx-12, 130, 24, 3, GREY);
+    spr.setTextSize(2); spr.setTextColor(GREY, BG);
+    spr.drawString("READY", cx, 154);
+  }
+
+  if (g_micAction && millis()-g_micActionMs < 900) {
+    uint16_t bc = (g_micAction==1) ? GREEN : AMBER;
+    spr.fillRoundRect(10, 166, W-20, 26, 6, bc);
+    spr.setTextSize(2); spr.setTextColor(BG, bc);
+    spr.drawString(g_micAction==1 ? "SENT" : "UNDO", W/2, 180);
+  } else if (g_micAction) {
+    g_micAction = 0;
+  }
+
+  bool conn = bleConnected();
+  spr.fillCircle(16, 200, 4, conn?GREEN:GREY);
+  spr.setTextDatum(ML_DATUM); spr.setTextSize(1);
+  spr.setTextColor(conn?WHITE:DIM, BG);
+  spr.drawString(conn?"Mac":"---", 26, 200);
+  int batt = M5.Power.getBatteryLevel();
+  if (batt < 0) batt = 0; if (batt > 100) batt = 100;
+  // Battery gauge: outline body + nub, fill width = level.
+  const int bx=W-36, by=195;
+  uint16_t batc = batt<=20 ? RED : batt<=50 ? AMBER : GREEN;
+  spr.drawRect(bx, by, 22, 10, GREY);
+  spr.fillRect(bx+22, by+3, 2, 4, GREY);
+  int bw = 18*batt/100;
+  if (bw > 0) spr.fillRect(bx+2, by+2, bw, 6, batc);
+  char b[6]; snprintf(b,sizeof(b),"%d", batt);
+  spr.setTextDatum(MR_DATUM); spr.setTextColor(DIM, BG);
+  spr.drawString(b, bx-4, 200);
+
+  spr.drawFastHLine(0, 212, W, LINE);
+  spr.setTextDatum(TC_DATUM); spr.setTextSize(1); spr.setTextColor(DIM, BG);
+  spr.drawString("A talk   B send", W/2, 218);
+  spr.drawString("hold B = undo", W/2, 230);
+
+  spr.pushSprite(&M5.Display, 0, 0);
+}
+#endif
 
 void loop() {
   M5.update();
-  // audio disabled in Plus2 build — see setup()
-  // audioCapturePump();
-  // audioBleStreamPump();
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Drain the ES8311 DMA into the ADPCM ring, then emit ring frames over BLE.
+  // Both are no-ops unless a PTT capture session is active.
+  audioCapturePump();
+  audioBleStreamPump();
+#endif
   beepUpdate();
   t++;
   uint32_t now = millis();
@@ -1217,6 +1366,12 @@ void loop() {
     sendCmd("{\"cmd\":\"mic\",\"state\":\"down\"}");
     beep(2400, 80);
     characterInvalidate();
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+    // Seize the ES8311 for capture and open the BLE ADPCM stream. This calls
+    // M5.Speaker.end(), so the 2400Hz down-beep above is cut to a short click.
+    audioCaptureStart();
+    audioBleStreamBegin();
+#endif
   }
 
   // AXP power button (left side): short-press toggles screen off.
@@ -1275,6 +1430,12 @@ void loop() {
       micActive = false;
       micCandidate = false;
       sendCmd("{\"cmd\":\"mic\",\"state\":\"up\"}");
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+      // Stop capture (M5.Mic.end() → M5.Speaker.begin()) and flush/close the
+      // BLE stream BEFORE the release beep, so the speaker is back for it.
+      audioCaptureStop();
+      audioBleStreamEnd("ptt_up");
+#endif
       beep(600, 60);
       characterInvalidate();
       btnALong = false;
@@ -1338,6 +1499,18 @@ void loop() {
     swallowBtnA = false;
   }
 
+  // BtnB
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Voice-mic: B click = submit (Enter), B hold = undo last dictation (Cmd+Z).
+  // The whole buddy B menu/prompt logic is gone on this build — B is dedicated.
+  if (M5.BtnB.wasHold()) {
+    sendCmd("{\"cmd\":\"undo\"}");
+    g_micAction = 2; g_micActionMs = millis();
+  } else if (M5.BtnB.wasClicked()) {
+    sendCmd("{\"cmd\":\"submit\"}");
+    g_micAction = 1; g_micActionMs = millis();
+  }
+#else
   // BtnB: pet → heart
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
@@ -1370,6 +1543,7 @@ void loop() {
       msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
     }
   }
+#endif  // BUDDY_S3_MIC_CAPTURE B-handler split
 
   // blink bookkeeping
 
@@ -1426,6 +1600,11 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Voice-mic build: the buddy character/HUD/menus are gone — render the
+  // dedicated mic screen. Screen-off (auto-sleep) still blanks.
+  if (!screenOff) drawMicUI();
+#else
   if (napping || screenOff || landscapeClock) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
@@ -1478,6 +1657,7 @@ void loop() {
     }
     spr.pushSprite(&M5.Display, 0, 0);
   }
+#endif  // BUDDY_S3_MIC_CAPTURE render split
 
   // Face-down nap: dim immediately, pause animations, accumulate sleep time.
   // Skipped during approval — you're holding it to read, not sleeping it.
@@ -1504,12 +1684,24 @@ void loop() {
 
   // millis() not the cached `now`: wake() runs after `now` is captured,
   // so now - lastInteractMs underflows when a button is held → flicker.
+#if defined(BUDDY_BOARD_STICKS3) && defined(BUDDY_S3_MIC_CAPTURE)
+  // Voice-mic build power policy: an active recording holds the screen awake
+  // (a >30s dictation must not blank mid-hold), otherwise blank after 15s —
+  // USB included, there's no clock face worth keeping lit. Battery is tiny;
+  // the backlight is the dominant drain.
+  if (micActive) lastInteractMs = millis();
+  if (!screenOff && millis() - lastInteractMs > 15000) {
+    axpSetLDO2(false);
+    screenOff = true;
+  }
+#else
   // No auto-off on USB power — clock face wants to stay visible while charging.
   if (!screenOff && !inPrompt && !_onUsb
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     axpSetLDO2(false);
     screenOff = true;
   }
+#endif
 
   delay(screenOff ? 100 : 16);
 }
