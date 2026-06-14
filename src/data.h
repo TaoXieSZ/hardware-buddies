@@ -38,6 +38,16 @@ struct TamaState {
 // ---------------------------------------------------------------------------
 
 static uint32_t _lastLiveMs = 0;
+
+// Dance trigger: daemon sends {"cmd":"dance","ms":N} (default 3000); the
+// flag is consumed by main.cpp's loop via dataPopDance() so the dispatcher
+// in data.h doesn't need triggerOneShot's forward declaration.
+static uint32_t _pendingDanceMs = 0;
+static inline uint32_t dataPopDance() {
+  uint32_t v = _pendingDanceMs;
+  _pendingDanceMs = 0;
+  return v;
+}
 static uint32_t _lastBtByteMs = 0;   // hasClient() lies; track actual BT traffic
 static bool     _demoMode   = false;
 static uint8_t  _demoIdx    = 0;
@@ -94,6 +104,18 @@ static void _applyJson(const char* line, TamaState* out) {
                            (int8_t)(int)sp[2], (int8_t)(int)sp[3],
                            millis());
       }
+      _lastLiveMs = millis();
+      return;
+    }
+  }
+
+  {
+    const char* cmd0 = doc["cmd"];
+    if (cmd0 && strcmp(cmd0, "dance") == 0) {
+      uint32_t ms = doc["ms"] | 3000;
+      if (ms < 500)   ms = 500;
+      if (ms > 15000) ms = 15000;
+      _pendingDanceMs = ms;
       _lastLiveMs = millis();
       return;
     }

@@ -159,6 +159,12 @@ DASHBOARD_HTML = """<!doctype html>
       <input type="range" id="vol" min="0" max="255" value="96">
     </div>
 
+    <div class="row toggle">
+      <input type="checkbox" id="mute">
+      <label class="main" for="mute">Mute</label>
+    </div>
+    <p class="help">Sets volume to 0 and remembers the last non-zero level. Untoggle to restore — useful for meetings without losing your preferred volume.</p>
+
     <div class="row">
       <div class="label-line">
         <label class="main" for="bright">Screen brightness</label>
@@ -226,8 +232,21 @@ async function post(cmd) {
   } catch (e) { setStatus(e.message, true); }
 }
 
-$('vol').oninput    = e => $('vol_v').textContent = e.target.value;
+$('vol').oninput    = e => { $('vol_v').textContent = e.target.value; if (+e.target.value > 0) { $('mute').checked = false; localStorage.setItem('stackchan_last_vol', e.target.value); } };
 $('vol').onchange   = e => post({cmd:'vol', v: +e.target.value});
+$('mute').onchange  = e => {
+  if (e.target.checked) {
+    const cur = +$('vol').value;
+    if (cur > 0) localStorage.setItem('stackchan_last_vol', cur);
+    $('vol').value = 0; $('vol_v').textContent = 0;
+    post({cmd:'vol', v: 0});
+  } else {
+    const v = +(localStorage.getItem('stackchan_last_vol') || 96);
+    $('vol').value = v; $('vol_v').textContent = v;
+    post({cmd:'vol', v});
+  }
+  localStorage.setItem('stackchan_mute', JSON.stringify({muted: e.target.checked}));
+};
 $('bright').oninput  = e => $('bright_v').textContent = e.target.value;
 $('bright').onchange = e => post({cmd:'bright', v: +e.target.value});
 $('tilt').oninput  = e => $('tilt_v').textContent = e.target.value;
@@ -259,6 +278,8 @@ fetch('/api/characters').then(r=>r.json()).then(list => {
   const s = localStorage.getItem('stackchan_'+k);
   if (s) { try { $(k).checked = JSON.parse(s).enabled; } catch(e){} }
 });
+// Mute reflects vol=0 from last push, regardless of explicit toggle history.
+$('mute').checked = (+$('vol').value === 0);
 </script>
 </body>
 </html>"""

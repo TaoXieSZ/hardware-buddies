@@ -3,6 +3,14 @@
 > Spin the voice control-plane secretary out of the StackChan-buddy repo into
 > its own product: a **hands-free control plane for a fleet of coding agents**.
 
+## Decided (2026-05-24)
+- **Name:** Agent Fleet (tentative).
+- **ASR:** keep **Agora ConvoAI** (Deepgram nova-3, cloud, no own keys) — also
+  keeps the chat agent + StackChan voice-out. (Web Speech API was the local
+  alternative; not chosen.)
+- Still open: StackChan central vs optional · repo location/visibility ·
+  targets beyond cmux.
+
 ## The pitch
 
 You run many coding agents in parallel (Claude Code / Cursor / Codex panes in

@@ -884,7 +884,18 @@ static void drawPetStats(const Palette& p) {
     else spr.drawRect(px, y - 2, 9, 6, p.textDim);
   }
 
-  y += 24;
+  y += 20;
+  spr.setCursor(6, y - 2); spr.print("battery");
+  int batMv = (int)(axpGetBatVoltage() * 1000);
+  int batPct = (batMv - 3200) / 10;          // same scale as the DEVICE info page
+  if (batPct < 0) batPct = 0; if (batPct > 100) batPct = 100;
+  // Zelda-style HP row: 5 hearts × 20%, round up so 1% still shows one
+  // warning heart, 0% → none. Colour by tier so a low pack reads red.
+  int batHearts = (batPct == 0) ? 0 : (batPct + 19) / 20;
+  uint16_t batCol = (batHearts >= 3) ? GREEN : (batHearts == 2) ? 0xFFE0 : RED;
+  for (int i = 0; i < 5; i++) tinyHeart(60 + i * 13, y + 2, i < batHearts, batCol);
+
+  y += 20;
   spr.fillRoundRect(6, y - 2, 42, 14, 3, p.body);
   spr.setTextColor(p.bg, p.body);
   spr.setCursor(11, y + 1); spr.printf("Lv %u", stats().level);
@@ -1276,7 +1287,29 @@ void loop() {
   bugc2_manual_tick(now);  // auto-stop on BLE keepalive expiry
   bugc2_tick(now);
 
+  // Periodic stick→daemon telemetry: battery + IMU snapshot every 5 s
+  // while connected. Daemon logs at INFO and may surface on dashboard.
+  // Cheap (~150 bytes/notify, single bleWrite). Gated on bleConnected so
+  // we don't queue notifies that go nowhere.
+  static uint32_t lastTelemetryMs = 0;
+  if (bleConnected() && (now - lastTelemetryMs) >= 5000) {
+    lastTelemetryMs = now;
+    float ax = 0, ay = 0, az = 0;
+    imuGetAccel(&ax, &ay, &az);
+    int vBat = (int)(axpGetBatVoltage() * 1000);
+    int vBus = (int)(axpGetVBusVoltage() * 1000);
+    int pct  = (vBat - 3200) / 10;
+    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+    char b[200];
+    int n = snprintf(b, sizeof(b),
+      "{\"cmd\":\"telemetry\",\"bat\":{\"pct\":%d,\"mV\":%d,\"usb\":%s},"
+      "\"imu\":{\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f}}\n",
+      pct, vBat, (vBus > 4000) ? "true" : "false", ax, ay, az);
+    if (n > 0) bleWrite((const uint8_t*)b, (size_t)n);
+  }
+
   dataPoll(&tama);
+  if (uint32_t dms = dataPopDance()) triggerOneShot(P_CELEBRATE, dms);
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
   baseState = derive(tama);
 

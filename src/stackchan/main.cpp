@@ -481,10 +481,6 @@ void setup() {
   motionSetTilt(settingsGetTilt());           // before enable so initial park uses correct Y
   motionSetEnabled(settingsGetMotionEnabled());
   motionSetIdleWiggle(settingsGetIdleWiggleEnabled());
-  // Voice-agent mode forces servos ON so Clawd nods while talking — this
-  // build has no dashboard to flip motion, and NVS may have it disabled
-  // (it did: motion=0). Overrides the saved pref for the voice persona.
-  motionSetEnabled(true);
 
   bleStart();
 

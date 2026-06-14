@@ -2,7 +2,7 @@
 # cursor-bridge installer (macOS)
 #
 # Sets up:
-#   1. Python venv at ~/.cursor-bridge/venv with bleak
+#   1. Python venv at ~/.cursor-bridge/venv with bleak + pyserial
 #   2. launchd agent at ~/Library/LaunchAgents/com.cursor-bridge.plist
 #   3. Hook entries in ~/.cursor/hooks.json that fire cursor_hook.js for
 #      the relevant Cursor agent events (sessionStart, beforeSubmitPrompt,
@@ -145,10 +145,10 @@ if [[ ! -d "${VENV}" ]]; then
   echo "→ creating venv at ${VENV}"
   python3 -m venv "${VENV}"
 fi
-echo "→ installing bleak + pyobjc-framework-Quartz into venv"
+echo "→ installing bleak + pyserial + pyobjc-framework-Quartz into venv"
 # Quartz: shared buddy_core simulates a keystroke when the stick sends
 # {"cmd":"mic",...} for PTT dictation relay. Same dependency cc-bridge needs.
-"${VENV}/bin/pip" install --quiet --upgrade pip bleak pyobjc-framework-Quartz
+"${VENV}/bin/pip" install --quiet --upgrade pip bleak pyserial pyobjc-framework-Quartz
 
 # ─── 2. launchd plist ──────────────────────────────────────────────────
 echo "→ writing launchd plist to ${PLIST_DST}"
@@ -272,6 +272,10 @@ Next steps:
      Cursor-XXXX" within ~10s of the launchd agent starting.
   4. Open Cursor, run any agent action — within ~10s the stick should
      react.
+  5. To mirror Cursor onto a Tab5 over USB-CDC serial, set the detected
+     /dev/cu.usbmodemXXXX port in launchd and restart the daemon:
+       launchctl setenv CURSOR_BRIDGE_TAB5_SERIAL /dev/cu.usbmodemXXXX
+       launchctl kickstart -k gui/\$(id -u)/${PLIST_LABEL}
 
   (If you flashed stick #2 with the plain m5stickc-plus2 env instead, it
   still advertises as Claude-XXXX; in that case pin by MAC suffix:
