@@ -81,10 +81,10 @@ static void cbDraw(GIFDRAW* d) {
   }
 }
 
-static bool openState(uint8_t st) {
+static bool openFile(const char* fname) {
   if (g_open) { g_gif.close(); g_open = false; }
   char path[80];
-  snprintf(path, sizeof(path), "%s%s", PACK, STATE_FILES[st < 5 ? st : 0]);
+  snprintf(path, sizeof(path), "%s%s", PACK, fname);
   if (!g_gif.open(path, cbOpen, cbClose, cbRead, cbSeek, cbDraw)) {
     Serial.printf("[avatar] open failed: %s (err=%d)\n", path, g_gif.getLastError());
     return false;
@@ -101,6 +101,13 @@ static bool openState(uint8_t st) {
   g_nextFrame = 0;
   return true;
 }
+
+static bool openState(uint8_t st) { return openFile(STATE_FILES[st < 5 ? st : 0]); }
+
+// Mood overlay (AV_MOOD_* in avatar.h): a transient expression (sleep / heart)
+// that overrides the agent-state GIF. NONE reverts. Files from manifest.json.
+static const char* MOOD_FILES[] = { nullptr, "sleep.gif", "heart.gif" };
+static uint8_t g_mood = AV_MOOD_NONE;
 
 static void applyChrome() {
   const int r = 22;
@@ -143,7 +150,14 @@ bool avatarReady() { return g_ready && g_open; }
 void avatarSetState(uint8_t uiState) {
   if (!g_ready || uiState == g_state) return;
   g_state = uiState;
-  openState(uiState);
+  if (g_mood == AV_MOOD_NONE) openState(uiState);   // under a mood: remember only
+}
+
+void avatarSetMood(uint8_t mood) {
+  if (!g_ready || mood == g_mood) return;
+  g_mood = mood;
+  if (mood != AV_MOOD_NONE) openFile(MOOD_FILES[mood]);
+  else openState(g_state);                          // revert to agent-state gif
 }
 
 bool avatarTick() {

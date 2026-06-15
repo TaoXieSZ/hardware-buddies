@@ -301,7 +301,16 @@ static void pill(int x, int y, int w, int h, uint16_t bg, uint16_t fg,
 struct Hit { int x, y, w, h; };
 static Hit g_hitCard[2], g_hitAllow, g_hitDeny;
 static Hit g_hitMic = {0, 0, 0, 0};
+static Hit g_hitAvatar = {0, 0, 0, 0};
 static bool g_micHeld = false;   // hold-to-talk active
+
+// "alive" mood layer — avatar naps when idle a while, hearts when petted.
+// Avatar-box only (rides the GIF fast-push path), so no full-frame DSI sweep.
+static constexpr uint32_t AVATAR_SLEEP_MS = 60000;   // nap after 60s settled in IDLE
+static uint32_t g_avatarSettledMs = 0;   // last real activity (state change/touch/switch)
+static uint8_t  g_avatarPrevState = 0xFF;
+static int      g_avatarPrevSel   = -1;
+static uint32_t g_heartUntilMs = 0;      // pet-heart shows until this millis()
 static bool inHit(const Hit& r, int x, int y) {
   return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
@@ -351,6 +360,7 @@ static void drawSidebar(const UiStatus& st, uint32_t now) {
   // clawd avatar — the project GIF pack, vector face as fallback
   if (avatarReady()) avatarDraw(spr, AV_CX, AV_CY, AV_SIZE);
   else avatar(AV_CX, AV_CY, AV_SIZE, g_sess[g_sel].state, st.micLevel, now);
+  g_hitAvatar = {AV_CX - AV_SIZE / 2, AV_CY - AV_SIZE / 2, AV_SIZE, AV_SIZE};
 
   // hold-to-talk mic button (PTT → daemon → Mac dictation hotkey, like the
   // stick). Press/release edges handled in handleTouch.
@@ -593,6 +603,7 @@ static void drawMain(const UiStatus& st, uint32_t now) {
 // scrolling look like a horizontal page-flip).
 static uint8_t handleTouch() {
   auto t = M5.Touch.getDetail();
+  if (t.wasPressed()) g_avatarSettledMs = millis();   // any touch wakes the nap
 
   // hold-to-talk: press inside the mic button starts dictation, release ends it
   if (t.wasPressed() && inHit(g_hitMic, t.x, t.y)) {
@@ -621,6 +632,10 @@ static uint8_t handleTouch() {
   }
 
   if (!t.wasClicked()) return 0;
+  if (inHit(g_hitAvatar, t.x, t.y)) {              // pet Clawd → heart ~2.2s
+    g_heartUntilMs = millis() + 2200;
+    return 0;   // avatar box self-pushes via avatarTick; no full repaint
+  }
   for (int i = 0; i < 2; i++)
     if (inHit(g_hitCard[i], t.x, t.y)) { g_sel = i; return DR_ALL; }
   Session& s = g_sess[g_sel];
@@ -866,7 +881,22 @@ void uiTick(const UiStatus& st) {
   // NOTE: no periodic repaint while holding PTT — full-frame pushes would
   // starve the 16 kHz mic capture loop (audio would arrive in sparse bursts).
   // The REC indicator is drawn solid (not blinking) for the same reason.
-  avatarSetState(g_sess[g_sel].state);
+  // "alive" mood: nap when the shown session has been settled in IDLE a while,
+  // heart when petted. Only REAL state changes / tab switches / touches reset
+  // the settle clock — NOT the ~10s IDLE heartbeats (same lesson as StackChan
+  // auto-screen-off). avatarSetMood is a no-op when unchanged, so no thrash.
+  uint8_t curSt = g_sess[g_sel].state;
+  if (curSt != g_avatarPrevState || g_sel != g_avatarPrevSel) {
+    g_avatarPrevState = curSt; g_avatarPrevSel = g_sel; g_avatarSettledMs = now;
+  }
+  if (g_heartUntilMs && now > g_heartUntilMs) g_heartUntilMs = 0;
+  if (g_heartUntilMs) {
+    avatarSetMood(AV_MOOD_HEART);
+  } else {
+    bool nap = (curSt == ST_IDLE) && (now - g_avatarSettledMs > AVATAR_SLEEP_MS);
+    avatarSetMood(nap ? AV_MOOD_SLEEP : AV_MOOD_NONE);
+  }
+  avatarSetState(curSt);
   bool avFrame = avatarTick();
 
   // Full-frame pushes are expensive (~1.8MB over DSI) and visibly stall the
