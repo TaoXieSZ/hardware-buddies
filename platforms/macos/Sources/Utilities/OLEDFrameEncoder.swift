@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 
@@ -53,7 +54,9 @@ enum OLEDFrameEncoder {
         }
     }
 
-    static func frames(fromGIFAt url: URL) throws -> [Data] {
+    /// 把 GIF 编码为设备帧。`mode` 决定每帧右下角烤入的模式角标（0/1/2），
+    /// 使设备无论显示出厂图还是用户自定义图，都能一眼看出当前在哪个工作模式。
+    static func frames(fromGIFAt url: URL, mode: AhaKeyModeSlot) throws -> [Data] {
         try validateGIFSourceFileSize(at: url)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             throw OLEDFrameEncodingError.cannotCreateImageSource
@@ -68,7 +71,7 @@ enum OLEDFrameEncoder {
         frames.reserveCapacity(count)
         for index in 0 ..< count {
             guard let image = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
-            frames.append(try encodeFrame(image))
+            frames.append(try encodeFrame(image, mode: mode))
         }
 
         guard !frames.isEmpty else {
@@ -77,7 +80,7 @@ enum OLEDFrameEncoder {
         return frames
     }
 
-    private static func encodeFrame(_ image: CGImage) throws -> Data {
+    private static func encodeFrame(_ image: CGImage, mode: AhaKeyModeSlot) throws -> Data {
         let width = AhaKeyCommand.oledWidth
         let height = AhaKeyCommand.oledHeight
         let bytesPerPixel = 4
@@ -111,6 +114,8 @@ enum OLEDFrameEncoder {
         )
         context.draw(image, in: drawRect)
 
+        drawModeBadge(in: context, mode: mode, width: width, height: height)
+
         // 每帧恰好 160*80*2 = 25600 字节 RGB565 大端，原厂 Python 也不做 padding。
         // flash 物理帧槽是 28672 字节，剩下的 3072 字节由 address 递增自然留空。
         var data = Data(capacity: width * height * 2)
@@ -123,5 +128,51 @@ enum OLEDFrameEncoder {
             data.append(UInt8(rgb565 & 0xFF))
         }
         return data
+    }
+
+    // MARK: - Mode badge
+
+    /// 每个模式一个高对比、互相区分的强调色（在 160×80 RGB565 上挑选好分辨的色相）。
+    /// 也供编辑器预览复用，保证"所见即所写"。
+    static func modeAccentColor(for mode: AhaKeyModeSlot) -> CGColor {
+        switch mode {
+        case .mode0: return CGColor(red: 0.20, green: 0.55, blue: 0.96, alpha: 1) // 蓝
+        case .mode1: return CGColor(red: 0.24, green: 0.76, blue: 0.46, alpha: 1) // 绿
+        case .mode2: return CGColor(red: 0.97, green: 0.55, blue: 0.18, alpha: 1) // 橙
+        }
+    }
+
+    /// 角标几何（CG 坐标系，原点左下）：右下角固定位置，供绘制与预览共用。
+    static func badgeRect(width: Int, height: Int) -> CGRect {
+        let badgeW: CGFloat = 24, badgeH: CGFloat = 18, margin: CGFloat = 3
+        return CGRect(x: CGFloat(width) - margin - badgeW, y: margin, width: badgeW, height: badgeH)
+    }
+
+    /// 在帧上烤入模式数字角标：强调色圆角底块 + 白色数字。底块保证任意画面下都清晰可读。
+    private static func drawModeBadge(in context: CGContext, mode: AhaKeyModeSlot, width: Int, height: Int) {
+        let rect = badgeRect(width: width, height: height)
+        let radius: CGFloat = 3
+        let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        context.saveGState()
+        context.addPath(path)
+        context.setFillColor(modeAccentColor(for: mode))
+        context.fillPath()
+
+        let digit = String(mode.rawValue)
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 13, nil)
+        let attrs: [CFString: Any] = [
+            kCTFontAttributeName: font,
+            kCTForegroundColorAttributeName: CGColor(gray: 1, alpha: 1),
+        ]
+        if let attrString = CFAttributedStringCreate(nil, digit as CFString, attrs as CFDictionary) {
+            let line = CTLineCreateWithAttributedString(attrString)
+            let bounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+            context.textPosition = CGPoint(
+                x: rect.midX - bounds.width / 2 - bounds.minX,
+                y: rect.midY - bounds.height / 2 - bounds.minY
+            )
+            CTLineDraw(line, context)
+        }
+        context.restoreGState()
     }
 }
