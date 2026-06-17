@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StackChan monitor — watchOS redesign preview</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #111;
+    /* page chrome (the doc wrapper around the device previews) */
+    --text-pri: #fff;
+    --text-sec: #8E8E93;
+    /* Animal-Crossing / NookPhone palette (ref: animal-island-ui) */
+    --card-fill: #F7F3DF;
+    --card-border: #AAA69D;
+    --card-shadow: #BDAEA0;
+    --card-div: #E8E2D6;
+    --card-text: #794F27;
+    --card-text-sec: #9F927D;
+    --teal: #19C8B9;
+    --yellow: #F5C31C;
+    --red: #E05A5A;
+    --green: #6FBA2C;
+    --brown: #9A835A;
+    --face-tint: #1a1a1d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 24px 80px;
+    background: var(--bg);
+    color: var(--text-pri);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+          "Helvetica Neue", Arial, sans-serif;
+  }
+  h1 {
+    font: 600 24px/1.2 -apple-system, "SF Pro Display", Arial, sans-serif;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    color: var(--text-sec);
+    margin: 0 0 32px;
+    font-size: 13px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(680px, 1fr));
+    gap: 32px;
+    max-width: 1500px;
+    margin: 0 auto;
+  }
+  .cell {
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+  }
+  .cell-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .cell-title {
+    font: 600 13px/1 "SF Pro Text", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .cell-note {
+    color: var(--text-sec);
+    font-size: 12px;
+  }
+
+  /* The actual device screen — 320x240, scaled 2x for legibility. */
+  .screen {
+    width: 640px;
+    height: 480px;
+    background: #000;
+    border-radius: 24px;
+    position: relative;
+    box-shadow: 0 0 0 8px #111, 0 12px 40px rgba(0,0,0,0.6);
+    overflow: hidden;
+    font: 13px/1 -apple-system, "SF Pro Text", sans-serif;
+  }
+  .screen-inner {
+    position: absolute;
+    inset: 0;
+    transform-origin: 0 0;
+    transform: scale(2);
+    width: 320px;
+    height: 240px;
+  }
+
+  /* ACNH card primitive — cream fill, 2px border, flat offset
+     drop-shadow (box-shadow: 0 4px 0 0, no blur). */
+  .acnh-card {
+    background: var(--card-fill);
+    border: 2px solid var(--card-border);
+    box-shadow: 0 4px 0 0 var(--card-shadow);
+  }
+
+  /* HUD — 2-row ACNH card spanning the top (OMC-HUD metrics) -- */
+  .hud {
+    position: absolute;
+    left: 4px; top: 2px;
+    width: 312px; height: 50px;
+    border-radius: 16px;
+    background: var(--card-fill);
+    border: 2px solid var(--card-border);
+    box-shadow: 0 4px 0 0 var(--card-shadow);
+    display: flex; flex-direction: column;
+    justify-content: center; gap: 3px;
+    padding: 0 12px;
+  }
+  .hud .row1, .hud .row2 {
+    display: flex; justify-content: space-between;
+  }
+  /* row 1: model · context%   row 2: session·tokens · 5h/7d */
+  .hud .row1 span {
+    font: 700 12px/1 Nunito, -apple-system, sans-serif;
+    color: var(--card-text);
+  }
+  .hud .row2 span {
+    font: 700 11px/1 Nunito, -apple-system, sans-serif;
+    color: var(--card-text-sec);
+  }
+
+  /* Char box -------------------------------------------------- */
+  .face {
+    position: absolute;
+    left: 4px; top: 58px;
+    width: 176px; height: 178px;
+    border-radius: 8px;
+    background:
+      radial-gradient(circle at 50% 42%, var(--face-tint) 0%, #000 70%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 56px;
+    color: #555;
+  }
+  .face .emoji { filter: grayscale(0.4) brightness(0.9); }
+
+  /* Bubble card — ACNH cream card + accent header strip ------ */
+  .card {
+    position: absolute;
+    left: 184px; top: 60px;
+    width: 132px; height: 132px;
+    background: var(--card-fill);
+    border: 2px solid var(--card-border);
+    box-shadow: 0 4px 0 0 var(--card-shadow);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .card-head {
+    height: 20px;
+    padding: 0 10px;
+    display: flex; align-items: center;
+    font: 800 10px/1 Nunito, -apple-system, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #fff;   /* brown on yellow — overridden for busy */
+  }
+  .card-divider {
+    height: 1px;
+    background: var(--card-div);
+  }
+  .card-body {
+    padding: 8px;
+    font: 700 10.5px/14px Nunito, -apple-system, sans-serif;
+    color: var(--card-text);
+    height: calc(100% - 20px - 1px);
+    overflow: hidden;
+  }
+
+  /* Tool chip — ACNH cream pill ------------------------------ */
+  .chip {
+    position: absolute;
+    left: 184px; top: 200px;
+    width: 132px; height: 32px;
+    background: var(--card-fill);
+    border: 2px solid var(--card-border);
+    box-shadow: 0 4px 0 0 var(--card-shadow);
+    border-radius: 16px;
+    display: flex; align-items: center;
+    padding: 0 12px;
+    gap: 10px;
+  }
+  .chip-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .chip-name {
+    font: 800 10.5px/1 Nunito, -apple-system, sans-serif;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--card-text);
+  }
+
+  /* State-driven accent colors (ACNH palette) ---------------- */
+  .cell[data-state="busy"]      { --accent: var(--yellow); }
+  .cell[data-state="idle"]      { --accent: var(--teal); }
+  .cell[data-state="attention"] { --accent: var(--red); }
+  .cell[data-state="celebrate"] { --accent: var(--green); }
+  .cell[data-state="sleep"]     { --accent: var(--brown); }
+  .cell .card-head { background: var(--accent); }
+  .cell .chip-dot  { background: var(--accent); }
+  /* BUSY = yellow header → brown text for contrast (matches device) */
+  .cell[data-state="busy"] .card-head { color: var(--card-text); }
+
+  /* Spec sidebar --------------------------------------------- */
+  .legend {
+    max-width: 1500px;
+    margin: 48px auto 0;
+    padding: 24px;
+    background: var(--panel);
+    border-radius: 16px;
+  }
+  .legend h2 {
+    margin: 0 0 12px;
+    font: 600 14px/1 "SF Pro Text", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-sec);
+  }
+  .legend dl {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 8px 24px;
+    margin: 0;
+    font-size: 13px;
+  }
+  .legend dt {
+    color: var(--text-sec);
+    font-feature-settings: "tnum";
+  }
+  .legend dd { margin: 0; }
+  .swatch {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border-radius: 3px;
+    vertical-align: -1px;
+    margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+
+<h1>StackChan monitor — Animal Crossing redesign</h1>
+<p class="sub">
+  CoreS3 320×240 LCD shown 2× for legibility. Warm cream "NookPhone"
+  cards (2px border + flat offset drop-shadow) floating on a dark
+  canvas — design language referenced from
+  <a href="https://github.com/guokaigdg/animal-island-ui" style="color:#82d5bb">guokaigdg/animal-island-ui</a>.
+  Five states share the layout; only the accent (header strip / chip
+  dot) changes. Face area is a placeholder; real device runs the GIF
+  pack on its own dark box.
+</p>
+
+<div class="grid">
+
+  <div class="cell" data-state="busy">
+    <div class="cell-head">
+      <span class="cell-title">BUSY</span>
+      <span class="cell-note">Tool running, msg streaming</span>
+    </div>
+    <div class="screen"><div class="screen-inner">
+      <div class="hud">
+        <div class="row1"><span>Opus 4.7</span><span>62% ctx</span></div>
+        <div class="row2"><span>12m&nbsp;&nbsp;48.0k tok</span><span>5h 38%&nbsp;&nbsp;7d 13%</span></div>
+      </div>
+      <div class="face"><span class="emoji">🐾</span></div>
+      <div class="card">
+        <div class="card-head">BUSY</div>
+        <div class="card-divider"></div>
+        <div class="card-body">listing project files for review…</div>
+      </div>
+      <div class="chip">
+        <span class="chip-dot"></span>
+        <span class="chip-name">BASH</span>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="cell" data-state="attention">
+    <div class="cell-head">
+      <span class="cell-title">ATTENTION</span>
+      <span class="cell-note">Approval / prompt waiting</span>
+    </div>
+    <div class="screen"><div class="screen-inner">
+      <div class="hud">
+        <div class="row1"><span>Opus 4.7</span><span>58% ctx</span></div>
+        <div class="row2"><span>9m&nbsp;&nbsp;41.2k tok</span><span>5h 36%&nbsp;&nbsp;7d 12%</span></div>
+      </div>
+      <div class="face"><span class="emoji">❗</span></div>
+      <div class="card">
+        <div class="card-head">ATTN</div>
+        <div class="card-divider"></div>
+        <div class="card-body">approve: run npm install in /Users/txie/foo?</div>
+      </div>
+      <div class="chip">
+        <span class="chip-dot"></span>
+        <span class="chip-name">APPROVE</span>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="cell" data-state="idle">
+    <div class="cell-head">
+      <span class="cell-title">IDLE</span>
+      <span class="cell-note">Connected, nothing running</span>
+    </div>
+    <div class="screen"><div class="screen-inner">
+      <div class="hud">
+        <div class="row1"><span>Opus 4.7</span><span>62% ctx</span></div>
+        <div class="row2"><span>14m&nbsp;&nbsp;48.4k tok</span><span>5h 40%&nbsp;&nbsp;7d 13%</span></div>
+      </div>
+      <div class="face"><span class="emoji">😺</span></div>
+      <div class="card">
+        <div class="card-head">IDLE</div>
+        <div class="card-divider"></div>
+        <div class="card-body">ready</div>
+      </div>
+      <div class="chip" style="visibility:hidden"></div>
+    </div></div>
+  </div>
+
+  <div class="cell" data-state="celebrate">
+    <div class="cell-head">
+      <span class="cell-title">CELEBRATE</span>
+      <span class="cell-note">"done: …" — held 1.5s</span>
+    </div>
+    <div class="screen"><div class="screen-inner">
+      <div class="hud">
+        <div class="row1"><span>Opus 4.7</span><span>63% ctx</span></div>
+        <div class="row2"><span>15m&nbsp;&nbsp;49.1k tok</span><span>5h 41%&nbsp;&nbsp;7d 14%</span></div>
+      </div>
+      <div class="face"><span class="emoji">🎉</span></div>
+      <div class="card">
+        <div class="card-head">DONE</div>
+        <div class="card-divider"></div>
+        <div class="card-body">done: bash exited 0</div>
+      </div>
+      <div class="chip">
+        <span class="chip-dot"></span>
+        <span class="chip-name">BASH</span>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="cell" data-state="sleep">
+    <div class="cell-head">
+      <span class="cell-title">SLEEP</span>
+      <span class="cell-note">20s silence — daemon idle</span>
+    </div>
+    <div class="screen"><div class="screen-inner">
+      <div class="hud">
+        <div class="row1"><span>Opus 4.7</span><span>62% ctx</span></div>
+        <div class="row2"><span>30m&nbsp;&nbsp;48.4k tok</span><span>5h 40%&nbsp;&nbsp;7d 13%</span></div>
+      </div>
+      <div class="face"><span class="emoji">💤</span></div>
+      <div class="card">
+        <div class="card-head">SLEEP</div>
+        <div class="card-divider"></div>
+        <div class="card-body" style="color:var(--text-sec)">…</div>
+      </div>
+      <div class="chip" style="visibility:hidden"></div>
+    </div></div>
+  </div>
+
+</div>
+
+<section class="legend">
+  <h2>Spec</h2>
+  <dl>
+    <dt>Canvas</dt>            <dd>320 × 240, rotation 1 (landscape), dark canvas (#000000)</dd>
+    <dt>ACNH card</dt>         <dd>cream fill <span class="swatch" style="background:#F7F3DF"></span>#F7F3DF · 2px border <span class="swatch" style="background:#AAA69D"></span>#AAA69D · flat offset shadow <span class="swatch" style="background:#BDAEA0"></span>#BDAEA0 (+4y, no blur)</dd>
+    <dt>HUD card</dt>          <dd>4,2 → 316,52 (312 × 50) · r=16 · 2 rows of OMC-HUD metrics — row 1 model · context%, row 2 session·tokens · 5h/7d rate limits (openspec change 0002)</dd>
+    <dt>Face box</dt>          <dd>4,58 → 180,236 (176 × 178) · GIF fit-into-box scaler, own dark box (unchanged)</dd>
+    <dt>Bubble card</dt>       <dd>184,60 → 316,192 (132 × 132) · r=14 · accent header strip 20px w/ caps state label · body brown text</dd>
+    <dt>Tool chip</dt>         <dd>184,200 → 316,232 (132 × 32) · full pill r=16 · accent dot + uppercase tool name in brown</dd>
+    <dt>Text</dt>              <dd>primary <span class="swatch" style="background:#794F27"></span>#794F27 · secondary <span class="swatch" style="background:#9F927D"></span>#9F927D</dd>
+    <dt>Accents</dt>           <dd>
+      <span class="swatch" style="background:#E05A5A"></span>red ATTN ·
+      <span class="swatch" style="background:#F5C31C"></span>yellow BUSY ·
+      <span class="swatch" style="background:#19C8B9"></span>teal IDLE ·
+      <span class="swatch" style="background:#6FBA2C"></span>green DONE ·
+      <span class="swatch" style="background:#9A835A"></span>brown SLEEP
+    </dd>
+    <dt>Typography</dt>        <dd>device: FreeSans / FreeSansBold 9pt &amp; 12pt smooth fonts · fillSmoothRoundRect for AA corners</dd>
+  </dl>
+</section>
+
+</body>
+</html>

@@ -1,0 +1,27 @@
+.pio/
+.vscode/
+.DS_Store
+data/
+.omc/
+src/.omc/
+__pycache__/
+.omr/
+.cursor/
+
+# Python packaging
+*.egg-info/
+.venv/
+
+# NOTE: wifi_secrets.ini IS tracked (with placeholder values) so the
+# cores3-stackchan envs always build. Per-dev-machine real credentials are
+# kept out of git via:
+#   git update-index --skip-worktree wifi_secrets.ini
+# Documented in REFERENCE.md.
+
+# tools/tab5-c6-updater build artifacts + the downloaded/generated C6 image
+# (regenerate per tools/tab5-c6-updater/README.md)
+managed_components/
+dependencies.lock
+sdkconfig.tab5-c6-updater
+tools/tab5-c6-updater/src/c6fw.bin
+tools/tab5-c6-updater/src/c6fw_data.c

@@ -1,0 +1,10 @@
+dependencies:
+  idf: ">=5.3"
+  # MUST stay on the 1.4.x line: the factory C6 ships esp-hosted slave 1.4.1,
+  # and only a same-generation host speaks its RPC (the 2.x hosts time out).
+  espressif/esp_hosted: "=1.4.0"
+  # Required even though we never touch esp_wifi_* — ESP_HOSTED_ENABLED is a
+  # promptless Kconfig that only goes true via ESP_WIFI_REMOTE_ENABLED &&
+  # ESP_WIFI_REMOTE_LIBRARY_HOSTED; without this dep the esp_hosted component
+  # compiles ZERO sources. Same version the factory UserDemo pins.
+  espressif/esp_wifi_remote: "=0.8.5"

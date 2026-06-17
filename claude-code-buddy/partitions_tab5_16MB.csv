@@ -1,0 +1,9 @@
+# Tab5 16MB layout: single app slot (no OTA — flashing is always wired),
+# big LittleFS for the VLW fonts + character GIFs + sounds (~7MB and growing).
+# Replaces default_16MB.csv whose 3.4MB spiffs can't hold the CJK font.
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x640000,
+spiffs,   data, spiffs,  0x650000,0x9A0000,
+coredump, data, coredump,0xFF0000,0x10000,

@@ -1,0 +1,360 @@
+# Hardware Buddy BLE Protocol
+
+This is the wire protocol the Claude desktop apps speak over Bluetooth LE.
+You don't need anything from this repository to implement it. Any device
+that can advertise the Nordic UART Service and parse newline-delimited JSON
+will work: Arduino, ESP32, nRF52, a Raspberry Pi with a BLE dongle.
+
+> This file is the **external** wire-protocol contract. For **internal**
+> implementation behaviour (how the bridge daemons map IDE hook events onto
+> state, the firmware state machine, etc.) see `openspec/specs/`.
+
+## Enabling the bridge
+
+The BLE bridge is off by default. In Claude for macOS or Windows:
+
+1. **Help → Troubleshooting → Enable Developer Mode** — adds a **Developer**
+   menu to the menu bar.
+2. **Developer → Open Hardware Buddy…** — opens the pairing window.
+3. Click **Connect** and pick your device from the scan list. The OS will
+   prompt for Bluetooth permission on first use.
+
+Once paired the bridge auto-reconnects in the background; you only need the
+window open for initial pairing, the stats panel, or the folder drop target.
+
+## Transport
+
+**BLE Nordic UART Service** (the de-facto serial-over-BLE standard):
+
+|                               | UUID                                   |
+| ----------------------------- | -------------------------------------- |
+| Service                       | `6e400001-b5a3-f393-e0a9-e50e24dcca9e` |
+| RX (desktop → device, write)  | `6e400002-b5a3-f393-e0a9-e50e24dcca9e` |
+| TX (device → desktop, notify) | `6e400003-b5a3-f393-e0a9-e50e24dcca9e` |
+
+Advertise a name starting with `Claude` over the Nordic UART Service so the
+device picker can filter to you. Appending a few bytes of your BT MAC keeps
+multiple devices distinguishable in the picker.
+
+Everything on the wire is UTF-8 JSON—one object per line, terminated with
+`\n`. The desktop reassembles multi-packet lines on its end (notifications
+fragment at the MTU boundary, just send the bytes). Your device needs to do
+the same: accumulate bytes until you see `\n`, then parse.
+
+## Heartbeat snapshot
+
+The desktop apps send a heartbeat snapshot whenever something changes, plus
+a keepalive every 10 seconds:
+
+```json
+{
+  "total": 3,
+  "running": 1,
+  "waiting": 1,
+  "msg": "approve: Bash",
+  "entries": ["10:42 git push", "10:41 yarn test", "10:39 reading file..."],
+  "tokens": 184502,
+  "tokens_today": 31200,
+  "context_pct": 62,
+  "model": "Opus 4.7",
+  "limit_5h": 38,
+  "limit_7d": 13,
+  "session_ms": 754000,
+  "prompt": {
+    "id": "req_abc123",
+    "tool": "Bash",
+    "hint": "rm -rf /tmp/foo"
+  }
+}
+```
+
+| Field          | Meaning                                                                           |
+| -------------- | --------------------------------------------------------------------------------- |
+| `total`        | Count of all sessions                                                             |
+| `running`      | Sessions actively generating                                                      |
+| `waiting`      | Sessions blocked on a permission prompt                                           |
+| `msg`          | One-line summary suitable for a small display                                     |
+| `entries`      | Recent transcript lines, newest first (capped to a few)                           |
+| `tokens`       | Cumulative output tokens since the desktop app started                            |
+| `tokens_today` | Output tokens since local midnight (persisted, survives restart)                  |
+| `context_pct`  | Context window used %, 0 if unknown (HUD metrics — see below)                      |
+| `model`        | Active model display name, "" if unknown                                          |
+| `limit_5h`     | Rolling 5-hour rate-limit used %                                                  |
+| `limit_7d`     | Rolling 7-day rate-limit used %                                                   |
+| `session_ms`   | Session elapsed time in milliseconds                                              |
+| `prompt`       | Only present when a permission decision is needed. The `id` is what you echo back |
+
+The `context_pct` / `model` / `limit_*` / `session_ms` fields are **HUD
+metrics**. The desktop apps don't send them; in this repo they're populated by
+`tools/cc-bridge/statusline_hud.py`, a statusline proxy that taps Claude Code's
+statusline stdin (which carries the context window, rate limits, and model) and
+fire-forwards a `{"hook_event_name":"hud", ...}` event to the cc-bridge socket.
+To enable it, point `statusLine.command` in `~/.claude/settings.json` at the
+proxy — it chains to the real OMC HUD, so the terminal statusline is unchanged:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "python3 /path/to/claude-desktop-buddy/tools/cc-bridge/statusline_hud.py"
+}
+```
+
+A consumer that doesn't care about HUD metrics can ignore these fields; they
+default to `0` / `""`.
+
+A few useful derived signals: `running > 0` means at least one session is
+actively generating, `waiting > 0` means a permission prompt is blocking,
+and `total == 0` means nothing is open. `tokens_today` resets at local
+midnight if you want a daily counter.
+
+If you don't receive a snapshot for ~30 seconds, treat the connection as
+dead.
+
+## Turn events
+
+Each completed turn also fires a one-shot event containing the raw SDK
+content array—text blocks, tool calls, and any other content from the
+message. Events that serialize larger than 4KB are dropped (measured in
+UTF-8 bytes, not character count).
+
+```json
+{
+  "evt": "turn",
+  "role": "assistant",
+  "content": [{ "type": "text", "text": "..." }]
+}
+```
+
+## Permission decisions
+
+When `prompt` is present, your device can return a response. Send one of:
+
+```json
+{"cmd":"permission","id":"req_abc123","decision":"once"}
+{"cmd":"permission","id":"req_abc123","decision":"deny"}
+```
+
+The `id` must match `prompt.id` exactly. The desktop forwards this to the
+session manager: `"once"` approves the tool call, `"deny"` rejects it.
+
+## Mic PTT relay
+
+Your device can also emit:
+
+```json
+{"cmd":"mic","state":"down"}
+{"cmd":"mic","state":"up"}
+```
+
+The daemon (cc-bridge or cursor-bridge) translates these into keystroke
+events to trigger dictation apps. `down` = key press, `up` = key release.
+Use case: a stick-mounted gesture (e.g., tap-then-hold button) that toggles
+PTT recording in Typeless or similar. See the README for gesture details.
+
+### Mic audio frames (optional, device-as-wireless-mic)
+
+A device with a microphone can also stream live audio while PTT is held, so the
+daemon plays it into a virtual audio device (e.g. BlackHole) that a dictation
+app uses as its input. Frames are 16 kHz mono S16LE PCM, base64-encoded, one
+chunk per line, prefixed `A`:
+
+```
+A<base64 of raw S16LE mono PCM>
+```
+
+Stream between `mic down` and `mic up`. The daemon decodes and plays the PCM
+into the configured sink (`TAB5_MIC_SINK`, default `BlackHole`) via PortAudio;
+the pipe closes shortly after the frames stop. Requires the daemon venv to have
+`sounddevice` (PortAudio) and the sink device to exist.
+
+## Keyboard relay (device as a Mac second keyboard)
+
+A device with a physical keyboard (e.g. the Tab5 keyboard accessory / USB-A
+host) can relay keystrokes to the Mac. The daemon types them via the OS event
+API (macOS Quartz). Two forms:
+
+```json
+{"cmd":"key","ch":"a"}                       // printable: type the Unicode char
+{"cmd":"key","key":"enter"}                  // named special key
+{"cmd":"key","key":"c","mods":["cmd"]}       // shortcut: keycode + modifiers
+```
+
+- `ch`: a single Unicode character, typed verbatim (layout-independent). Send
+  this for normal printable input; bake Shift into the character (e.g. `"A"`,
+  `"!"`). Escape `"` and `\` per JSON.
+- `key`: a named key for non-printables and shortcuts —
+  `enter`/`return`, `backspace`/`delete`, `tab`, `esc`, `space`, `left`,
+  `right`, `up`, `down`, `fwddelete`, or a single letter/digit (for shortcuts
+  like `⌘C`). Mapped to a keycode by the daemon.
+- `mods`: optional array of `"cmd"`, `"opt"`, `"ctrl"`, `"shift"` applied as
+  modifier flags. Use `key` (not `ch`) when any of cmd/opt/ctrl is held so the
+  OS sees a real shortcut.
+
+Requires the daemon's process to have macOS Accessibility permission (same as
+the mic PTT relay). If unavailable, the daemon logs a warning and drops the key.
+
+## Screenshot (dev tool)
+
+A device that composites its frame into a readable buffer can stream it back on
+request, so a tool/agent can *see* the screen without a camera. On `{"cmd":"shot"}`
+the device emits a framed, downsampled RGB565 screenshot:
+
+```
+SHOT 640 360 460800        // SHOT <width> <height> <rawByteLen>
+<base64 chunk line>        // base64 of the raw little-endian RGB565 buffer
+... repeated ...
+ENDSHOT
+```
+
+The host daemon recognizes the `SHOT`…`ENDSHOT` frame in its serial RX (these
+lines are not heartbeats), base64-decodes, expands RGB565→RGB888, and writes a
+PNG (default `/tmp/tab5-shot.png`). Trigger it through the daemon socket with
+`{"action":"screenshot"}` (the daemon replies `{"ok":true,"path":"…"}`), e.g.
+via `tools/tab5-shot/shot.py`. Emit the whole frame contiguously so a heartbeat
+never interleaves it.
+
+## One-shot on connect
+
+Time sync (epoch seconds + timezone offset in seconds):
+
+```json
+{ "time": [1775731234, -25200] }
+```
+
+Owner name (the user's first name from their account):
+
+```json
+{ "cmd": "owner", "name": "Felix" }
+```
+
+## Commands and acks
+
+Any command the desktop sends with a `cmd` field expects a matching ack:
+
+```json
+{ "ack": "<same as cmd>", "ok": true, "n": 0 }
+```
+
+Set `ok:false` and optionally `error:"..."` if you couldn't do it. `n` is a
+generic counter (e.g. bytes written for chunk acks, otherwise 0).
+
+| Command                          | Payload                  | Ack you send back            |
+| -------------------------------- | ------------------------ | ---------------------------- |
+| `{"cmd":"status"}`               | —                        | see Status response below    |
+| `{"cmd":"name","name":"Clawd"}`  | sets device display name | `{"ack":"name","ok":true}`   |
+| `{"cmd":"owner","name":"Felix"}` | sets owner name          | `{"ack":"owner","ok":true}`  |
+| `{"cmd":"unpair"}`               | erase stored BLE bonds   | `{"ack":"unpair","ok":true}` |
+
+**Status response.** The desktop polls this every couple of seconds to
+populate the Hardware Buddy window's stats panel:
+
+```json
+{
+  "ack": "status",
+  "ok": true,
+  "data": {
+    "name": "Clawd",
+    "sec": true,
+    "bat": { "pct": 87, "mV": 4012, "mA": -120, "usb": true },
+    "sys": { "up": 8412, "heap": 84200 },
+    "stats": { "appr": 42, "deny": 3, "vel": 8, "nap": 12, "lvl": 5 }
+  }
+}
+```
+
+You can omit fields you don't have. `bat.mA` negative means charging.
+
+## Folder push
+
+The Hardware Buddy window has a drop target. Dropping a folder there streams
+its flat contents to your device. The transport is content-agnostic: GIFs,
+config blobs, firmware images, whatever you want under 1.8MB total.
+
+```
+desktop:  {"cmd":"char_begin","name":"bufo","total":184320}
+device:   {"ack":"char_begin","ok":true}
+
+desktop:  {"cmd":"file","path":"manifest.json","size":412}
+device:   {"ack":"file","ok":true}
+desktop:  {"cmd":"chunk","d":"<base64>"}
+device:   {"ack":"chunk","ok":true,"n":<bytes_written_so_far>}
+          ...repeat chunk until file is done...
+desktop:  {"cmd":"file_end"}
+device:   {"ack":"file_end","ok":true,"n":<final_size>}
+
+          ...repeat file/chunk/file_end for each file...
+
+desktop:  {"cmd":"char_end"}
+device:   {"ack":"char_end","ok":true}
+```
+
+The desktop sends every regular file in the folder (no recursion, dotfiles
+skipped), base64-encodes each chunk, and waits for each ack before sending
+the next. You decode and append; the protocol is sequential so you don't
+need to buffer whole files.
+
+`char_begin.name` is whatever the folder is called, unless the folder
+contains a `manifest.json` with a `"name"` field, in which case that wins.
+
+If your device doesn't want pushed files, don't ack `char_begin`. The
+desktop times out after a few seconds and tells the user it failed.
+
+## Security and pairing
+
+The desktop app connects whether or not your device requests link
+encryption, but transcript snippets and tool-call hints flow over this
+link, so an unencrypted device is sniffable by anyone in radio range
+with a cheap nRF dongle. You should require **LE Secure Connections
+bonding**: mark your NUS characteristics (and the TX CCCD) as
+encrypted-only and advertise DisplayOnly IO capability. The first GATT
+access then triggers OS pairing — the desktop prompts the user for the
+6-digit passkey your device displays — and the link is AES-CCM-encrypted
+from then on. Reconnects reuse the stored LTK without re-prompting.
+
+The desktop app supports both encrypted and unencrypted devices. Two
+protocol hooks tie into pairing:
+
+- Include `"sec": true` in your status ack's `data` once the link is
+  encrypted (or `false`/omit it if you don't bond).
+- Handle `{"cmd":"unpair"}` by erasing your stored bonds. The desktop
+  sends this when the user clicks **Forget**, so the next pairing shows
+  a fresh passkey. Ack it like any other command.
+
+If you accept the folder-push protocol, validate `file.path` before
+writing — the desktop sends whatever filenames are in the dropped
+folder, so reject `..` and absolute paths unless your filesystem holds
+nothing you'd mind overwritten.
+
+## Availability
+
+The BLE API is only available when the desktop apps are in developer mode
+(**Help → Troubleshooting → Enable Developer Mode**). It's intended for
+makers and developers and isn't an officially supported product feature.
+
+## Audio relay (Path A2, WiFi/UDP)
+
+Separate from the BLE link above: a one-way audio path that plays a voice
+agent's TTS through the device speaker. The Mac stays the RTC client; the
+agent's PCM is relayed to the device over WiFi. Bring-up steps live in
+`docs/agora-stackchan-voice-bringup.md`; this is the wire contract for
+forkers who want to feed StackChan audio from their own source.
+
+**Format.** Signed 16-bit little-endian PCM, 16000 Hz, mono.
+
+**Transport.** UDP datagrams to the device on `STACKCHAN_AUDIO_PORT`
+(default 5005). Each datagram is a 4-byte header followed by up to 640 bytes
+of PCM payload (≤ 320 samples = 20 ms), keeping the datagram under a typical
+1500-byte MTU:
+
+| Offset | Bytes | Field                                            |
+| ------ | ----- | ------------------------------------------------ |
+| 0      | 1     | magic high = `0xA5`                              |
+| 1      | 1     | magic low  = `0xC3`                              |
+| 2–3    | 2     | sequence number, uint16 **little-endian**, wraps |
+| 4…     | ≤640  | PCM payload                                       |
+
+The receiver drops any datagram whose first two bytes aren't the magic.
+Loss/gaps are tolerated (no retransmit); the sequence number is advisory.
+The reference sender is `tools/audio-relay/relay.py` (accepts raw PCM over a
+WebSocket and repackages it into these datagrams); the device side is
+`src/stackchan/audio_play.cpp` (header parse + jitter buffer + speaker feed).

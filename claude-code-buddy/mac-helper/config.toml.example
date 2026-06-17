@@ -1,0 +1,6 @@
+# BuddyHelper config — copy to ~/.config/buddy-helper/config.toml
+# OPENAI_API_KEY env var takes precedence over this file.
+
+[stt]
+# api_key = "sk-..."
+# language = "en"   # ISO-639-1; omit for auto-detect
