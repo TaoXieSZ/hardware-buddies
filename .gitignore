@@ -1,0 +1,26 @@
+# 顶层 monorepo 忽略；各子项目保留自己的 .gitignore
+.DS_Store
+
+# 构建产物
+.build/
+build/
+DerivedData/
+*.app
+*.dmg
+*.exe
+*.msi
+
+# PlatformIO / 嵌入式
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
