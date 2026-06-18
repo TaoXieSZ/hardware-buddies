@@ -1803,7 +1803,7 @@ struct AhaKeyStudioView: View {
 
         Task { @MainActor in
             do {
-                let frames = try OLEDFrameEncoder.frames(fromGIFAt: assetURL)
+                let frames = try OLEDFrameEncoder.frames(fromGIFAt: assetURL, mode: targetMode)
                 let startIndex = try await resolveOLEDUploadStartIndex(for: targetMode, frameCount: frames.count)
                 try await bleManager.uploadOLEDFrames(
                     frames,

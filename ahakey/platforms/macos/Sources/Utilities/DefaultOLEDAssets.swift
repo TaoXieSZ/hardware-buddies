@@ -15,7 +15,7 @@ enum DefaultOLEDAssets {
         case .mode1:
             return "cursor_0"
         case .mode2:
-            return nil
+            return "tools_0"
         }
     }
 
