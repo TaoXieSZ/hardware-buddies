@@ -77,7 +77,9 @@ void loop() {
     g_wasOnline = online;
 
     // 本帧键盘事件读一次,按模式分发
-    bool keyEvent = M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed();
+    // 只用 isChange()，不要求 isPressed()——快速点击时 release 帧 isPressed() 已是 false 会漏键。
+    // 释放帧 ks.word/enter/esc 均为空，不会双触发。
+    bool keyEvent = M5Cardputer.Keyboard.isChange();
     Keyboard_Class::KeysState ks;
     if (keyEvent) ks = M5Cardputer.Keyboard.keysState();
 
@@ -97,6 +99,7 @@ void loop() {
             if (ks.enter)     dec = "once";
             else if (ks.esc)  dec = "deny";
             else for (auto c : ks.word) {
+                if (c == ' ')                         { dec = "once";   break; }  // space 也 ok
                 if (c == '`' || c == 'n' || c == 'N') { dec = "deny";   break; }
                 if (c == 'a' || c == 'A')             { dec = "always"; break; }
             }

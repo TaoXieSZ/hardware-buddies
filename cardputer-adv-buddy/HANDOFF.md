@@ -10,11 +10,11 @@
 |---|---|
 | 固件功能 | clawd 随真实状态 / 会话计数角标 / 会话列表 / 审批面板+回送 —— **全部真机验证通过** ✅ |
 | 内存(512KB 无 PSRAM) | 跑满时空闲 **142KB**,余量充裕 |
-| 固件(nudge v3) | **已编译,未烧录** ← 下一步烧录(`.pio/build/cardputer-adv/firmware.bin`) |
+| 固件(deny-fix) | **已编译,未烧录** ← 下一步烧录(`.pio/build/cardputer-adv/firmware.bin`) |
 | cc-bridge daemon | **被 kill 了**(为 BLE 直测释放链路),正常用要重启(见下) |
 | OpenSpec change | `cardputer-claude-buddy` 21/21 任务完成 |
 
-**接手第一步**:把 esc-fix 版 app 烧进去(`.pio/build/cardputer-adv/firmware.bin` 已 build 好)。原因:刚修了 esc 键 bug(Cardputer "esc" 键单按产出 backtick `` ` `` 而非 KEY_ESCAPE,KEY_ESCAPE 在 fn 层;deny 现已接受 `` ` `` / fn+esc / `n`)。
+**接手第一步**:把 deny-fix 版 app 烧进去(`.pio/build/cardputer-adv/firmware.bin` 已 build 好)。原因:修了快速点击 deny 键漏检 bug——原来同时要求 `isChange() && isPressed()`,快速点击时 release 帧 `isPressed()` 已为 false 导致整帧漏掉;改为只用 `isChange()`(release 帧 `ks.word` 为空,不会双触发)。
 
 ---
 
