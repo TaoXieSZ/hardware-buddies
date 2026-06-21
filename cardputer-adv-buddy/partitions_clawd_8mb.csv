@@ -1,0 +1,6 @@
+# Cardputer-ADV 8MB flash 分区：factory app 3MB + LittleFS ~4.9MB（放 clawd GIF 包，约 1.3MB）。
+# LittleFS.begin() 默认找 label="spiffs" 的分区，故文件系统分区命名 spiffs。
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x6000,
+app0,     app,  factory, 0x10000,  0x300000,
+spiffs,   data, spiffs,  0x310000, 0x4F0000,

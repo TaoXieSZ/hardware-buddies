@@ -1,0 +1,35 @@
+schema: spec-driven
+
+context: |
+  项目: cardputer-adv-buddy —— M5Stack Cardputer-ADV 上的 Claude Code 桌面伴侣固件。
+  monorepo `hardware-buddies` 的子项目，与 claude-code-buddy / m5-paper-buddy / ahakey 同级。
+
+  硬件 (来自 docs.m5stack.com/en/core/Cardputer-Adv，已核对):
+    - SoC: ESP32-S3FN8 (Stamp-S3A), 8MB flash, 双核 LX7 @240MHz
+    - 屏幕: ST7789V2 1.14" 240x135 (横屏 setRotation(1))
+    - 键盘: 56 键 (4x14)，M5Cardputer.Keyboard API
+    - IMU: BMI270 (ADV 新增，原版 Cardputer 没有) —— 体感交互的基础
+    - 音频: ES8311 codec + NS4150B 1W 喇叭 + MEMS mic
+    - 其它: IR 发射、microSD、Grove HY2.0-4P、1750mAh
+
+  技术栈: PlatformIO + Arduino framework + M5Unified/M5GFX，库 m5stack/M5Cardputer v1.1.1
+  (library.json 明确支持 M5Cardputer-ADV)。语言 C++ (Arduino .cpp)。
+
+  现状 (Phase 1 已完成): src/main.cpp 跑通屏幕+键盘，渲染 5 态 agent HUD
+  (IDLE/THINKING/TOOL/APPROVAL/DONE)，键盘自测切换状态；`pio run` 编译通过。
+  BLE 尚未接入。buddy 家族通过 BLE NUS "Claude-XXXX" 广播 + 状态推送由守护进程
+  (ahakeyconfig-agent / cc-bridge) 驱动；claude-code-buddy 用 AnimatedGIF + LittleFS
+  放角色 GIF 状态包 (clawd/calico)。
+
+  约定:
+    - 代码注释用中文 (跟随 buddy 家族风格)
+    - 硬件/SDK 初始化必须对照 upstream M5Cardputer example 逐字核对，不凭记忆猜
+    - 最简方案优先，只写被要求的功能
+
+rules:
+  proposal:
+    - 写清这次改动给用户带来的「好玩」价值，而不是只罗列技术
+    - 必须有 Non-goals 区分清楚本次不做什么 (尤其哪些放到后续 Phase)
+  tasks:
+    - 任务按可独立验证的小步拆分；每步注明验证方式 (pio run 编译 / 真机观察)
+    - 涉及外设初始化的任务，注明参照的 upstream example 来源
