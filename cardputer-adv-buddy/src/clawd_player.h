@@ -26,7 +26,7 @@ void hideApproval();
 bool approvalVisible();
 
 // SESSIONS 覆盖层（只读）
-void showSessions(const char lines[][92], uint8_t n);
+void showSessions(const char lines[][92], uint8_t n, int total);
 void hideSessions();
 void sessionsScroll(int delta);
 bool sessionsVisible();

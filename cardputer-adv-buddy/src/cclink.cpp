@@ -40,7 +40,8 @@ void applyJson(const char* line) {
         for (JsonVariant v : la) {
             if (n >= 8) break;
             const char* e = v.as<const char*>();
-            strncpy(s.entries[n], e ? e : "", 91);
+            if (!e || strncmp(e, "subagent", 8) == 0) continue;  // 过滤子 agent 事件
+            strncpy(s.entries[n], e, 91);
             s.entries[n][91] = 0;
             n++;
         }

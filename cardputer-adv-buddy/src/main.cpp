@@ -83,6 +83,11 @@ void loop() {
     Keyboard_Class::KeysState ks;
     if (keyEvent) ks = M5Cardputer.Keyboard.keysState();
 
+    // 帧头快照——各模式块用快照，避免同帧 hide→show 状态竞争
+    bool snapApproval = clawd::approvalVisible();
+    bool snapSessions = clawd::sessionsVisible();
+    bool snapHelp     = clawd::helpVisible();
+
     // ── 审批层(最高优先)──
     bool hasPrompt = bs.promptId[0] != 0;
     if (hasPrompt && strcmp(bs.promptId, g_shownId) != 0) {       // 新审批
@@ -91,7 +96,7 @@ void loop() {
         g_promptShownMs = now;
         clawd::showApproval(bs.promptTool, bs.promptHint);
     }
-    if (clawd::approvalVisible()) {
+    if (snapApproval) {
         if (keyEvent) {
             const char* dec = nullptr;
             // 注意: Cardputer 的 "esc" 键单按产出 backtick '`'（KEY_ESCAPE 在 fn 层），
@@ -111,11 +116,11 @@ void loop() {
     if (!hasPrompt) g_shownId[0] = 0;
 
     // ── 会话列表(无审批时,tab 开关,esc 关,,/. 滚)──
-    if (!clawd::approvalVisible() && keyEvent) {
+    if (!snapApproval && keyEvent) {
         if (ks.tab) {
-            if (clawd::sessionsVisible()) clawd::hideSessions();
-            else clawd::showSessions(bs.entries, bs.nEntries);
-        } else if (clawd::sessionsVisible()) {
+            if (snapSessions) clawd::hideSessions();
+            else clawd::showSessions(bs.entries, bs.nEntries, bs.total);
+        } else if (snapSessions) {
             if (ks.esc) clawd::hideSessions();        // fn+esc
             for (auto c : ks.word) {
                 if (c == '`') clawd::hideSessions();   // 单按 esc 键 = backtick
@@ -126,8 +131,8 @@ void loop() {
     }
 
     // ── HELP 覆盖层(h 键切换,esc/backtick 关)──
-    if (!clawd::approvalVisible() && !clawd::sessionsVisible() && keyEvent) {
-        if (clawd::helpVisible()) {
+    if (!snapApproval && !snapSessions && keyEvent) {
+        if (snapHelp) {
             if (ks.esc) { clawd::hideHelp(); }
             for (auto c : ks.word) {
                 if (c == 'h' || c == 'H' || c == '`') { clawd::hideHelp(); break; }
@@ -136,7 +141,7 @@ void loop() {
     }
 
     // ── 快捷 nudge(NORMAL 模式:非审批、非会话、非帮助)──
-    if (keyEvent && !clawd::approvalVisible() && !clawd::sessionsVisible() && !clawd::helpVisible()) {
+    if (keyEvent && !snapApproval && !snapSessions && !snapHelp) {
         for (auto c : ks.word) {
             // h = 切换 HELP 覆盖层（不发送命令）
             if (c == 'h' || c == 'H') { clawd::showHelp(); break; }

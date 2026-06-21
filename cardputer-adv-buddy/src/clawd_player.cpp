@@ -41,6 +41,7 @@ char apTool_[40] = {0}, apHint_[92] = {0};
 char sess_[8][92] = {{0}};
 uint8_t sessN_ = 0;
 int sessScroll_ = 0;
+int sessTotal_ = 0;  // 真实 session 数（含 subagent 被过滤的）
 
 // --- LittleFS 文件回调（照搬 character.cpp）---
 void* openCb(const char* fn, int32_t* pSize) {
@@ -201,16 +202,21 @@ void drawSessions() {
     canvas.setTextSize(1);
     canvas.setTextDatum(top_left);
     char title[24];
-    snprintf(title, sizeof(title), "SESSIONS (%u)", sessN_);
+    snprintf(title, sizeof(title), "SESSIONS (%d)", sessTotal_);
     canvas.drawString(title, 6, 2);
     canvas.setTextColor(TFT_WHITE, BG);
     const int rowH = 12, top = 18, rows = (canvasH - top) / rowH;  // ~9 行
-    for (int r = 0; r < rows; r++) {
-        int idx = sessScroll_ + r;
-        if (idx >= sessN_) break;
-        char row[40];
-        strncpy(row, sess_[idx], sizeof(row) - 1); row[sizeof(row) - 1] = 0;
-        canvas.drawString(row, 6, top + r * rowH);
+    if (sessN_ == 0) {
+        canvas.setTextColor(0x8410, BG);
+        canvas.drawString("(subagent work in progress)", 6, top);
+    } else {
+        for (int r = 0; r < rows; r++) {
+            int idx = sessScroll_ + r;
+            if (idx >= sessN_) break;
+            char row[40];
+            strncpy(row, sess_[idx], sizeof(row) - 1); row[sizeof(row) - 1] = 0;
+            canvas.drawString(row, 6, top + r * rowH);
+        }
     }
     if (sessScroll_ > 0) canvas.drawString("^", canvasW - 10, top);
     if (sessScroll_ + rows < sessN_) canvas.drawString("v", canvasW - 10, canvasH - rowH);
@@ -258,10 +264,11 @@ void showApproval(const char* tool, const char* hint) {
 void hideApproval() { if (mode_ == APPROVAL) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 bool approvalVisible() { return mode_ == APPROVAL; }
 
-void showSessions(const char lines[][92], uint8_t n) {
+void showSessions(const char lines[][92], uint8_t n, int total) {
     sessN_ = n > 8 ? 8 : n;
     for (uint8_t i = 0; i < sessN_; i++) { strncpy(sess_[i], lines[i], 91); sess_[i][91] = 0; }
     sessScroll_ = 0;
+    sessTotal_ = total;
     if (mode_ != APPROVAL) mode_ = SESSIONS;
 }
 void hideSessions() { if (mode_ == SESSIONS) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
