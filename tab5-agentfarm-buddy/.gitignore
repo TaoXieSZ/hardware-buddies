@@ -1,0 +1,10 @@
+.pio/
+.vscode/
+.DS_Store
+__pycache__/
+*.pyc
+
+# pioarduino build-generated managed-component artifacts (P4 target)
+src/idf_component.yml
+managed_components/
+dependencies.lock
