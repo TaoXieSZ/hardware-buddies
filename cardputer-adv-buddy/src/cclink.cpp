@@ -16,7 +16,10 @@
 namespace {
 BuddyState g_state;
 bool g_changed = false;
-char g_line[640];     // 一行状态 JSON（entries 最多 8×~91 + 头，留余量）
+// 一行状态 JSON 缓冲。daemon 的 heartbeat 含 entries[8]×~91(=728) + sessions[8]
+// + tokens/model/limits 等，多 session 时轻松 >1KB。旧值 640 会把整帧丢弃
+// (poll 里 OVERFLOW 分支)，导致 prompt 永远收不到、审批面板不弹。2048 留足余量。
+char g_line[2048];
 size_t g_li = 0;
 
 // 设备名 = "Claude-" + BT MAC 末两字节（照搬 claude-code-buddy startBt）。
@@ -75,10 +78,15 @@ void poll() {
         int c = bleRead();
         if (c < 0) break;
         if (c == '\n' || c == '\r') {
-            if (g_li > 0) { g_line[g_li] = 0; if (g_line[0] == '{') applyJson(g_line); g_li = 0; }
+            if (g_li > 0) {
+                g_line[g_li] = 0;
+                if (g_line[0] == '{') applyJson(g_line);
+                g_li = 0;
+            }
         } else if (g_li < sizeof(g_line) - 1) {
             g_line[g_li++] = (char)c;
         } else {
+            Serial.printf("[cclink] OVERFLOW drop at %u bytes\n", (unsigned)g_li);
             g_li = 0;   // 行超长，丢弃防溢出
         }
     }

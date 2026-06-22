@@ -123,7 +123,7 @@ void applyTarget() {
 // 右上角会话计数角标（NORMAL）
 void drawBadge() {
     char b[16];
-    snprintf(b, sizeof(b), "%d\xB7%d", badgeTotal_, badgeRunning_);  // T·R
+    snprintf(b, sizeof(b), "%d/%d", badgeTotal_, badgeRunning_);  // T/R 总会话/运行中
     canvas.setTextSize(1);
     int w = (int)strlen(b) * 6 + 6;
     canvas.fillRect(canvasW - w, 0, w, 12, BG);
