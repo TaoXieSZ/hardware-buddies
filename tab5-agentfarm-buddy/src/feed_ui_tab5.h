@@ -17,13 +17,19 @@ class FeedUITab5 {
  private:
   enum class Mood { Idle, Happy, Worried, Sleep };
 
+  struct Rect { int x = 0, y = 0, w = 0, h = 0; };
+
   void render(const SerialFeedClient& client);
   void drawHeader(const SerialFeedClient& client);
   void drawPet(int x, int y, int w, int h);
+  void drawVolume();        // − / + touch buttons + level bar in the sidebar
   void drawFeed(const SerialFeedClient& client, int x, int y, int w, int h);
+  bool handleTouch();       // map taps to volume +/-; true if state changed
   void wake();
 
   Mood mood_ = Mood::Idle;
+  Rect volMinus_;
+  Rect volPlus_;
   AFStatus lastStatus_ = AFStatus::Connecting;
   bool dirty_ = true;
   bool dimmed_ = false;

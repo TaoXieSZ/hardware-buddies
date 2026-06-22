@@ -9,6 +9,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 
+#include "audio.h"   // speaker + volume control
 #include "avatar.h"  // clawd GIF avatar renderer (vendored from claude-code-buddy)
 
 // ---------- theme (mirrors src/tab5/ui.cpp) ----------
@@ -197,6 +198,8 @@ void FeedUITab5::onNewEntries(const std::vector<TriggerLog>& fresh) {
 void FeedUITab5::tick(const SerialFeedClient& client) {
   const uint32_t now = millis();
 
+  handleTouch();  // volume +/- taps; also wakes from nap
+
   if (mood_ == Mood::Happy && now > happyUntilMs_) {
     mood_ = Mood::Idle;
     dirty_ = true;
@@ -298,6 +301,8 @@ void FeedUITab5::drawPet(int x, int y, int w, int h) {
   pill(AV_CX - 84, AV_CY + stage / 2 + 16, 168, 44, th::CARD, tagc, tag,
        uifont(F_BOLD22));
 
+  drawVolume();
+
   // footer: connection + IP
   char foot[40];
   bool up = (WiFi.status() == WL_CONNECTED);
@@ -305,6 +310,55 @@ void FeedUITab5::drawPet(int x, int y, int w, int h) {
   else snprintf(foot, sizeof(foot), "connecting…");
   pill(16, H - 60, SB_W - 32, 44, th::CARD, up ? th::DIM : th::FAINT, foot,
        uifont(F_SMALL22));
+}
+
+// Volume control in the sidebar: a − button, a level bar, a + button.
+// Touch-only (the Tab5 has no physical keys); hit rects are cached for tick().
+void FeedUITab5::drawVolume() {
+  const int by = 566, bh = 60, bw = 72;
+  volMinus_ = { 16, by, bw, bh };
+  volPlus_ = { SB_W - 16 - bw, by, bw, bh };
+
+  card(volMinus_.x, by, bw, bh, th::CARD, th::CARD_HI, 14);
+  card(volPlus_.x, by, bw, bh, th::CARD, th::CARD_HI, 14);
+  spr.setFont(uifont(F_BOLD40));
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(th::TEXT, th::CARD);
+  spr.drawString("-", volMinus_.x + bw / 2, by + bh / 2 - 4);
+  spr.drawString("+", volPlus_.x + bw / 2, by + bh / 2 - 4);
+
+  // level bar between the buttons
+  const int gx = volMinus_.x + bw + 14;
+  const int gw = volPlus_.x - 14 - gx;
+  const int gy = by + bh / 2 - 7;
+  spr.fillRoundRect(gx, gy, gw, 14, 7, th::CARD);
+  const int pct = audioVolumePct();
+  const int fw = gw * pct / 100;
+  if (fw > 0) spr.fillRoundRect(gx, gy, fw, 14, 7, th::ACCENT);
+
+  char vb[16];
+  snprintf(vb, sizeof(vb), "VOL %d%%", pct);
+  spr.setFont(uifont(F_SMALL22));
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(th::DIM, th::PANEL);
+  spr.drawString(vb, gx + gw / 2, by - 16);
+}
+
+// Map a fresh tap to the volume buttons. Any tap also wakes the pet from a nap.
+bool FeedUITab5::handleTouch() {
+  auto t = M5.Touch.getDetail();
+  if (!t.wasPressed()) return false;
+
+  if (mood_ == Mood::Sleep) mood_ = Mood::Idle;
+  wake();  // restore brightness + reset the idle timer
+
+  auto in = [&](const Rect& r) {
+    return t.x >= r.x && t.x < r.x + r.w && t.y >= r.y && t.y < r.y + r.h;
+  };
+  if (in(volMinus_)) { audioVolumeDown(); dirty_ = true; return true; }
+  if (in(volPlus_)) { audioVolumeUp(); dirty_ = true; return true; }
+  dirty_ = true;  // a tap elsewhere may have un-napped us; redraw
+  return false;
 }
 
 void FeedUITab5::drawFeed(const SerialFeedClient& client, int x, int y, int w,

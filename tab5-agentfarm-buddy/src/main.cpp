@@ -8,6 +8,7 @@
 #include <M5Unified.h>
 
 #include "agentfarm_feed/serial_feed_client.h"
+#include "audio.h"
 #include "feed_ui_tab5.h"
 
 static SerialFeedClient gClient;
@@ -15,6 +16,9 @@ static FeedUITab5 gUi;
 
 void setup() {
   auto cfg = M5.config();
+  // We don't capture audio; keep the mic off the shared I2S bus so the speaker
+  // owns it outright (mood chirps + the volume confirmation blip).
+  cfg.internal_mic = false;
   M5.begin(cfg);
   // Trigger lines (~150B) can arrive back-to-back on the snapshot; size the
   // USB-CDC RX ring before begin() so a burst doesn't overflow the default 256.
@@ -26,6 +30,7 @@ void setup() {
   }
   gUi.begin();
   gClient.begin();
+  audioInit();  // claim the speaker + restore saved volume (Tab5 needs this)
 }
 
 void loop() {

@@ -73,17 +73,21 @@ connect, and reconnects on USB drops. Requires `pyserial`.
 - Header status pill: `LIVE` (green) when serial data is fresh, `OFFLINE` (red)
   after 15 s with no heartbeat.
 - Feed rows show trigger name, `type · agent · time`, and a result pill.
+- Mood chirps: low tone on error, high tone on success, soft blip otherwise.
+
+## Volume (touch)
+
+The sidebar has a `−` / `+` touch control with a level bar (`VOL nn%`). Tapping
+adjusts the speaker volume in steps and plays a confirmation blip at the new
+level; the setting is persisted to NVS so it survives reboots. Any tap also
+wakes the pet from a nap. See `src/audio.{h,cpp}`.
+
+The Tab5 speaker needs an explicit `M5.Speaker.begin()` + `setVolume()` at boot
+(`audioInit()`); `M5.begin()` alone leaves it silent.
 
 ## Known hardware gaps (Tab5)
 
-These mood side-effects fire in firmware but don't visibly take effect on the
-Tab5 yet — the core feed + avatar mood work:
-
 - **Sleep dim**: `M5.Display.setBrightness()` doesn't visibly change the Tab5
-  MIPI-DSI backlight (the mood goes to sleep, the screen doesn't dim).
-- **Sound**: `M5.Speaker.tone()` produces no audible chirp (no
-  `M5.Speaker.begin()/setVolume()` in `main.cpp`; the Tab5 codec path may need
-  explicit enable).
-
-Both are Tab5 hardware-control questions — verify against the M5GFX/M5Unified
-develop branch (Tab5 panel backlight + codec) before patching.
+  MIPI-DSI backlight (the mood goes to sleep, but the screen doesn't dim).
+  A Tab5 hardware-control question — verify against the M5GFX/M5Unified develop
+  branch (Tab5 panel backlight path) before patching.
