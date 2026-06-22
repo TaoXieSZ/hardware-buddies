@@ -32,11 +32,15 @@ class FeedUITab5 {
   Rect volPlus_;
   AFStatus lastStatus_ = AFStatus::Connecting;
   bool dirty_ = true;
-  bool dimmed_ = false;
+  uint8_t curBright_ = kBrightOn;  // last value pushed to the backlight
   uint32_t lastEventMs_ = 0;
   uint32_t happyUntilMs_ = 0;
 
   static const uint32_t kSleepAfterMs = 120000;  // doze after 2 min quiet
   static const uint8_t kBrightOn = 255;
-  static const uint8_t kBrightDim = 64;
+  // Tab5's GPIO22 PWM backlight (Light_PWM) is effectively on/off: on-device
+  // probing showed duty 4/10/24/64 all look full-bright and only 0 goes dark
+  // (LED-driver current floor). So "napping" turns the backlight fully off;
+  // any tap or new trigger wakes it back to kBrightOn.
+  static const uint8_t kBrightDim = 0;
 };

@@ -69,7 +69,8 @@ connect, and reconnects on USB drops. Requires `pyserial`.
 ## Pet behavior
 
 - Mood from `TriggerLog.result`: `error` → worried (dizzy avatar), `success` →
-  happy (celebrate), `queued`/`skipped_*` → neutral. Idle 2 min → sleep.
+  happy (celebrate), `queued`/`skipped_*` → neutral. Idle 2 min → nap: the
+  backlight turns off; a tap or new trigger wakes it.
 - Header status pill: `LIVE` (green) when serial data is fresh, `OFFLINE` (red)
   after 15 s with no heartbeat.
 - Feed rows show trigger name, `type · agent · time`, and a result pill.
@@ -85,9 +86,10 @@ wakes the pet from a nap. See `src/audio.{h,cpp}`.
 The Tab5 speaker needs an explicit `M5.Speaker.begin()` + `setVolume()` at boot
 (`audioInit()`); `M5.begin()` alone leaves it silent.
 
-## Known hardware gaps (Tab5)
+## Backlight note (Tab5)
 
-- **Sleep dim**: `M5.Display.setBrightness()` doesn't visibly change the Tab5
-  MIPI-DSI backlight (the mood goes to sleep, but the screen doesn't dim).
-  A Tab5 hardware-control question — verify against the M5GFX/M5Unified develop
-  branch (Tab5 panel backlight path) before patching.
+`M5.Display.setBrightness()` does drive the Tab5 backlight (M5GFX wires a
+`Light_PWM` on GPIO22, LEDC ch7 @ 44.1 kHz), but on-device probing showed the
+LED driver is effectively **on/off**: duty 4/10/24/64 all look full-bright and
+only 0 goes dark. So intermediate "dimming" isn't achievable on this panel —
+napping turns the backlight fully off instead, which also saves power.

@@ -170,10 +170,8 @@ void FeedUITab5::begin() {
 }
 
 void FeedUITab5::wake() {
-  if (dimmed_) {
-    M5.Display.setBrightness(kBrightOn);
-    dimmed_ = false;
-  }
+  // Brightness follows mood and is re-applied each tick(), so waking only needs
+  // to reset the idle timer; tick() restores full brightness next frame.
   lastEventMs_ = millis();
 }
 
@@ -206,12 +204,18 @@ void FeedUITab5::tick(const SerialFeedClient& client) {
   }
   if (now - lastEventMs_ > kSleepAfterMs && mood_ != Mood::Sleep) {
     mood_ = Mood::Sleep;
-    if (!dimmed_) {
-      M5.Display.setBrightness(kBrightDim);
-      dimmed_ = true;
-    }
     dirty_ = true;
   }
+
+  // Backlight tracks mood: dim while napping, full otherwise. Apply only on
+  // change, every tick — mirrors the proven buddy power policy (re-applying is
+  // robust to any internal brightness reset) instead of a one-shot flag.
+  const uint8_t wantBright = (mood_ == Mood::Sleep) ? kBrightDim : kBrightOn;
+  if (wantBright != curBright_) {
+    curBright_ = wantBright;
+    M5.Display.setBrightness(wantBright);
+  }
+
   if (client.status() != lastStatus_) {
     lastStatus_ = client.status();
     dirty_ = true;
