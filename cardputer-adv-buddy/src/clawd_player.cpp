@@ -83,12 +83,13 @@ void drawCb(GIFDRAW* d) {
 
 const char* fileForState(AgentState s) {
     switch (s) {
-        case AgentState::Idle:     return "idle.gif";
-        case AgentState::Thinking: return "busy_0.gif";
-        case AgentState::ToolUse:  return "busy_1.gif";
-        case AgentState::Approval: return "attention.gif";
-        case AgentState::Done:     return "celebrate.gif";
-        default:                   return "idle.gif";
+        case AgentState::Idle:         return "idle.gif";
+        case AgentState::Thinking:     return "clawd-thinking.gif";
+        case AgentState::ToolUse:      return "busy_1.gif";
+        case AgentState::Approval:     return "attention.gif";
+        case AgentState::Done:         return "celebrate.gif";
+        case AgentState::Notification: return "clawd-notification.gif";
+        default:                       return "idle.gif";
     }
 }
 const char* targetFile() {
@@ -255,6 +256,9 @@ void setSleeping(bool sleep) {
 }
 void reactHeart() { reactionFile_ = "heart.gif"; reactionMs_ = 1500; if (ready && mode_ == NORMAL) applyTarget(); }
 void reactDizzy() { reactionFile_ = "dizzy.gif"; reactionMs_ = 1200; if (ready && mode_ == NORMAL) applyTarget(); }
+// 工具出错：error 用 reaction 而非持久状态——"failed:" 后紧跟 done/ready 会一闪而过，
+// reaction 临时覆盖 2.5s 保证 error 动画显示足够时长。
+void reactError() { reactionFile_ = "error-120.gif"; reactionMs_ = 2500; if (ready && mode_ == NORMAL) applyTarget(); }
 
 void showApproval(const char* tool, const char* hint) {
     strncpy(apTool_, tool ? tool : "", sizeof(apTool_) - 1); apTool_[sizeof(apTool_) - 1] = 0;

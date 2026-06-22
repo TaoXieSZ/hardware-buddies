@@ -29,6 +29,7 @@ static uint32_t g_promptShownMs = 0;
 // 音效：状态跟踪（用于检测转换时机）
 static AgentState g_lastAgentState = AgentState::Idle;
 static bool g_wasOnline = false;
+static bool g_wasFailed = false;   // 上帧 msg 是否 "failed:"（error reaction 边沿触发）
 
 // 快捷 nudge：NORMAL 模式键 → 经 cmd:key 打进聚焦的 Claude 终端。
 // keyName 非空 = 发命名键(如 escape/space)；否则 = 打 text + enter。
@@ -162,6 +163,10 @@ void loop() {
         clawd::setBadge(bs.total, bs.running);
         AgentState cur = deriveAgentState(bs);
         clawd::setState(cur);
+        // 工具出错(msg "failed:") → error 临时动画 + 音效（边沿触发，仅新出现时一次）
+        bool nowFailed = (strncmp(bs.msg, "failed", 6) == 0);
+        if (online && nowFailed && !g_wasFailed) { clawd::reactError(); sound::play("stop_fail"); }
+        g_wasFailed = nowFailed;
         // 状态转换 → 对应音效
         if (online && cur != g_lastAgentState) {
             if      (cur == AgentState::Approval) sound::play("approval");

@@ -22,6 +22,9 @@
       "celebrate_1.gif"
     ],
     "dizzy": "dizzy.gif",
-    "heart": "heart.gif"
+    "heart": "heart.gif",
+    "thinking": "clawd-thinking.gif",
+    "notification": "clawd-notification.gif",
+    "error": "error-120.gif"
   }
 }

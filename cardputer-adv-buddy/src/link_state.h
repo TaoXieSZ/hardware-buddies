@@ -4,6 +4,7 @@
 #pragma once
 #include "agent_state.h"
 #include <stdint.h>
+#include <string.h>
 
 struct BuddyState {
     int  total = 0, running = 0, waiting = 0;
@@ -22,6 +23,10 @@ struct BuddyState {
 inline AgentState deriveAgentState(const BuddyState& s) {
     if (s.waiting > 0)    return AgentState::Approval;   // → attention.gif
     if (s.completed)      return AgentState::Done;       // → celebrate.gif
-    if (s.running >= 1)   return AgentState::ToolUse;    // → busy.gif
+    // thinking 必须在 running 之前判：bridge 在 UserPromptSubmit 时同时设 running=1 + msg="thinking…"，
+    // 若先判 running 会落到 ToolUse，thinking 永远命不中。
+    if (strstr(s.msg, "thinking"))               return AgentState::Thinking;      // → clawd-thinking.gif
+    if (s.running >= 1)   return AgentState::ToolUse;    // → busy.gif（msg "running: <tool>"）
+    if (strstr(s.msg, "waiting for your input")) return AgentState::Notification;  // → clawd-notification.gif
     return AgentState::Idle;                             // → idle.gif
 }
