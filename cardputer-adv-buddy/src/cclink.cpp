@@ -2,6 +2,7 @@
 // 决定回送格式对照 main.cpp:1428 `{"cmd":"permission","id":..,"decision":..}`。
 #include "cclink.h"
 #include "ble_link.h"
+#include "sound_player.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <esp_mac.h>
@@ -60,6 +61,12 @@ void applyJson(const char* line) {
     } else {
         s.promptId[0] = 0; s.promptTool[0] = 0; s.promptHint[0] = 0;
     }
+
+    // bridge 的 play 字段(one-shot 事件名小写)→ 播放 /sounds/<name>.wav。
+    // 只有关键事件放了 wav 文件，其余事件 playEvent 找不到文件自动忽略。
+    const char* pl = doc["play"];
+    if (pl && pl[0]) sound::playEvent(pl);
+
     g_changed = true;
 }
 }  // namespace

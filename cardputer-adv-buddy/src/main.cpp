@@ -26,8 +26,7 @@ static constexpr uint32_t APPROVAL_SAFETY_MS = 30000;  // 面板兜底超时(回
 static char g_shownId[40] = {0};
 static uint32_t g_promptShownMs = 0;
 
-// 音效：状态跟踪（用于检测转换时机）
-static AgentState g_lastAgentState = AgentState::Idle;
+// 状态跟踪（边沿检测）
 static bool g_wasOnline = false;
 static bool g_wasFailed = false;   // 上帧 msg 是否 "failed:"（error reaction 边沿触发）
 
@@ -144,7 +143,9 @@ void loop() {
     // ── 快捷 nudge(NORMAL 模式:非审批、非会话、非帮助)──
     if (keyEvent && !snapApproval && !snapSessions && !snapHelp) {
         for (auto c : ks.word) {
-            // h = 切换 HELP 覆盖层（不发送命令）
+            // 音量调节(-/=)与 HELP 切换(h)——本地操作，不发命令
+            if (c == '-') { sound::volumeDown(); char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }
+            if (c == '=') { sound::volumeUp();   char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }
             if (c == 'h' || c == 'H') { clawd::showHelp(); break; }
             for (auto& n : NUDGES) {
                 if (c != n.key) continue;
@@ -161,20 +162,12 @@ void loop() {
     // ── 正常态:真实状态驱动 clawd + 角标 ──
     if (cclink::changed()) {
         clawd::setBadge(bs.total, bs.running);
-        AgentState cur = deriveAgentState(bs);
-        clawd::setState(cur);
-        // 工具出错(msg "failed:") → error 临时动画 + 音效（边沿触发，仅新出现时一次）
+        clawd::setState(deriveAgentState(bs));
+        // 工具出错 → error 临时动画。声音改由 cclink 的 play 字段 wav 负责
+        // （hook 事件声音统一走 wav，不再用 tone，避免重复）。
         bool nowFailed = (strncmp(bs.msg, "failed", 6) == 0);
-        if (online && nowFailed && !g_wasFailed) { clawd::reactError(); sound::play("stop_fail"); }
+        if (online && nowFailed && !g_wasFailed) clawd::reactError();
         g_wasFailed = nowFailed;
-        // 状态转换 → 对应音效
-        if (online && cur != g_lastAgentState) {
-            if      (cur == AgentState::Approval) sound::play("approval");
-            else if (cur == AgentState::Done)     sound::play("done");
-            else if (cur == AgentState::ToolUse
-                     && g_lastAgentState == AgentState::Idle) sound::play("tool");
-            g_lastAgentState = cur;
-        }
     }
 
     // 体感(覆盖模式下 clawd_player 内部 no-op)

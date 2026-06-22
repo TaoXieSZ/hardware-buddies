@@ -188,7 +188,7 @@ void drawHelp() {
     canvas.drawString("3=explain   4=stop(esc)", L, y); y += rowH;
     canvas.drawString("5=yes       r=retry", L, y); y += rowH;
     canvas.drawString("c=commit    f=fix this", L, y); y += rowH;
-    canvas.drawString("v=ptt       h=help", L, y); y += rowH + 2;
+    canvas.drawString("v=ptt  h=help  -/=vol", L, y); y += rowH + 2;
 
     canvas.setTextColor(0x8410, BG);
     canvas.drawString("APPROVE: ok  esc/n=no  a=always", L, y); y += rowH;

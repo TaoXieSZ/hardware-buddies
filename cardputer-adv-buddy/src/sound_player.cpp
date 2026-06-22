@@ -3,6 +3,7 @@
 // tone(freq, ms) 由 M5Unified DMA 后台播放，不阻塞主循环。
 #include "sound_player.h"
 #include "M5Cardputer.h"
+#include <LittleFS.h>
 #include <string.h>
 
 namespace {
@@ -21,12 +22,16 @@ static const Note SND_NUDGE[]      = {{1175,30},{0,0}};  // D6 触感
 const Note* g_seq = nullptr;
 int         g_idx = 0;
 uint32_t    g_playAfterMs = 0;  // millis() 时间戳，到了才允许播放（开机延迟）
+
+int      g_volume = 150;        // 当前音量 0-255（-/= 键调节，tone 与 wav 共用）
+uint8_t* g_wavBuf = nullptr;    // wav 读入缓冲（复用；playWav 异步播放期间不可覆盖）
+size_t   g_wavCap = 0;
 }  // namespace
 
 namespace sound {
 
 void begin() {
-    M5Cardputer.Speaker.setVolume(150);
+    M5Cardputer.Speaker.setVolume(g_volume);
     g_seq = SND_CONNECT;
     g_idx = 0;
     g_playAfterMs = 800;  // 开机 800ms 后播（等 DAC+BLE 稳定）
@@ -48,6 +53,32 @@ void play(const char* name) {
 }
 
 bool busy() { return g_seq != nullptr; }
+
+// 播放 hook 事件 wav：从 LittleFS 读 /sounds/<name>.wav 到 RAM → playWav(异步)。
+// 文件不存在则 no-op —— 只有关键事件放了 wav，bridge 发的其他 play 字段自动忽略。
+void playEvent(const char* name) {
+    if (!name || !name[0]) return;
+    char path[48];
+    snprintf(path, sizeof(path), "/sounds/%s.wav", name);
+    File f = LittleFS.open(path, "r");
+    if (!f) return;
+    size_t len = f.size();
+    if (len == 0 || len > 100 * 1024) { f.close(); return; }  // RAM 保护(空闲~142KB)
+    if (len > g_wavCap) {                                       // 复用缓冲,只在变大时重分配
+        free(g_wavBuf);
+        g_wavBuf = (uint8_t*)malloc(len);
+        g_wavCap = g_wavBuf ? len : 0;
+    }
+    if (!g_wavBuf) { f.close(); return; }
+    f.read(g_wavBuf, len);
+    f.close();
+    M5Cardputer.Speaker.stop();
+    M5Cardputer.Speaker.playWav(g_wavBuf, len);
+}
+
+void volumeUp()   { g_volume = g_volume + 25 > 255 ? 255 : g_volume + 25; M5Cardputer.Speaker.setVolume(g_volume); M5Cardputer.Speaker.tone(1175, 40); }
+void volumeDown() { g_volume = g_volume - 25 < 0   ? 0   : g_volume - 25; M5Cardputer.Speaker.setVolume(g_volume); M5Cardputer.Speaker.tone(880, 40); }
+int  volume()     { return g_volume; }
 
 void tick() {
     if (g_playAfterMs > 0) {
