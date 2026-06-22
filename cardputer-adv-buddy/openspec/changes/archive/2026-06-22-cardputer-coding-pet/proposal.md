@@ -1,3 +1,12 @@
+> **⚠️ SUPERSEDED / 未落地 — 已归档（--skip-specs，不写入 baseline）**
+>
+> 本 change 描述的核心从未落地，故归档时**不应用其 spec 到 `openspec/specs/`**（用 `openspec archive --skip-specs`）：
+> - `pet-avatar`（meganetaaan/m5stack-avatar 程序化脸）**弃用** —— 240×135 上默认脸尺寸难调，实际改走 **clawd GIF** 路线（固定像素居中）。
+> - `pet-mood`（Tamagotchi 心情系统）**从未实现** —— 代码里没有心情/精力模型。
+> - `motion-interaction`（拿起/晃动/静止 → reaction）是唯一真落地的部分，其行为已并入 **`cardputer-feedback-channels`** 的 `agent-state-animation`。
+>
+> 状态动画 + 声音 + 音量的真实实现见 **`cardputer-feedback-channels`**。下文保留原始设想仅作历史记录。
+
 ## Why
 
 Cardputer-ADV 现在只是一块「五态文字 HUD」——能看，但不好玩，也没用上这块卡片电脑最讨喜的特质：一块正对着你的小屏 + 新增的 BMI270 体感。把它变成一只**随你的 Claude Code 会话情绪起伏的电子宠物（Tamagotchi）**，让「等 agent 干活」这件枯燥的事变得有陪伴感：跑工具时它两眼放光，空闲久了打瞌睡，任务完成蹦跶庆祝，报错时垂头丧气，需要你批准工具时可怜巴巴盯着你求点头。
