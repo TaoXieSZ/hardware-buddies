@@ -90,7 +90,21 @@ void loop() {
     bool snapHelp     = clawd::helpVisible();
 
     // ── 审批层(最高优先)──
-    bool hasPrompt = bs.promptId[0] != 0;
+    // AskUserQuestion 自带一个 permission prompt，但「回答问题」本身即审批。有 pending
+    // question 时，自动放行(once)这个冗余审批、不弹审批层，让 QUESTION 层直接出——否则审批
+    // 会盖住问答、逼用户先按一下才看到选项。复刻原本「once→答题」的有效流程，省掉手动 once。
+    // 该 prompt 的 tool 名是默认 "tool"(daemon 对 AskUserQuestion 未带工具名)，不可靠；
+    // 故以「有 pending question」为准——此时并发的这个 permission prompt 必是该问答的。
+    // 自动放行(once)并记下 id，对该 id 永久抑制审批层：① question 答完后 prompt 常残留
+    // 几十秒，避免它事后才弹出；② 让 QUESTION 层直接出，省掉手动 once。
+    static char g_autoApprovedId[40] = {0};
+    if (bs.promptId[0] && bs.hasQuestion && strcmp(bs.promptId, g_autoApprovedId) != 0) {
+        strncpy(g_autoApprovedId, bs.promptId, sizeof(g_autoApprovedId) - 1);
+        g_autoApprovedId[sizeof(g_autoApprovedId) - 1] = 0;
+        cclink::sendDecision(bs.promptId, "once");   // 自动放行；真正的答案由 QUESTION 层回送
+    }
+    if (!bs.promptId[0]) g_autoApprovedId[0] = 0;
+    bool hasPrompt = bs.promptId[0] != 0 && strcmp(bs.promptId, g_autoApprovedId) != 0;
     if (hasPrompt && strcmp(bs.promptId, g_shownId) != 0) {       // 新审批
         strncpy(g_shownId, bs.promptId, sizeof(g_shownId) - 1);
         g_shownId[sizeof(g_shownId) - 1] = 0;
