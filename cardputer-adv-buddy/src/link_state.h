@@ -6,11 +6,39 @@
 #include <stdint.h>
 #include <string.h>
 
+// UTF-8 边界安全的截断复制：拷 src 到 dst（≤dstSize-1 字节），且绝不在多字节序列中间切断，
+// 避免中文被按字节截断后留半个 code point → efontCN 渲染出乱码尾。dst 总以 \0 结尾。
+inline void utf8lcpy(char* dst, const char* src, size_t dstSize) {
+    if (!dstSize) return;
+    if (!src) { dst[0] = 0; return; }
+    size_t n = 0, max = dstSize - 1;
+    while (n < max && src[n]) ++n;
+    while (n > 0 && ((unsigned char)src[n] & 0xC0) == 0x80) --n;  // 回退到 lead byte
+    memcpy(dst, src, n);
+    dst[n] = 0;
+}
+
 // payload sessions[] 的一条：可选中会话切换器用。
 struct SessionInfo {
     char sid[40] = {0};   // Claude session_id（= cmux resume_binding.checkpoint_id），UUID 36 字符
     bool running = false; // 该会话是否在生成
     char label[40] = {0}; // cmux auto-name/prompt（可读名）；空 = 列表 fallback 到 sid 前缀
+};
+
+// AskUserQuestion 的一个选项（payload question.options[]）。
+struct QuestionOption {
+    char id[8]     = {0};  // "opt0".."optN"（稳定 id，回送用，省字节 + 避中文编码）
+    char label[40] = {0};  // 选项可读文本
+};
+
+// 待应答的 AskUserQuestion 快照（来自 cmux feed，经 cc-bridge）。
+struct QuestionState {
+    char rid[100]  = {0};  // cmux feed requestId（~90 字符），回送 answerQuestion 用
+    char header[24] = {0}; // 问题 header（短标签）
+    char text[92]  = {0};  // 问题文本
+    bool multi = false;    // multiSelect
+    QuestionOption options[6];  // 上限 6（AskUserQuestion 常 2-4）
+    uint8_t nOptions = 0;
 };
 
 struct BuddyState {
@@ -27,6 +55,9 @@ struct BuddyState {
     // 上限 16 对齐 bridge to_payload 的封顶；sid 用于选中后回送 selectSession。
     SessionInfo sessions[16];
     uint8_t nSessions = 0;
+    // 待应答的 AskUserQuestion（来自 cmux feed，经 cc-bridge）；hasQuestion=false 即无。
+    QuestionState question;
+    bool hasQuestion = false;
 };
 
 // 会话状态 → clawd 用的 AgentState（对齐 claude-code-buddy 派生顺序）。

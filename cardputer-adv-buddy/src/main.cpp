@@ -85,6 +85,7 @@ void loop() {
 
     // 帧头快照——各模式块用快照，避免同帧 hide→show 状态竞争
     bool snapApproval = clawd::approvalVisible();
+    bool snapQuestion = clawd::questionVisible();
     bool snapSessions = clawd::sessionsVisible();
     bool snapHelp     = clawd::helpVisible();
 
@@ -115,8 +116,61 @@ void loop() {
     }
     if (!hasPrompt) g_shownId[0] = 0;
 
-    // ── 会话列表(无审批时,tab 开关,esc 关,,/. 选,enter/space 切换)──
-    if (!snapApproval && keyEvent) {
+    // ── AskUserQuestion 应答层(优先级次于审批，高于会话列表)──
+    static char g_shownQRid[100] = {0};      // 当前已弹的 rid(防重复响铃/重置超时)
+    static char g_dismissedQRid[100] = {0};  // 用户已答/取消的 rid(不再弹，直到 bridge 撤)
+    static uint32_t g_qShownMs = 0;
+    // 该问题仍待答(未被本机答过/取消过)。显示/恢复条件：未 dismiss、无更高层(审批)、
+    // 当前没在显示 question —— 这样被 approval 覆盖后、approval 答完能自动恢复。
+    bool qActive = bs.hasQuestion && strcmp(bs.question.rid, g_dismissedQRid) != 0;
+    if (qActive && !snapApproval && !snapQuestion) {
+        bool isNew = strcmp(bs.question.rid, g_shownQRid) != 0;
+        strncpy(g_shownQRid, bs.question.rid, sizeof(g_shownQRid) - 1);
+        g_shownQRid[sizeof(g_shownQRid) - 1] = 0;
+        if (isNew) { g_qShownMs = now; sound::play("nudge"); }  // 仅真新问题响铃+计时(恢复不响)
+        clawd::showQuestion(bs);
+        snapQuestion = true;
+    }
+    if (snapQuestion) {
+        if (keyEvent) {
+            bool submit = ks.enter;
+            bool cancel = ks.esc;            // fn+esc
+            for (auto c : ks.word) {
+                if (c == '`')                  cancel = true;   // 单按 esc 键 = backtick
+                else if (c == ' ')             submit = true;
+                else if (c == ',' || c == ';') clawd::questionMove(-1);
+                else if (c == '.' || c == '/') clawd::questionMove(1);
+                else if (c >= '1' && c <= '9') {
+                    clawd::questionJumpTo(c - '1');
+                    if (clawd::questionMulti()) clawd::questionToggle();  // 多选: toggle 勾选
+                    else submit = true;                                  // 单选: 即选即交
+                }
+            }
+            if (submit || cancel) {
+                if (submit) {
+                    const char* ids[6];
+                    uint8_t nid = clawd::questionSelectedIds(ids, 6);
+                    if (nid > 0) {
+                        cclink::sendAnswerQuestion(clawd::questionRid(), ids, nid);
+                        clawd::setToast("answered");
+                        sound::play("nudge");
+                    }
+                }
+                // 标记已处理：不再 resume，直到 bridge 撤(轮询发现不 pending)
+                strncpy(g_dismissedQRid, bs.question.rid, sizeof(g_dismissedQRid) - 1);
+                g_dismissedQRid[sizeof(g_dismissedQRid) - 1] = 0;
+                clawd::hideQuestion();
+            }
+        }
+        // 主要靠 daemon 撤（question 答了 / cmux 120s expired → hasQuestion=false）；
+        // 本地超时延到 125s 对齐 cmux feed 的 120s 阻塞——AskUserQuestion 用户可能想很久，
+        // 用审批的 30s 会过早撤面板、与 resume 打架造成闪烁。125s 仅极端兜底。
+        if (!bs.hasQuestion || (now - g_qShownMs > 125000UL)) clawd::hideQuestion();
+    }
+    if (!bs.hasQuestion) { g_shownQRid[0] = 0; g_dismissedQRid[0] = 0; }
+
+    // ── 会话列表(无审批/问题时,tab 开关,esc 关,,/. 选,enter/space 切换)──
+    if (!snapApproval && !snapQuestion && keyEvent) {
         if (ks.tab) {
             if (snapSessions) clawd::hideSessions();
             else clawd::showSessions(bs);

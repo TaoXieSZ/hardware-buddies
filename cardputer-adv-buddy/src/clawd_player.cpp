@@ -26,7 +26,7 @@ int32_t reactionMs_ = 0;
 const char* reactionFile_ = nullptr;
 
 // 合成模式：优先级 APPROVAL > SESSIONS > HELP > NORMAL
-enum Mode { NORMAL, APPROVAL, SESSIONS, HELP };
+enum Mode { NORMAL, APPROVAL, QUESTION, SESSIONS, HELP };
 Mode mode_ = NORMAL;
 
 // NORMAL 角标 + toast
@@ -43,6 +43,17 @@ uint8_t sessN_ = 0;
 int sessSel_ = 0;    // 选中索引（高亮 + enter 切换的目标）
 int sessScroll_ = 0; // viewport 顶部索引（跟随选中）
 int sessTotal_ = 0;  // 真实 session 数（payload total）
+
+// QUESTION（AskUserQuestion 应答器）— showQuestion 时的快照
+struct _QOpt { char id[8] = {0}; char label[40] = {0}; };
+char qRid_[100] = {0};
+char qHeader_[24] = {0};
+char qText_[92] = {0};
+bool qMulti_ = false;
+_QOpt qOpts_[6];
+uint8_t qN_ = 0;
+int qSel_ = 0;             // 光标
+bool qChecked_[6] = {false}; // multiSelect 勾选态
 
 // --- LittleFS 文件回调（照搬 character.cpp）---
 void* openCb(const char* fn, int32_t* pSize) {
@@ -202,11 +213,12 @@ void drawSessions() {
     canvas.fillSprite(BG);
     canvas.setTextColor(CLAWD, BG);
     canvas.setTextSize(1);
+    canvas.setFont(&fonts::efontCN_12);   // 中文会话名渲染（默认字体无 CJK glyph）
     canvas.setTextDatum(top_left);
     char title[24];
     snprintf(title, sizeof(title), "SESSIONS (%d)", sessTotal_);
     canvas.drawString(title, 6, 2);
-    const int rowH = 12, top = 18, rows = (canvasH - top) / rowH;  // ~9 行
+    const int rowH = 14, top = 16, rows = (canvasH - top) / rowH;  // efontCN_12 行高
     if (sessN_ == 0) {
         canvas.setTextColor(0x8410, BG);
         canvas.drawString("(no sessions)", 6, top);
@@ -222,15 +234,51 @@ void drawSessions() {
             char sid8[9];
             strncpy(sid8, sess_[idx].sid, 8); sid8[8] = 0;
             const char* nm = sess_[idx].label[0] ? sess_[idx].label : sid8;
-            char row[40];
-            // %.24s 截断防超屏宽 / 盖住右侧 run/idle 标。
-            snprintf(row, sizeof(row), "%c %d %.24s", sel ? '>' : ' ', idx + 1, nm);
+            char nm2[40]; utf8lcpy(nm2, nm, sizeof(nm2));  // UTF-8 安全；超宽由 sprite 裁剪
+            char row[64];
+            snprintf(row, sizeof(row), "%c %d %s", sel ? '>' : ' ', idx + 1, nm2);
             canvas.drawString(row, 6, y);
             canvas.drawString(sess_[idx].running ? "run" : "idle", canvasW - 32, y);
         }
     }
     if (sessScroll_ > 0) canvas.drawString("^", canvasW - 10, top);
     if (sessScroll_ + rows < sessN_) canvas.drawString("v", canvasW - 10, canvasH - rowH);
+    canvas.setFont(&fonts::Font0);   // 复位默认字体，避免污染其他面板
+}
+
+// AskUserQuestion 应答面板：header + 问题 + N 选项（高亮当前；multiSelect 显勾选）
+void drawQuestion() {
+    canvas.fillSprite(BG);
+    canvas.setTextColor(CLAWD, BG);
+    canvas.setTextSize(1);
+    canvas.setFont(&fonts::efontCN_12);   // 中文 header/选项/提示渲染（默认字体无 CJK glyph）
+    canvas.setTextDatum(top_left);
+    char title[28];
+    snprintf(title, sizeof(title), "? %s", qHeader_[0] ? qHeader_ : "Question");
+    canvas.drawString(title, 6, 1);
+    canvas.setTextColor(0xCE59, BG);
+    char qt[92]; utf8lcpy(qt, qText_, sizeof(qt));  // 单行，超宽由 sprite 裁剪
+    canvas.drawString(qt, 6, 15);
+    const int rowH = 14, top = 30, rows = (canvasH - top - 13) / rowH;  // efontCN_12 行高
+    for (int r = 0; r < rows; r++) {
+        int idx = r;                 // 选项 ≤6，单屏无需滚动
+        if (idx >= qN_) break;
+        bool sel = (idx == qSel_);
+        int y = top + r * rowH;
+        if (sel) canvas.fillRect(0, y - 1, canvasW, rowH, 0x2945);
+        canvas.setTextColor(sel ? TFT_WHITE : 0xCE59, sel ? 0x2945 : BG);
+        char lbl[40]; utf8lcpy(lbl, qOpts_[idx].label, sizeof(lbl));  // UTF-8 安全；超宽 sprite 裁剪
+        char row[64];
+        if (qMulti_)
+            snprintf(row, sizeof(row), "%c[%c]%d %s", sel ? '>' : ' ',
+                     qChecked_[idx] ? 'x' : ' ', idx + 1, lbl);
+        else
+            snprintf(row, sizeof(row), "%c %d %s", sel ? '>' : ' ', idx + 1, lbl);
+        canvas.drawString(row, 6, y);
+    }
+    canvas.setTextColor(0x8410, BG);
+    canvas.drawString(qMulti_ ? "1-N tog · ok 交 · esc" : "1-N 选 · ok · esc", 6, canvasH - 13);
+    canvas.setFont(&fonts::Font0);   // 复位默认字体
 }
 }  // namespace
 
@@ -290,7 +338,7 @@ void showSessions(const BuddyState& bs) {
     sessScroll_ = 0;
     sessSel_ = 0;
     sessTotal_ = bs.total;
-    if (mode_ != APPROVAL) mode_ = SESSIONS;
+    if (mode_ != APPROVAL && mode_ != QUESTION) mode_ = SESSIONS;
 }
 void hideSessions() { if (mode_ == SESSIONS) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 void sessionsMove(int delta) {
@@ -309,7 +357,48 @@ const char* sessionsSelectedSid() {
 }
 bool sessionsVisible() { return mode_ == SESSIONS; }
 
-void showHelp() { if (mode_ != APPROVAL && mode_ != SESSIONS) mode_ = HELP; }
+void showQuestion(const BuddyState& bs) {
+    qN_ = bs.question.nOptions > 6 ? 6 : bs.question.nOptions;
+    strncpy(qRid_, bs.question.rid, sizeof(qRid_) - 1); qRid_[sizeof(qRid_) - 1] = 0;
+    strncpy(qHeader_, bs.question.header, sizeof(qHeader_) - 1); qHeader_[sizeof(qHeader_) - 1] = 0;
+    strncpy(qText_, bs.question.text, sizeof(qText_) - 1); qText_[sizeof(qText_) - 1] = 0;
+    qMulti_ = bs.question.multi;
+    for (uint8_t i = 0; i < qN_; i++) {
+        strncpy(qOpts_[i].id, bs.question.options[i].id, sizeof(qOpts_[i].id) - 1);
+        qOpts_[i].id[sizeof(qOpts_[i].id) - 1] = 0;
+        strncpy(qOpts_[i].label, bs.question.options[i].label, sizeof(qOpts_[i].label) - 1);
+        qOpts_[i].label[sizeof(qOpts_[i].label) - 1] = 0;
+        qChecked_[i] = false;
+    }
+    qSel_ = 0;
+    mode_ = QUESTION;   // 仅次于 APPROVAL（见 showSessions/showHelp 的避让）
+}
+void hideQuestion() { if (mode_ == QUESTION) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
+void questionMove(int delta) {
+    if (mode_ != QUESTION || qN_ == 0) return;
+    qSel_ += delta;
+    if (qSel_ < 0) qSel_ = 0;
+    if (qSel_ >= qN_) qSel_ = qN_ - 1;
+}
+void questionToggle() {
+    if (mode_ == QUESTION && qMulti_ && qSel_ >= 0 && qSel_ < qN_) qChecked_[qSel_] = !qChecked_[qSel_];
+}
+void questionJumpTo(int idx) { if (mode_ == QUESTION && idx >= 0 && idx < qN_) qSel_ = idx; }
+bool questionMulti() { return mode_ == QUESTION && qMulti_; }
+const char* questionRid() { return mode_ == QUESTION ? qRid_ : ""; }
+uint8_t questionSelectedIds(const char** out, uint8_t maxN) {
+    if (mode_ != QUESTION) return 0;
+    uint8_t n = 0;
+    if (qMulti_) {
+        for (uint8_t i = 0; i < qN_ && n < maxN; i++) if (qChecked_[i]) out[n++] = qOpts_[i].id;
+    } else if (qSel_ >= 0 && qSel_ < qN_ && maxN > 0) {
+        out[n++] = qOpts_[qSel_].id;
+    }
+    return n;
+}
+bool questionVisible() { return mode_ == QUESTION; }
+
+void showHelp() { if (mode_ != APPROVAL && mode_ != QUESTION && mode_ != SESSIONS) mode_ = HELP; }
 void hideHelp() { if (mode_ == HELP) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 bool helpVisible() { return mode_ == HELP; }
 
@@ -317,6 +406,7 @@ void tick(uint32_t dtMs) {
     if (!ready) return;
 
     if (mode_ == APPROVAL) { drawApproval(); canvas.pushSprite(0, 0); return; }
+    if (mode_ == QUESTION) { drawQuestion(); canvas.pushSprite(0, 0); return; }
     if (mode_ == SESSIONS) { drawSessions(); canvas.pushSprite(0, 0); return; }
     if (mode_ == HELP)     { drawHelp();     canvas.pushSprite(0, 0); return; }
 

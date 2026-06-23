@@ -36,7 +36,7 @@ void applyJson(const char* line) {
     s.waiting   = doc["waiting"]   | s.waiting;
     s.completed = doc["completed"] | false;
     const char* m = doc["msg"];
-    if (m) { strncpy(s.msg, m, sizeof(s.msg) - 1); s.msg[sizeof(s.msg) - 1] = 0; }
+    if (m) utf8lcpy(s.msg, m, sizeof(s.msg));
 
     JsonArray la = doc["entries"];
     if (!la.isNull()) {
@@ -45,8 +45,7 @@ void applyJson(const char* line) {
             if (n >= 8) break;
             const char* e = v.as<const char*>();
             if (!e || strncmp(e, "subagent", 8) == 0) continue;  // 过滤子 agent 事件
-            strncpy(s.entries[n], e, 91);
-            s.entries[n][91] = 0;
+            utf8lcpy(s.entries[n], e, sizeof(s.entries[n]));
             n++;
         }
         s.nEntries = n;
@@ -57,7 +56,7 @@ void applyJson(const char* line) {
         const char* pid = pr["id"]; const char* pt = pr["tool"]; const char* ph = pr["hint"];
         strncpy(s.promptId,   pid ? pid : "", sizeof(s.promptId) - 1);   s.promptId[sizeof(s.promptId) - 1] = 0;
         strncpy(s.promptTool, pt  ? pt  : "", sizeof(s.promptTool) - 1); s.promptTool[sizeof(s.promptTool) - 1] = 0;
-        strncpy(s.promptHint, ph  ? ph  : "", sizeof(s.promptHint) - 1); s.promptHint[sizeof(s.promptHint) - 1] = 0;
+        utf8lcpy(s.promptHint, ph  ? ph  : "", sizeof(s.promptHint));
     } else {
         s.promptId[0] = 0; s.promptTool[0] = 0; s.promptHint[0] = 0;
     }
@@ -77,8 +76,7 @@ void applyJson(const char* line) {
             s.sessions[n].running = v["running"] | false;
             const char* lbl = v["label"];   // cmux auto-name；可缺省
             if (lbl) {
-                strncpy(s.sessions[n].label, lbl, sizeof(s.sessions[n].label) - 1);
-                s.sessions[n].label[sizeof(s.sessions[n].label) - 1] = 0;
+                utf8lcpy(s.sessions[n].label, lbl, sizeof(s.sessions[n].label));
             } else {
                 s.sessions[n].label[0] = 0;
             }
@@ -87,6 +85,36 @@ void applyJson(const char* line) {
         s.nSessions = n;
     } else {
         s.nSessions = 0;
+    }
+
+    // 待应答的 AskUserQuestion（payload question；来自 cmux feed，经 cc-bridge）。
+    // {rid, header, text, multi, options:[{id,label}]}。无 question 时 bridge 省略 → 清空。
+    JsonObject q = doc["question"];
+    if (!q.isNull() && q["rid"]) {
+        const char* rid = q["rid"];
+        strncpy(s.question.rid, rid, sizeof(s.question.rid) - 1);
+        s.question.rid[sizeof(s.question.rid) - 1] = 0;
+        const char* h = q["header"]; const char* t = q["text"];
+        utf8lcpy(s.question.header, h ? h : "", sizeof(s.question.header));
+        utf8lcpy(s.question.text, t ? t : "", sizeof(s.question.text));
+        s.question.multi = q["multi"] | false;
+        uint8_t n = 0;
+        JsonArray qopts = q["options"];
+        for (JsonVariant ov : qopts) {
+            if (n >= 6) break;
+            const char* oid = ov["id"];
+            if (!oid) continue;
+            strncpy(s.question.options[n].id, oid, sizeof(s.question.options[n].id) - 1);
+            s.question.options[n].id[sizeof(s.question.options[n].id) - 1] = 0;
+            const char* olb = ov["label"];
+            utf8lcpy(s.question.options[n].label, olb ? olb : "", sizeof(s.question.options[n].label));
+            n++;
+        }
+        s.question.nOptions = n;
+        s.hasQuestion = (n > 0);
+    } else {
+        s.hasQuestion = false;
+        s.question.rid[0] = 0;
     }
 
     // bridge 的 play 字段(one-shot 事件名小写)→ 播放 /sounds/<name>.wav。
@@ -138,6 +166,23 @@ void sendDecision(const char* id, const char* decision) {
                      "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"%s\"}\n",
                      id, decision);
     if (n > 0) bleWrite((const uint8_t*)cmd, (size_t)n);
+}
+
+// AskUserQuestion 应答 → cc-bridge 经 cmux feed.question.reply 回灌。
+// ids = 选中 option 的稳定 id 数组（bridge 侧 id→label 再填 selections）。
+// rid/id 由 cmux 生成（无引号/反斜杠），不做 JSON 转义。
+void sendAnswerQuestion(const char* rid, const char* const* ids, uint8_t nIds) {
+    if (!rid || !rid[0]) return;
+    char cmd[256];
+    int p = snprintf(cmd, sizeof(cmd),
+                     "{\"cmd\":\"answerQuestion\",\"rid\":\"%s\",\"ids\":[", rid);
+    for (uint8_t i = 0; i < nIds && p > 0 && p < (int)sizeof(cmd) - 12; i++) {
+        p += snprintf(cmd + p, sizeof(cmd) - p, "%s\"%s\"", i ? "," : "", ids[i]);
+    }
+    if (p > 0 && p < (int)sizeof(cmd) - 4) {
+        p += snprintf(cmd + p, sizeof(cmd) - p, "]}\n");
+        bleWrite((const uint8_t*)cmd, (size_t)p);
+    }
 }
 
 // 选中会话 → 回送给 bridge，由其调 cmux 把对应 pane 切到前台。
