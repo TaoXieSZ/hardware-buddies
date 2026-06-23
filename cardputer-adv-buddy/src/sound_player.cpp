@@ -23,7 +23,7 @@ const Note* g_seq = nullptr;
 int         g_idx = 0;
 uint32_t    g_playAfterMs = 0;  // millis() 时间戳，到了才允许播放（开机延迟）
 
-int      g_volume = 150;        // 当前音量 0-255（-/= 键调节，tone 与 wav 共用）
+int      g_volume = 25;         // 初始音量 0-255（-/= 键步进 25，tone 与 wav 共用）
 uint8_t* g_wavBuf = nullptr;    // wav 读入缓冲（复用；playWav 异步播放期间不可覆盖）
 size_t   g_wavCap = 0;
 }  // namespace
