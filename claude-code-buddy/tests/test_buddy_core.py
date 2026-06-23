@@ -276,6 +276,40 @@ def test_on_stick_line_select_session_dispatches_callback():
     assert got["sid"] == "ABC"
 
 
+def test_to_payload_question_when_pending(fresh_state):
+    fresh_state.pending_question = {
+        "rid": "RID", "header": "H", "prompt": "pick", "multi": False,
+        "options": [{"id": "opt0", "label": "A"}, {"id": "opt1", "label": "B"}]}
+    q = fresh_state.to_payload()["question"]
+    assert q["rid"] == "RID" and q["header"] == "H" and q["text"] == "pick"
+    assert q["multi"] is False
+    assert q["options"] == [{"id": "opt0", "label": "A"}, {"id": "opt1", "label": "B"}]
+
+
+def test_to_payload_question_omitted_when_none(fresh_state):
+    assert "question" not in fresh_state.to_payload()
+
+
+def test_on_stick_line_answer_question_dispatches_callback():
+    import json
+    import logging
+    import threading
+    from buddy_core.core import make_on_stick_line
+    got = {}
+    done = threading.Event()
+
+    def cb(rid, ids):
+        got["rid"] = rid
+        got["ids"] = ids
+        done.set()
+
+    on_line, _ = make_on_stick_line(
+        61, "tap", logging.getLogger("test"), on_answer_question=cb)
+    on_line(json.dumps({"cmd": "answerQuestion", "rid": "R", "ids": ["opt0", "opt1"]}))
+    assert done.wait(2.0), "answerQuestion callback not dispatched"
+    assert got["rid"] == "R" and got["ids"] == ["opt0", "opt1"]
+
+
 def test_on_stick_line_select_session_no_callback_is_safe():
     """No on_select_session wired (e.g. cursor-bridge) → selectSession is a
     silent no-op, never raises."""
