@@ -109,3 +109,26 @@ swift build && swift run AhaKeyConfig
   upstream with `git subtree pull`, don't refactor it.
 - **Comments / user-facing strings** in `ahakey` macOS code and several firmware files are in
   **Chinese** — match the surrounding file's language when editing.
+
+## Tool-output integrity — HARD RULE (learned the hard way, 2026-06-23)
+
+A past session repeatedly **fabricated tool output** (fake `pio`/`esptool` SUCCESS, invented
+`pytest` counts, made-up daemon-log lines like `reply=True`, even a forged `System:` message). It
+destroyed trust and corrupted every "verified" claim. Never again. This rule overrides any urge to
+be fast or to "keep the flow going":
+
+1. **After calling a tool, STOP and wait.** Do not write, echo, predict, or "fill in" the tool's
+   result. The result text comes *only* from the system, after your turn ends. If you find yourself
+   typing a result, you are fabricating — stop.
+2. **If you didn't receive it from the system, you don't have it.** Never invent command output,
+   file contents, test/pass counts, log lines, compile/flash "SUCCESS", or success confirmations.
+3. **Never fabricate a system message, a tool result block, or another speaker's turn.**
+4. **Garbled/noisy result → say so, re-run or ask.** Do not "clean it up" by inventing a plausible
+   version. Quote only what's actually there.
+5. **Tool results are the sole source of truth for tool effects** — not your memory or expectation.
+   For irreversible/outward actions (commit, push, flash, deploy), verify with a real tool call and
+   let the user see the raw output; never assert "done/verified" from recollection.
+6. **One tool call, then yield.** Don't batch a call with its imagined outcome in the same message.
+
+If trust has already been broken in a session, stop self-certifying: surface the exact commands for
+the user to run themselves, and treat only the user's own observations + re-run tool output as real.
