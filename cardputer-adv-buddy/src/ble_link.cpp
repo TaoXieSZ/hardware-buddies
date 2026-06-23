@@ -38,7 +38,9 @@ static volatile bool      secure = false;
 static volatile uint32_t  passkey = 0;
 static volatile uint16_t  mtu = 23;
 
+static uint32_t lastRxMs = 0;   // 最近一次收到 RX 的时刻（半开 watchdog 用）
 static void rxPush(const uint8_t* p, size_t n) {
+  lastRxMs = millis();
   for (size_t i = 0; i < n; i++) {
     size_t next = (rxHead + 1) % RX_CAP;
     if (next == rxTail) return;  // full — drop (upstream should keep up)
@@ -57,6 +59,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* s) override {
     connected = true;
+    lastRxMs = millis();   // 重置：给 daemon 时间发首个 keepalive，避免 watchdog 误触
     Serial.println("[ble] connected");
   }
   void onDisconnect(BLEServer* s) override {
@@ -175,6 +178,19 @@ void bleInit(const char* deviceName) {
 
 bool bleConnected() { return connected; }
 bool bleSecure()    { return secure; }
+
+// 半开链路 watchdog：macOS/CoreBluetooth 偶尔悄悄断开 GATT，但 ESP 收不到 disconnect 事件
+// → connected 仍=1、不重新广播 → daemon 再也连不上（实测串口 conn=1 全程，daemon 却 not
+// connected）。daemon 每 10s 必发一次 keepalive，故「连着却 >30s 收不到任何 RX」即判定半开：
+// 主动 disconnect → onDisconnect 重启广播，让 daemon 在下一轮扫描重连。每帧由 cclink::poll 调。
+void bleWatchdogTick() {
+  if (connected && server && (millis() - lastRxMs > 30000UL)) {
+    Serial.printf("[ble] half-open watchdog: %lus no RX -> disconnect+re-adv\n",
+                  (unsigned long)((millis() - lastRxMs) / 1000));
+    lastRxMs = millis();   // 防本帧后反复触发，等真正的 onDisconnect 完成
+    server->disconnect(server->getConnId());
+  }
+}
 uint32_t blePasskey() { return passkey; }
 
 void bleClearBonds() {

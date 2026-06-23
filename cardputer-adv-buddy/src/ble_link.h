@@ -19,3 +19,4 @@ void bleClearBonds();
 size_t bleAvailable();
 int bleRead();
 size_t bleWrite(const uint8_t* data, size_t len);
+void bleWatchdogTick();   // 半开链路看门狗：连着却长时间无 RX → 强制断开重广播（见 .cpp）

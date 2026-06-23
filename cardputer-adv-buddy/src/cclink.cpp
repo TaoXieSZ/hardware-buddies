@@ -152,6 +152,7 @@ void poll() {
             g_li = 0;   // 行超长，丢弃防溢出
         }
     }
+    bleWatchdogTick();   // 半开链路看门狗（详见 ble_link.cpp）
 }
 
 const BuddyState& state() { return g_state; }
