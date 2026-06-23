@@ -6,6 +6,7 @@
 // 优先级 APPROVAL > SESSIONS > HELP > NORMAL。GIF 渲染逐字复用 buddy 家族 AnimatedGIF 思路。
 #pragma once
 #include "agent_state.h"
+#include "link_state.h"   // BuddyState / SessionInfo（会话切换器用）
 #include <stdint.h>
 
 namespace clawd {
@@ -26,10 +27,11 @@ void showApproval(const char* tool, const char* hint);
 void hideApproval();
 bool approvalVisible();
 
-// SESSIONS 覆盖层（只读）
-void showSessions(const char lines[][92], uint8_t n, int total);
+// SESSIONS 覆盖层（per-session 可选中列表 → 物理 session 切换器）
+void showSessions(const BuddyState& bs);  // 用 bs.sessions[] 渲染可选中列表
 void hideSessions();
-void sessionsScroll(int delta);
+void sessionsMove(int delta);             // 移动选中项（viewport 跟随）
+const char* sessionsSelectedSid();        // 当前选中会话的 sid（""=无）
 bool sessionsVisible();
 
 // HELP 覆盖层（键位说明，h 键开关）

@@ -9,6 +9,7 @@ const BuddyState& state();
 bool changed();                                  // 自上次以来 state 变过（取走即清）
 bool connected();
 void sendDecision(const char* id, const char* decision);  // "once"/"deny"/"always"
+void sendSelectSession(const char* sid);  // 选中会话 → bridge 切对应 cmux pane 到前台
 void sendKeyText(const char* text);   // {"cmd":"key","ch":"<text>"} → 打进聚焦窗口
 void sendKeyName(const char* name);   // {"cmd":"key","key":"<name>"} enter/escape/...
 }

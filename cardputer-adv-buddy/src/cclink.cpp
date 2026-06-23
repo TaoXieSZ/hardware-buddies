@@ -62,6 +62,33 @@ void applyJson(const char* line) {
         s.promptId[0] = 0; s.promptTool[0] = 0; s.promptHint[0] = 0;
     }
 
+    // per-session 列表（payload sessions[]，每条 {sid, running}）。供可选中切换器用：
+    // sid = Claude session_id = cmux checkpoint_id，选中后原样回送 selectSession。
+    // bridge 在无会话时省略该字段（to_payload 仅 _sessions 非空才输出），故 null = 清零。
+    JsonArray sa = doc["sessions"];
+    if (!sa.isNull()) {
+        uint8_t n = 0;
+        for (JsonVariant v : sa) {
+            if (n >= 16) break;
+            const char* sid = v["sid"];
+            if (!sid) continue;
+            strncpy(s.sessions[n].sid, sid, sizeof(s.sessions[n].sid) - 1);
+            s.sessions[n].sid[sizeof(s.sessions[n].sid) - 1] = 0;
+            s.sessions[n].running = v["running"] | false;
+            const char* lbl = v["label"];   // cmux auto-name；可缺省
+            if (lbl) {
+                strncpy(s.sessions[n].label, lbl, sizeof(s.sessions[n].label) - 1);
+                s.sessions[n].label[sizeof(s.sessions[n].label) - 1] = 0;
+            } else {
+                s.sessions[n].label[0] = 0;
+            }
+            n++;
+        }
+        s.nSessions = n;
+    } else {
+        s.nSessions = 0;
+    }
+
     // bridge 的 play 字段(one-shot 事件名小写)→ 播放 /sounds/<name>.wav。
     // 只有关键事件放了 wav 文件，其余事件 playEvent 找不到文件自动忽略。
     const char* pl = doc["play"];
@@ -110,6 +137,17 @@ void sendDecision(const char* id, const char* decision) {
     int n = snprintf(cmd, sizeof(cmd),
                      "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"%s\"}\n",
                      id, decision);
+    if (n > 0) bleWrite((const uint8_t*)cmd, (size_t)n);
+}
+
+// 选中会话 → 回送给 bridge，由其调 cmux 把对应 pane 切到前台。
+// sid 是 payload sessions[] 里的值（UUID，无引号/反斜杠），不做 JSON 转义。
+// 格式对照 REFERENCE.md「Session switch」+ bridge core.py on_stick_line cmd=="selectSession"。
+void sendSelectSession(const char* sid) {
+    if (!sid || !sid[0]) return;
+    char cmd[80];
+    int n = snprintf(cmd, sizeof(cmd),
+                     "{\"cmd\":\"selectSession\",\"sid\":\"%s\"}\n", sid);
     if (n > 0) bleWrite((const uint8_t*)cmd, (size_t)n);
 }
 

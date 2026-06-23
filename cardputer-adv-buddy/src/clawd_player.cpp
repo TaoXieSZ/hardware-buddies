@@ -37,11 +37,12 @@ int32_t toastMs_ = 0;
 // APPROVAL
 char apTool_[40] = {0}, apHint_[92] = {0};
 
-// SESSIONS
-char sess_[8][92] = {{0}};
+// SESSIONS（per-session 可选中列表）
+SessionInfo sess_[16];
 uint8_t sessN_ = 0;
-int sessScroll_ = 0;
-int sessTotal_ = 0;  // 真实 session 数（含 subagent 被过滤的）
+int sessSel_ = 0;    // 选中索引（高亮 + enter 切换的目标）
+int sessScroll_ = 0; // viewport 顶部索引（跟随选中）
+int sessTotal_ = 0;  // 真实 session 数（payload total）
 
 // --- LittleFS 文件回调（照搬 character.cpp）---
 void* openCb(const char* fn, int32_t* pSize) {
@@ -193,10 +194,10 @@ void drawHelp() {
     canvas.setTextColor(0x8410, BG);
     canvas.drawString("APPROVE: ok  esc/n=no  a=always", L, y); y += rowH;
     canvas.setTextColor(0x8410, BG);
-    canvas.drawString("SESSION: tab  ,/.=scroll", L, y);
+    canvas.drawString("SESS: tab ,/.=sel enter=go", L, y);
 }
 
-// 会话列表（SESSIONS，只读）
+// 会话列表（SESSIONS，per-session 可选中）。选中项高亮，enter 回送 selectSession。
 void drawSessions() {
     canvas.fillSprite(BG);
     canvas.setTextColor(CLAWD, BG);
@@ -205,18 +206,27 @@ void drawSessions() {
     char title[24];
     snprintf(title, sizeof(title), "SESSIONS (%d)", sessTotal_);
     canvas.drawString(title, 6, 2);
-    canvas.setTextColor(TFT_WHITE, BG);
     const int rowH = 12, top = 18, rows = (canvasH - top) / rowH;  // ~9 行
     if (sessN_ == 0) {
         canvas.setTextColor(0x8410, BG);
-        canvas.drawString("(subagent work in progress)", 6, top);
+        canvas.drawString("(no sessions)", 6, top);
     } else {
         for (int r = 0; r < rows; r++) {
             int idx = sessScroll_ + r;
             if (idx >= sessN_) break;
+            bool sel = (idx == sessSel_);
+            int y = top + r * rowH;
+            if (sel) canvas.fillRect(0, y - 1, canvasW, rowH, 0x2945);  // 选中行高亮底
+            canvas.setTextColor(sel ? TFT_WHITE : 0xCE59, sel ? 0x2945 : BG);
+            // 名字优先 cmux auto-name（label）；没有时 fallback sid 前 8 字符。
+            char sid8[9];
+            strncpy(sid8, sess_[idx].sid, 8); sid8[8] = 0;
+            const char* nm = sess_[idx].label[0] ? sess_[idx].label : sid8;
             char row[40];
-            strncpy(row, sess_[idx], sizeof(row) - 1); row[sizeof(row) - 1] = 0;
-            canvas.drawString(row, 6, top + r * rowH);
+            // %.24s 截断防超屏宽 / 盖住右侧 run/idle 标。
+            snprintf(row, sizeof(row), "%c %d %.24s", sel ? '>' : ' ', idx + 1, nm);
+            canvas.drawString(row, 6, y);
+            canvas.drawString(sess_[idx].running ? "run" : "idle", canvasW - 32, y);
         }
     }
     if (sessScroll_ > 0) canvas.drawString("^", canvasW - 10, top);
@@ -268,19 +278,34 @@ void showApproval(const char* tool, const char* hint) {
 void hideApproval() { if (mode_ == APPROVAL) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 bool approvalVisible() { return mode_ == APPROVAL; }
 
-void showSessions(const char lines[][92], uint8_t n, int total) {
-    sessN_ = n > 8 ? 8 : n;
-    for (uint8_t i = 0; i < sessN_; i++) { strncpy(sess_[i], lines[i], 91); sess_[i][91] = 0; }
+void showSessions(const BuddyState& bs) {
+    sessN_ = bs.nSessions > 16 ? 16 : bs.nSessions;
+    for (uint8_t i = 0; i < sessN_; i++) {
+        strncpy(sess_[i].sid, bs.sessions[i].sid, sizeof(sess_[i].sid) - 1);
+        sess_[i].sid[sizeof(sess_[i].sid) - 1] = 0;
+        sess_[i].running = bs.sessions[i].running;
+        strncpy(sess_[i].label, bs.sessions[i].label, sizeof(sess_[i].label) - 1);
+        sess_[i].label[sizeof(sess_[i].label) - 1] = 0;
+    }
     sessScroll_ = 0;
-    sessTotal_ = total;
+    sessSel_ = 0;
+    sessTotal_ = bs.total;
     if (mode_ != APPROVAL) mode_ = SESSIONS;
 }
 void hideSessions() { if (mode_ == SESSIONS) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
-void sessionsScroll(int delta) {
-    if (mode_ != SESSIONS) return;
-    sessScroll_ += delta;
-    if (sessScroll_ < 0) sessScroll_ = 0;
-    if (sessScroll_ >= sessN_) sessScroll_ = sessN_ > 0 ? sessN_ - 1 : 0;
+void sessionsMove(int delta) {
+    if (mode_ != SESSIONS || sessN_ == 0) return;
+    sessSel_ += delta;
+    if (sessSel_ < 0) sessSel_ = 0;
+    if (sessSel_ >= sessN_) sessSel_ = sessN_ - 1;
+    // viewport 跟随选中：选中项移出可视区时滚动。
+    const int rowH = 12, top = 18, rows = (canvasH - top) / rowH;
+    if (sessSel_ < sessScroll_) sessScroll_ = sessSel_;
+    else if (sessSel_ >= sessScroll_ + rows) sessScroll_ = sessSel_ - rows + 1;
+}
+const char* sessionsSelectedSid() {
+    if (mode_ != SESSIONS || sessSel_ < 0 || sessSel_ >= sessN_) return "";
+    return sess_[sessSel_].sid;
 }
 bool sessionsVisible() { return mode_ == SESSIONS; }
 

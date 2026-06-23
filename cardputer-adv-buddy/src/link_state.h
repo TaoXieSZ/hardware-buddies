@@ -6,16 +6,27 @@
 #include <stdint.h>
 #include <string.h>
 
+// payload sessions[] 的一条：可选中会话切换器用。
+struct SessionInfo {
+    char sid[40] = {0};   // Claude session_id（= cmux resume_binding.checkpoint_id），UUID 36 字符
+    bool running = false; // 该会话是否在生成
+    char label[40] = {0}; // cmux auto-name/prompt（可读名）；空 = 列表 fallback 到 sid 前缀
+};
+
 struct BuddyState {
     int  total = 0, running = 0, waiting = 0;
     bool completed = false;
     char msg[64] = {0};            // 当前状态串，如 "running: Bash"
-    char entries[8][92] = {{0}};   // 会话列表行（≤8，每行 ≤91）
+    char entries[8][92] = {{0}};   // 最近活动行（≤8，每行 ≤91）
     uint8_t nEntries = 0;
     // 审批 prompt：空 promptId = 无待审批
     char promptId[40] = {0};
     char promptTool[40] = {0};     // 工具名，如 "Bash"
     char promptHint[92] = {0};     // 参数/提示，如 "terraform apply"
+    // per-session 列表（来自 payload sessions[]，供物理 session 切换器选中用）。
+    // 上限 16 对齐 bridge to_payload 的封顶；sid 用于选中后回送 selectSession。
+    SessionInfo sessions[16];
+    uint8_t nSessions = 0;
 };
 
 // 会话状态 → clawd 用的 AgentState（对齐 claude-code-buddy 派生顺序）。

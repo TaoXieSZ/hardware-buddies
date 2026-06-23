@@ -115,17 +115,31 @@ void loop() {
     }
     if (!hasPrompt) g_shownId[0] = 0;
 
-    // ── 会话列表(无审批时,tab 开关,esc 关,,/. 滚)──
+    // ── 会话列表(无审批时,tab 开关,esc 关,,/. 选,enter/space 切换)──
     if (!snapApproval && keyEvent) {
         if (ks.tab) {
             if (snapSessions) clawd::hideSessions();
-            else clawd::showSessions(bs.entries, bs.nEntries, bs.total);
+            else clawd::showSessions(bs);
         } else if (snapSessions) {
-            if (ks.esc) clawd::hideSessions();        // fn+esc
+            bool confirm = ks.enter;   // 选中会话 → 切到它的终端
+            bool close   = ks.esc;     // fn+esc 关
             for (auto c : ks.word) {
-                if (c == '`') clawd::hideSessions();   // 单按 esc 键 = backtick
-                if (c == ',' || c == ';') clawd::sessionsScroll(-1);
-                if (c == '.' || c == '/') clawd::sessionsScroll(1);
+                if (c == '`')                    close = true;       // 单按 esc 键 = backtick
+                else if (c == ' ')               confirm = true;     // space 也确认（与审批一致）
+                else if (c == ',' || c == ';')   clawd::sessionsMove(-1);
+                else if (c == '.' || c == '/')   clawd::sessionsMove(1);
+            }
+            if (confirm) {
+                const char* sid = clawd::sessionsSelectedSid();
+                if (sid && sid[0]) {
+                    cclink::sendSelectSession(sid);
+                    char t[24]; snprintf(t, sizeof(t), "switch %.8s", sid);
+                    clawd::setToast(t);
+                    sound::play("nudge");
+                }
+                clawd::hideSessions();
+            } else if (close) {
+                clawd::hideSessions();
             }
         }
     }
