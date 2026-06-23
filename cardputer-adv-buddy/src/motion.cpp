@@ -8,7 +8,7 @@
 
 namespace {
 constexpr float MOVE_THRESH = 0.08f;            // g：超过算「在动」
-constexpr float SHAKE_THRESH = 0.6f;            // g：单帧剧变算「晃动」
+constexpr float SHAKE_THRESH = 1.2f;            // g：单帧剧变算「晃动」（调高：需明显甩动才触发，避免轻碰/挪动误触晕）
 constexpr uint32_t STILL_FOR_PICKUP = 1500;     // 静止≥此值后再动 = 拿起
 }  // namespace
 
