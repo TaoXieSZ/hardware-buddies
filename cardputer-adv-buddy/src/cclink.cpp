@@ -197,6 +197,15 @@ void sendSelectSession(const char* sid) {
     if (n > 0) bleWrite((const uint8_t*)cmd, (size_t)n);
 }
 
+// PTT hold-to-talk → cc-bridge core.py cmd=="mic"：按 PTT_MODE 模拟听写热键
+// (Typeless tap / Doubao hold)。按住发 down、松开发 up，转写打进 Mac 当前聚焦窗口。
+void sendMic(bool down) {
+    char cmd[48];
+    int n = snprintf(cmd, sizeof(cmd),
+                     "{\"cmd\":\"mic\",\"state\":\"%s\"}\n", down ? "down" : "up");
+    if (n > 0) bleWrite((const uint8_t*)cmd, (size_t)n);
+}
+
 // 注入按键到 Mac 聚焦窗口（bridge core.py cmd=="key": ch→_type_unicode, key→kvk_for）。
 // text 为本固件内置的固定 nudge 串（无引号/反斜杠），故不做 JSON 转义。
 void sendKeyText(const char* text) {

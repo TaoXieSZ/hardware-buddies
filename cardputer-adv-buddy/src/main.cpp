@@ -43,8 +43,7 @@ static const Nudge NUDGES[] = {
     {'r', "try again",            nullptr,   "retry"},
     {'c', "commit the changes",   nullptr,   "commit"},
     {'f', "fix this",             nullptr,   "fix"},
-    // v = PTT：inject Space → 配合 Claude Code `/voice tap` 模式切换录音
-    {'v', nullptr,                "space",   "ptt"},
+    // 'v' 不在此表：改作 PTT hold-to-talk（按住=录音），见 loop() 的 PTT 轮询块。
 };
 
 void setup() {
@@ -75,6 +74,22 @@ void loop() {
     if (online && !g_wasOnline) sound::play("connect");
     if (!online && g_wasOnline) sound::play("disconnect");
     g_wasOnline = online;
+
+    // PTT hold-to-talk：按住 'v' → {cmd:mic,down}（Mac 听写开始录音），松开 → up（停）。
+    // 每帧轮询 isKeyPressed('v')（不靠 isChange，可靠捕捉按住/松开）；'v' 不与任何覆盖层
+    // 按键冲突，故无条件处理。down 需在线才发；松开总是清状态防 mic 卡住。
+    static bool g_pttDown = false;
+    bool vHeld = M5Cardputer.Keyboard.isKeyPressed('v');
+    if (vHeld && !g_pttDown && online) {
+        g_pttDown = true;
+        cclink::sendMic(true);
+        sound::play("nudge");
+        clawd::setToast("REC...");
+    } else if (!vHeld && g_pttDown) {
+        g_pttDown = false;
+        cclink::sendMic(false);
+        clawd::setToast("voice sent");
+    }
 
     // 本帧键盘事件读一次,按模式分发
     // 只用 isChange()，不要求 isPressed()——快速点击时 release 帧 isPressed() 已是 false 会漏键。
