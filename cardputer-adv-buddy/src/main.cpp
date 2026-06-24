@@ -260,8 +260,10 @@ void loop() {
         }
     }
 
-    // ── 快捷 nudge(NORMAL 模式:非审批、非会话、非帮助)──
-    if (keyEvent && !snapApproval && !snapSessions && !snapHelp) {
+    // ── 快捷 nudge(NORMAL 模式:非审批、非会话、非帮助、非问答)──
+    // 守卫加 !snapQuestion：问答面板开着时键盘归问答层独占（与审批/会话/帮助一致），
+    // 否则按 'c'(chat) 会连带触发 NORMAL 层 'c'(commit) 双触发。
+    if (keyEvent && !snapApproval && !snapSessions && !snapHelp && !snapQuestion) {
         for (auto c : ks.word) {
             // 音量调节(-/=)与 HELP 切换(h)——本地操作，不发命令
             if (c == '-') { sound::volumeDown(); char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }

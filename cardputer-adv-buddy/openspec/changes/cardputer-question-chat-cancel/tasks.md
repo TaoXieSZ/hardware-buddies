@@ -32,7 +32,11 @@
 ## 5. 验证
 - [x] 5.1 真机：chat about it 一键 `c` → 自由文本回送 → 答案回灌（2026-06-24 烧录后真机验证）。daemon 日志铁证：
   `tx raw +180 {"cmd":"answerQuestion",…}` → `ids=None text=True` → `reply=True (free text)`；rid 含本会话 92a4ff24，chat 文案原样回到 AskUserQuestion
-- [ ] 5.2 真机：cancel（esc）→ skip 文本解阻 —— 本轮只按了 `c` 验 chat；esc 路径同代码路径、未单独按键验证
+- [x] 5.2 真机：cancel（esc）→ skip 文本解阻（2026-06-24 真机验证）。日志：
+  `tx raw +174 {"cmd":"answerQuestion",…}` → `ids=None text=True` → `reply=True (free text)`，skip 文案原样回灌
 - [x] 5.3 真机：选项选择路径回归未坏 —— 日志 `ids=['opt2'] text=False → reply=True selections=[…]`，option 路径照常
 - [ ] 5.4 （若做 typed）真机：打字 → Other 自定义答案回送正确 —— typed 未实现（task 3 后续）
-- 旁注：pytest 184 passed（monorepo + 线上仓）；firmware 编译过；烧录走 ROM 下载模式（原生 USB 跑着固件时直烧会 No serial data received）
+- [x] 5.5 真机回归发现并修复双触发 bug：问答面板开着时按 `c` 会连带触发 NORMAL nudge `'c'=commit`
+  （日志 12:49 实锤：answerQuestion 后紧跟 `{"cmd":"key","ch":"commit the changes"}`+enter，把 commit 打进终端）。
+  根因 main.cpp NORMAL nudge 守卫漏 `!snapQuestion`；修后按 esc 日志只剩 answerQuestion 一条，无 nudge。
+- 旁注：pytest 184 passed（monorepo + 线上仓）；firmware 编译过；烧录走 ROM 下载模式（原生 USB 跑着固件时直烧会 No serial data received，且烧完需干净上电才启动）
