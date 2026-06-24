@@ -277,7 +277,7 @@ void drawQuestion() {
         canvas.drawString(row, 6, y);
     }
     canvas.setTextColor(0x8410, BG);
-    canvas.drawString(qMulti_ ? "1-N tog · ok 交 · esc" : "1-N 选 · ok · esc", 6, canvasH - 13);
+    canvas.drawString(qMulti_ ? "1-N tog·ok交·c聊·esc跳" : "1-N 选·ok·c聊·esc跳", 6, canvasH - 13);
     canvas.setFont(&fonts::Font0);   // 复位默认字体
 }
 }  // namespace

@@ -171,11 +171,16 @@ void loop() {
     }
     if (snapQuestion) {
         if (keyEvent) {
+            // canned 自由文本（走 Other 通道，见 change cardputer-question-chat-cancel）
+            static const char* const kQChatText = "我想先聊聊这个，先别急着定 —— 能展开讲讲各选项吗？";
+            static const char* const kQSkipText = "先跳过，你按最佳判断继续。";
             bool submit = ks.enter;
             bool cancel = ks.esc;            // fn+esc
+            bool chat   = false;             // c 键：chat about it（回送讨论文本）
             for (auto c : ks.word) {
                 if (c == '`')                  cancel = true;   // 单按 esc 键 = backtick
                 else if (c == ' ')             submit = true;
+                else if (c == 'c' || c == 'C') chat = true;     // chat about it
                 else if (c == ',' || c == ';') clawd::questionMove(-1);
                 else if (c == '.' || c == '/') clawd::questionMove(1);
                 else if (c >= '1' && c <= '9') {
@@ -184,15 +189,24 @@ void loop() {
                     else submit = true;                                  // 单选: 即选即交
                 }
             }
-            if (submit || cancel) {
+            if (submit || cancel || chat) {
+                const char* rid = clawd::questionRid();
                 if (submit) {
                     const char* ids[6];
                     uint8_t nid = clawd::questionSelectedIds(ids, 6);
                     if (nid > 0) {
-                        cclink::sendAnswerQuestion(clawd::questionRid(), ids, nid);
+                        cclink::sendAnswerQuestion(rid, ids, nid);
                         clawd::setToast("answered");
                         sound::play("nudge");
                     }
+                } else if (chat) {          // 「chat about it」：让 Claude 展开讨论而非干净选择
+                    cclink::sendAnswerText(rid, kQChatText);
+                    clawd::setToast("let's chat");
+                    sound::play("nudge");
+                } else {                    // 「cancel」：回送 skip 文本优雅解阻（取代旧的静默撤）
+                    cclink::sendAnswerText(rid, kQSkipText);
+                    clawd::setToast("skipped");
+                    sound::play("nudge");
                 }
                 // 标记已处理：不再 resume，直到 bridge 撤(轮询发现不 pending)
                 strncpy(g_dismissedQRid, bs.question.rid, sizeof(g_dismissedQRid) - 1);

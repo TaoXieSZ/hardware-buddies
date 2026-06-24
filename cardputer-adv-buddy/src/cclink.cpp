@@ -186,6 +186,26 @@ void sendAnswerQuestion(const char* rid, const char* const* ids, uint8_t nIds) {
     }
 }
 
+// AskUserQuestion 自由文本应答（chat about it / cancel）→ bridge 以 selections=[text]
+// 调 feed.question.reply（cmux 原样当答案、零选项校验，见 change cardputer-question-chat-cancel）。
+// text 进 JSON 字符串需转义 " 与 \；UTF-8 多字节原样透传（非 "/\），canned 文案够用，
+// 也为 typed 输入（task 3）预先健壮。
+void sendAnswerText(const char* rid, const char* text) {
+    if (!rid || !rid[0] || !text) return;
+    char cmd[256];
+    int p = snprintf(cmd, sizeof(cmd),
+                     "{\"cmd\":\"answerQuestion\",\"rid\":\"%s\",\"text\":\"", rid);
+    if (p <= 0) return;
+    for (const char* s = text; *s && p < (int)sizeof(cmd) - 8; s++) {
+        if (*s == '"' || *s == '\\') cmd[p++] = '\\';
+        cmd[p++] = *s;
+    }
+    if (p < (int)sizeof(cmd) - 4) {
+        p += snprintf(cmd + p, sizeof(cmd) - p, "\"}\n");
+        bleWrite((const uint8_t*)cmd, (size_t)p);
+    }
+}
+
 // 选中会话 → 回送给 bridge，由其调 cmux 把对应 pane 切到前台。
 // sid 是 payload sessions[] 里的值（UUID，无引号/反斜杠），不做 JSON 转义。
 // 格式对照 REFERENCE.md「Session switch」+ bridge core.py on_stick_line cmd=="selectSession"。
