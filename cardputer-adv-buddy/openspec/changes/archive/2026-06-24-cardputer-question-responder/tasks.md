@@ -35,9 +35,9 @@
 ## 3. specs
 - [x] 3.1 `question-responder` capability spec（explore 时写，4 条 ADDED requirement；strict 校验通过）。
 
-## 4. 验证 —— ⏳ 待 adv 开机（今晚关机，无真机/无 live）
-- [ ] 4.1 真机端到端：烧 firmware.bin → Claude 弹 AskUserQuestion → cardputer 显示选项 → 按数字选 → Claude 收到答案继续。
-- [ ] 4.2 multiSelect：多选 toggle + 提交准确。
-- [ ] 4.3 并发：他处先答 → 面板撤下；超时兜底；覆盖层优先级不打架。
-- [ ] 4.4 ⚠️ 复核 cmux 猜测点：① `selections` 用 label 还是 id ② pending question 的 status 确切值
-      （开一个 live AskUserQuestion，看 cmux_question_loop 是否捕获 + reply 是否成功解除）。
+## 4. 验证 —— ✅ 真机验证 2026-06-23（4.2/4.3 deferred，见 RETROSPECTIVE.md）
+- [x] 4.1 真机端到端：烧 firmware.bin → Claude 弹 AskUserQuestion → cardputer 显示选项 → 按数字选 → Claude 收到答案继续。（2026-06-23：daemon 日志 reply=True，真机按数字答成功）
+- [ ] 4.2 multiSelect：多选 toggle + 提交准确。（deferred — 未测，见 RETROSPECTIVE.md）
+- [ ] 4.3 并发：他处先答 → 面板撤下；超时兜底；覆盖层优先级不打架。（部分：超时 125s / 覆盖层优先级已做+验证（自动放行）；"他处先答撤面板"未专门测 — deferred）
+- [x] 4.4 复核 cmux 猜测点：① `selections` 用 label 还是 id ② pending question 的 status 确切值
+      （2026-06-23 验证：cmux_question_loop 捕获 live 问题、用 label 回灌 reply=True 成功解除）。

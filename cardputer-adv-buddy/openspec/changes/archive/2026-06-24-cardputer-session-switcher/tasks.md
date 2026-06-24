@@ -63,8 +63,7 @@
       三会话名字正确显示。
 - [x] 5.5 sessions[] 数据源改 cmux（已做）：`to_payload` 列表优先用 `session_labels`（cmux 全部可切换会话），
       running 从 hook `_sessions` 补；无 cmux 源时 fallback `_sessions`。修复「只显示 hook 见过的会话」。
-- [ ] 5.3 daemon 持久化：launchd plist `CC_BRIDGE_DEVICE_PREFIX` 加 cardputer 前缀（现用临时通配 daemon）。
-- [ ] 5.4 monorepo ↔ claude-desktop-buddy subtree 同步（§1 + §5 改动现双份手动同步）。
-- [ ] 5.2 daemon 持久化：launchd plist 的 `CC_BRIDGE_DEVICE_PREFIX` 加 cardputer 前缀（`Claude-7AFD`
-      或通配），以便开机自动连 cardputer（现为临时手动 daemon）。
-- [ ] 5.3 monorepo ↔ claude-desktop-buddy subtree 同步（§1 改动现双份）。
+- [x] 5.3 daemon 持久化：launchd plist `CC_BRIDGE_DEVICE_PREFIX` 加 cardputer 前缀（已配 `Claude-7AFD`）。
+- [x] 5.4 monorepo ↔ claude-desktop-buddy subtree 同步（§1 + §5 改动双份已同步并 push）。
+- [x] 5.2 daemon 持久化：launchd plist 的 `CC_BRIDGE_DEVICE_PREFIX` 加 cardputer 前缀（已配 `Claude-7AFD`）。
+- [x] 5.3 monorepo ↔ claude-desktop-buddy subtree 同步（§1 改动双份已同步并 push）。
