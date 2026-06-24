@@ -264,6 +264,12 @@ void loop() {
     // 守卫加 !snapQuestion：问答面板开着时键盘归问答层独占（与审批/会话/帮助一致），
     // 否则按 'c'(chat) 会连带触发 NORMAL 层 'c'(commit) 双触发。
     if (keyEvent && !snapApproval && !snapSessions && !snapHelp && !snapQuestion) {
+        // 物理 Enter → 给聚焦的 Claude 终端注入 Enter（语音(v PTT)录完提交用）。
+        if (ks.enter) {
+            cclink::sendKeyName("enter");
+            clawd::setToast("sent: enter");
+            sound::play("nudge");
+        }
         for (auto c : ks.word) {
             // 音量调节(-/=)与 HELP 切换(h)——本地操作，不发命令
             if (c == '-') { sound::volumeDown(); char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }
