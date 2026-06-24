@@ -128,15 +128,24 @@ void loop() {
     }
     if (snapApproval) {
         if (keyEvent) {
+            // 串口诊断：审批态每次按键打印实际检测到的键（区分键没检测到 vs 没映射）。
+            Serial.printf("[approval-key] ctrl=%d enter=%d esc=%d space=%d word=",
+                          ks.ctrl, ks.enter, ks.esc, ks.space);
+            for (char c : ks.word) Serial.printf("'%c'", c);
+            Serial.println();
+
             const char* dec = nullptr;
-            // 注意: Cardputer 的 "esc" 键单按产出 backtick '`'（KEY_ESCAPE 在 fn 层），
-            // 故 deny 同时接受 '`' / fn+esc(ks.esc) / 'n'。
-            if (ks.enter)     dec = "once";
-            else if (ks.esc)  dec = "deny";
+            // 三角布局（键在键盘三个角，最不易误按）：
+            //   空格(右下) = yes  /  esc键出'`'(左上) = no  /  ctrl(左下) = always
+            // 注意: Cardputer 的 "esc" 键单按产出 backtick '`'（KEY_ESCAPE 在 fn 层）。
+            // a/n 作后备（word 路径，已验证可靠）；enter/fn+esc 是 flag 路径（ADV 上不灵，留作兼容）。
+            if (ks.ctrl)       dec = "always";   // ctrl 左下角 = always
+            else if (ks.enter) dec = "once";
+            else if (ks.esc)   dec = "deny";
             else for (auto c : ks.word) {
-                if (c == ' ')                         { dec = "once";   break; }  // space 也 ok
-                if (c == '`' || c == 'n' || c == 'N') { dec = "deny";   break; }
-                if (c == 'a' || c == 'A')             { dec = "always"; break; }
+                if (c == ' ')                         { dec = "once";   break; }  // 空格右下角 = yes
+                if (c == '`' || c == 'n' || c == 'N') { dec = "deny";   break; }  // esc键左上角 = no
+                if (c == 'a' || c == 'A')             { dec = "always"; break; }  // a = always（后备）
             }
             if (dec) { cclink::sendDecision(g_shownId, dec); clawd::hideApproval(); }
         }

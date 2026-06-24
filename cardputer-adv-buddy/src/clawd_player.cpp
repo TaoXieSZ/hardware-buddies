@@ -177,9 +177,9 @@ void drawApproval() {
     strncpy(hint, apHint_, sizeof(hint) - 1); hint[sizeof(hint) - 1] = 0;
     canvas.drawString(hint, 6, 54);
     // 按键提示
-    canvas.setTextColor(0x07E0, BG); canvas.drawString("[spc/ok]yes", 6, canvasH - 14);
-    canvas.setTextColor(0xF800, BG); canvas.drawString("[`]no", 90, canvasH - 14);
-    canvas.setTextColor(0x8410, BG); canvas.drawString("[a]always", 138, canvasH - 14);
+    canvas.setTextColor(0x07E0, BG); canvas.drawString("spc=yes", 6, canvasH - 14);
+    canvas.setTextColor(0xF800, BG); canvas.drawString("`=no", 84, canvasH - 14);
+    canvas.setTextColor(0x8410, BG); canvas.drawString("ctrl=always", 128, canvasH - 14);
 }
 
 // 键位说明（HELP）
@@ -203,7 +203,7 @@ void drawHelp() {
     canvas.drawString("v=ptt  h=help  -/=vol", L, y); y += rowH + 2;
 
     canvas.setTextColor(0x8410, BG);
-    canvas.drawString("APPROVE: ok  esc/n=no  a=always", L, y); y += rowH;
+    canvas.drawString("APPROVE: spc=y `=n ctrl=alw", L, y); y += rowH;
     canvas.setTextColor(0x8410, BG);
     canvas.drawString("SESS: tab ,/.=sel enter=go", L, y);
 }
