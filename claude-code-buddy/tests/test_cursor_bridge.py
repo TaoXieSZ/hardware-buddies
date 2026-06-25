@@ -36,6 +36,32 @@ def test_session_tracks_last_seen(cursor, fresh_state):
     assert "last_seen" in fresh_state._sessions["s1"]
 
 
+# ─── per-session state for cardputer rotation (cursor-session-monitoring) ──
+
+def test_per_session_state_transitions(cursor, fresh_state):
+    # st follows the same lifecycle as cc-bridge: thinking → tool → waiting → idle.
+    cursor.apply_event(fresh_state, ev("UserPromptSubmit"))
+    assert fresh_state._sessions["s1"]["st"] == "thinking"
+    cursor.apply_event(fresh_state, ev("PreToolUse", tool_name="shell"))
+    assert fresh_state._sessions["s1"]["st"] == "tool"
+    cursor.apply_event(fresh_state, ev("PermissionRequest", tool_name="shell"))
+    assert fresh_state._sessions["s1"]["st"] == "waiting"
+    assert fresh_state._sessions["s1"]["ws"] > 0          # FIFO seq assigned
+    cursor.apply_event(fresh_state, ev("Stop"))
+    assert fresh_state._sessions["s1"]["st"] == "idle"
+    assert fresh_state._sessions["s1"]["ws"] == 0          # cleared on leave
+
+
+def test_per_session_state_in_payload(cursor, fresh_state):
+    cursor.apply_event(fresh_state, ev("UserPromptSubmit"))   # s1 thinking
+    cursor.apply_event(fresh_state, ev("UserPromptSubmit", session_id="s2"))
+    cursor.apply_event(fresh_state, ev("PreToolUse", session_id="s2", tool_name="x"))
+    p = fresh_state.to_payload()
+    sess = {s["sid"]: s for s in p["sessions"]}
+    assert sess["s1"]["st"] == "thinking"
+    assert sess["s2"]["st"] == "tool"
+
+
 # ─── token accounting (the reference behaviour) ───────────────────────
 
 def test_stop_accumulates_output_tokens(cursor, fresh_state):

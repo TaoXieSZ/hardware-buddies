@@ -290,6 +290,37 @@ def test_to_payload_question_omitted_when_none(fresh_state):
     assert "question" not in fresh_state.to_payload()
 
 
+def test_ext_sessions_merge_into_payload():
+    # cursor-bridge ext_sessions append to sessions[] tagged agent=cursor;
+    # local (claude) sessions stay untagged. (cardputer-cursor-sessions)
+    import time
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    st._sessions["claudeA"] = {"running": True}
+    st.session_labels = {"claudeA": "alpha"}
+    st.set_session_state("claudeA", "thinking")
+    st.ext_sessions["cursor"] = {
+        "sessions": [{"sid": "cur1", "label": "beta", "st": "tool", "running": True}],
+        "ts": time.monotonic(),
+    }
+    sess = {s["sid"]: s for s in st.to_payload()["sessions"]}
+    assert sess["claudeA"]["st"] == "thinking" and "agent" not in sess["claudeA"]
+    assert sess["cur1"]["agent"] == "cursor" and sess["cur1"]["st"] == "tool"
+
+
+def test_ext_sessions_stale_dropped():
+    # A snapshot older than EXT_STALE_SEC is not emitted (cursor-bridge died).
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    st._sessions["claudeA"] = {"running": True}
+    st.ext_sessions["cursor"] = {
+        "sessions": [{"sid": "cur1", "running": True}],
+        "ts": 0.0,   # ancient → stale
+    }
+    sids = [s["sid"] for s in st.to_payload().get("sessions", [])]
+    assert "cur1" not in sids and "claudeA" in sids
+
+
 def test_on_stick_line_answer_question_dispatches_callback():
     import json
     import logging

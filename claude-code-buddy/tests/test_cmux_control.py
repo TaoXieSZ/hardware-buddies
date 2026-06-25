@@ -372,6 +372,45 @@ def test_focus_by_checkpoint_empty_id_makes_no_cmux_calls():
     assert m.calls == []  # short-circuits before any subprocess
 
 
+# ─── focus a Cursor pane (cardputer-cursor-sessions) ──────────────────
+
+class _CursorRunner:
+    """Fleet with one Cursor pane: no checkpoint, cursor-<UUID> in title."""
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        method = argv[2] if len(argv) > 2 and argv[1] == "rpc" else ""
+        if method == "window.list":
+            return 0, json.dumps({"windows": [{"id": "W1"}]}), ""
+        if method == "workspace.list":
+            return 0, json.dumps({"window_id": "W1", "workspaces": [
+                {"id": "WX", "ref": "workspace:1", "index": 0, "selected": True,
+                 "current_directory": "/p"}]}), ""
+        if method == "surface.list":
+            return 0, json.dumps({"surfaces": [
+                {"id": "CUR1", "ref": "surface:40", "index": 0, "type": "terminal",
+                 "title": "proj · hi · cursor-66099139-1550-4241", "focused": False}]}), ""
+        return 0, "", ""
+
+
+def test_focus_by_cursor_sid_matches_title_and_focuses():
+    m = _CursorRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    # full sid; cmux title only carries the cursor-<8hex> prefix → still matches.
+    assert c.focus_by_cursor_sid("66099139-1550-4241-bd6a-a177bfb0d21c") == "CUR1"
+    assert _method_call(m.calls, "surface.focus") == \
+        ["CMUX", "rpc", "surface.focus", json.dumps({"surface_id": "CUR1"})]
+
+
+def test_focus_by_cursor_sid_no_match_returns_none():
+    m = _CursorRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_cursor_sid("CKPT-S1") is None         # a claude id, not in title
+    assert c.focus_by_cursor_sid("") is None                # short-circuits
+
+
 def test_label_from_title_pure_autoname():
     # auto-name generated → title is a single pure name.
     assert label_from_title("hardware-buddies-setup") == "hardware-buddies-setup"
