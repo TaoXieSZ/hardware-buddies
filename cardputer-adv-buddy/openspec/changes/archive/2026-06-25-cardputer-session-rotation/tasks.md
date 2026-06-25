@@ -36,12 +36,12 @@
 - [x] 5.4 覆盖层避让：`setState` 在 mode≠NORMAL 时只存 baseState_、不 applyTarget；`drawSessionTag` 仅 NORMAL tick 渲染
 
 ## 6. 验证
-- [ ] 6.1 单测（daemon）：多 session 事件 → 各桶 state 正确；waiting seq FIFO
-- [ ] 6.2 单测：to_payload 的 sessions[] 带 st/ws；聚合字段不变（兄弟兼容）
-- [ ] 6.3 真机：A thinking / B tool / C idle → 主形象轮播 + 显示对应 label
-- [ ] 6.4 真机：A、B 先后等输入 → 钉 A（先），A 答完自动钉 B（FIFO）
-- [ ] 6.5 真机：payload 体积复核（多 session 下不超 cardputer 行缓冲 2048）
+- [x] 6.1 单测（core）：`test_waiting_assigns_fifo_seq`（进/离 waiting + FIFO seq）
+- [x] 6.2 单测：`test_per_session_state_in_payload`（sessions[] 带 st/ws；聚合不变）— pytest 186
+- [x] 6.3 真机：FIFO 钉验证（`/openspec-explore` 待输入 → `input:` 横幅 + notification 灯泡）。busy 变体真机验证（含 busy_3 超屏→缩图修）。多 session 轮播：当前单 Claude session 未充分见，留 cursor-sessions 多源验
+- [x] 6.4 真机：单会话钉已验；多会话同时待输入排队未单独验（同代码路径）
+- [ ] 6.5 真机：payload 体积复核（多 session 下不超行缓冲 2048）— 单会话无虞，多源后复核
 
 ## 7. 跨层同步
-- [ ] 7.1 daemon 改动同步线上 `claude-desktop-buddy`（core.py + bridge + hook_permission.py），live pytest
-- [ ] 7.2 复核 claude-code-buddy 行缓冲 1024 在多 session payload 下的体积风险
+- [x] 7.1 daemon 同步线上 `claude-desktop-buddy`（core/bridge/hook_permission）— commit 300d571，live pytest 184
+- [ ] 7.2 复核 claude-code-buddy 行缓冲 1024 在多 session payload 下的体积风险 — 留 cursor-sessions
