@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd cardputer-adv-buddy/openspec/changes/cardputer-feedback-channels && echo \\\"=== agent-state-animation/spec.md ===\\\" && cat specs/agent-state-animation/spec.md && echo && echo \\\"=== audio...",
+  "error": "Exit code 1\n(eval):cd:1: no such file or directory: cardputer-adv-buddy/openspec/changes/cardputer-feedback-channels",
+  "timestamp": "2026-06-24T18:11:18.810Z",
+  "retry_count": 1
+}
