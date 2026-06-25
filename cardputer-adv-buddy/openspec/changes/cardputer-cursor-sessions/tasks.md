@@ -20,9 +20,16 @@
 - [x] 2.3 selectSession 对 Cursor pane 聚焦：`cmux_control.focus_by_cursor_sid(sid)`（按 title 里 cursor-<UUID>/前缀匹配非 Claude surface → focus surface id）；`_select_session` 回退链 `focus_by_checkpoint or focus_by_cursor_sid`。测试：`test_focus_by_cursor_sid_matches_title_and_focuses` + no-match。pytest 192。⚠️ 仅 monorepo，未同步线上 cc-bridge、未真机
 - ⚠️ 三仓同步见 task 5.1（cc-bridge→claude-desktop-buddy / cursor-bridge→claude-desktop-buddy-cursor）
 
-## 3. 固件 agent 标记  ✅ 编译过
+## 3. 固件 agent 标记  ✅ 真机验证（2026-06-25）
 - [x] 3.1 `SessionInfo` 加 `char agent[8]`；`cclink` 解析 `sessions[].agent`（空=claude）
-- [x] 3.2 `drawSessions` 会话列表每行 agent 标记：cursor=橙黄+"cu"，claude=灰蓝+"cc"（颜色+文字双重区分）。⚠️ 需烧固件。轮播顶栏 tag 的 agent 标记暂未做（按需扩）
+- [x] 3.2 `drawSessions` 会话列表每行 agent 标记：claude=黄+"cc"，cursor=灰蓝+"cu"（颜色+文字双重区分）
+- [x] 3.3 修复 `showSessions` 漏拷 agent 字段（曾导致全显 cc）。真机验证：Cursor 行灰蓝 cu / Claude 行黄 cc，用户确认「可以了」✅
+- [ ] 3.4 轮播顶栏 tag 的 agent 标记（按需扩，未做）
+
+## 7. 多问题 AskUserQuestion（真机暴露，待设计）
+- 现象：一次 AskUserQuestion 含多个问题时，设备只弹/答第一个就退，其余不弹。
+- 根因：daemon `parse_pending_questions` MVP 只取 `questions[0]`，多问题不拆。
+- 方案待定：A 顺序弹（答完弹下一个）/ B 多问题整体放给终端。先写 spec 批准再做（daemon 侧，不用烧固件）。
 
 ## 4. 验证
 - [x] 4.1 单测：`test_ext_sessions_merge_into_payload` + `test_ext_sessions_stale_dropped`（pytest 190）
