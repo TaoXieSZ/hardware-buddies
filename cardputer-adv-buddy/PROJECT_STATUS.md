@@ -40,3 +40,5 @@ ESP32-S3 原生 USB-Serial-JTAG 在「设备跑着固件」时重进 bootloader 
 - Cursor 变体(`-DBUDDY_BRAND_PREFIX='"Cursor-"'`)
 - `cardputer-coding-pet` change 的 spec 从 avatar 对齐到 clawd 后归档
 - Phase 3:ES8311 mic 听写 / IR / 更多体感
+- **Mac 答题 → 设备问答面板跟着撤**：在 Mac/cmux 原生 UI（不用设备键盘）回答 AskUserQuestion 后，cardputer 的 question 覆盖层要自动撤下。疑似撞已知僵尸坑（cmux native-UI 答案不标 terminal → daemon 没发现「不再 pending」→ 设备面板僵在那）。question-responder spec 本就要求「他处已答 → bridge 撤面板」，故这是 **verify + 修僵尸**，非从零做。下次做。
+- **多 session 轮播 + 会话标识**：见 OpenSpec change `cardputer-session-rotation`（已草，未实现）—— 主形象按 per-session 状态轮播、显示会话标识、待输入 FIFO 钉。

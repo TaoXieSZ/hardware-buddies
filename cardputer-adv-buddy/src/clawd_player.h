@@ -16,6 +16,9 @@ bool ok();
 // NORMAL 模式
 void setState(AgentState s);              // 会话状态 → clawd GIF
 void setBadge(int total, int running);    // 右上角 "T·R" 角标
+// 多会话轮播：顶栏左显示当前会话标识 + [idx/total]；pinned=true 时底部钉态横幅。
+// total<=0 或 tag 空 = 不显示（单聚合态）。openspec change cardputer-session-rotation。
+void setSessionTag(const char* tag, int idx, int total, bool pinned);
 void setToast(const char* text);          // 底部短暂提示(~1.5s,nudge 发送反馈)
 void setSleeping(bool sleep);
 void reactHeart();

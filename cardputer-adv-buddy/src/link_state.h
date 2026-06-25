@@ -23,7 +23,20 @@ struct SessionInfo {
     char sid[40] = {0};   // Claude session_id（= cmux resume_binding.checkpoint_id），UUID 36 字符
     bool running = false; // 该会话是否在生成
     char label[40] = {0}; // cmux auto-name/prompt（可读名）；空 = 列表 fallback 到 sid 前缀
+    // per-session 状态（payload `st`）与等待 FIFO 序号（payload `ws`，0=不等待）。
+    // 供 clawd 主形象轮播 + 待输入时钉最早等待者（openspec change cardputer-session-rotation）。
+    int state = 0;        // 实为 AgentState（用 int 存）；解析时经 agentStateFromWire 填
+    uint32_t waitSeq = 0; // 进入等待的单调序号；0 = 不在等待
 };
+
+// payload sessions[].st（小写短串）→ AgentState。缺省/未知 → Idle。
+inline AgentState agentStateFromWire(const char* st) {
+    if (!st)                       return AgentState::Idle;
+    if (!strcmp(st, "thinking"))   return AgentState::Thinking;
+    if (!strcmp(st, "tool"))       return AgentState::ToolUse;
+    if (!strcmp(st, "waiting"))    return AgentState::Notification;  // 待输入
+    return AgentState::Idle;       // "idle" 或未知
+}
 
 // AskUserQuestion 的一个选项（payload question.options[]）。
 struct QuestionOption {

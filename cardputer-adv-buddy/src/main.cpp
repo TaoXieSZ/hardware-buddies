@@ -287,15 +287,53 @@ void loop() {
         }
     }
 
-    // ── 正常态:真实状态驱动 clawd + 角标 ──
+    // ── 正常态:角标 + 工具失败 reaction（state 变时）──
     if (cclink::changed()) {
         clawd::setBadge(bs.total, bs.running);
-        clawd::setState(deriveAgentState(bs));
         // 工具出错 → error 临时动画。声音改由 cclink 的 play 字段 wav 负责
         // （hook 事件声音统一走 wav，不再用 tone，避免重复）。
         bool nowFailed = (strncmp(bs.msg, "failed", 6) == 0);
         if (online && nowFailed && !g_wasFailed) clawd::reactError();
         g_wasFailed = nowFailed;
+    }
+
+    // ── 多会话轮播 / FIFO 钉：主形象状态来源（openspec cardputer-session-rotation）──
+    // 无 per-session 数据 → 回退聚合 deriveAgentState。setState 会重载 GIF，故仅在
+    // 目标态变化时调；setSessionTag 便宜（仅存串），每帧刷以更新 [i/N] 与钉态横幅。
+    {
+        static uint32_t rotNextMs = 0;
+        static uint8_t  rotIdx = 0;
+        static int      lastAg = -1;
+        uint8_t n = bs.nSessions;
+        AgentState target;
+        if (n == 0) {
+            target = deriveAgentState(bs);                 // 回退：单聚合态
+            clawd::setSessionTag(nullptr, 0, 0, false);
+        } else {
+            int pin = -1; uint32_t best = 0xFFFFFFFFu;     // FIFO 最早等待者（waitSeq>0 最小）
+            for (uint8_t i = 0; i < n; i++) {
+                uint32_t ws = bs.sessions[i].waitSeq;
+                if (ws && ws < best) { best = ws; pin = (int)i; }
+            }
+            uint8_t cur;
+            if (pin >= 0) {
+                cur = (uint8_t)pin;                        // 钉：不轮播
+                rotNextMs = now + 3000;                    // 解钉后给完整 dwell 再轮
+            } else {
+                if (rotIdx >= n) rotIdx = 0;
+                if (now >= rotNextMs) {                     // 到点切下一个
+                    rotIdx = (uint8_t)((rotIdx + 1) % n);
+                    bool isIdle = (bs.sessions[rotIdx].state == (int)AgentState::Idle);
+                    rotNextMs = now + (isIdle ? 1000u : 3000u);  // 稀释旋钮：idle 短/active 长
+                }
+                cur = rotIdx;
+            }
+            target = (AgentState)bs.sessions[cur].state;
+            const char* tag = bs.sessions[cur].label[0] ? bs.sessions[cur].label
+                                                        : bs.sessions[cur].sid;
+            clawd::setSessionTag(tag, cur, n, pin >= 0);
+        }
+        if ((int)target != lastAg) { clawd::setState(target); lastAg = (int)target; }
     }
 
     // 体感(覆盖模式下 clawd_player 内部 no-op)

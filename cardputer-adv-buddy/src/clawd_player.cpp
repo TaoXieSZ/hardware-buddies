@@ -33,6 +33,10 @@ Mode mode_ = NORMAL;
 int badgeTotal_ = 0, badgeRunning_ = 0;
 char toast_[24] = {0};
 int32_t toastMs_ = 0;
+// 多会话轮播：当前会话标识 + 轮播位置 + 钉态（rotation）
+char rotTag_[40] = {0};
+int  rotIdx_ = 0, rotTotal_ = 0;
+bool rotPinned_ = false;
 
 // APPROVAL
 char apTool_[40] = {0}, apHint_[92] = {0};
@@ -143,6 +147,29 @@ void drawBadge() {
     canvas.setTextColor(CLAWD, BG);
     canvas.setTextDatum(top_right);
     canvas.drawString(b, canvasW - 2, 2);
+    canvas.setTextDatum(top_left);
+}
+
+// 多会话轮播：顶栏左会话标识 + [i/N]；钉态底部横幅（NORMAL）。openspec cardputer-session-rotation。
+void drawSessionTag() {
+    if (rotTotal_ <= 0 || !rotTag_[0]) return;
+    canvas.setFont(&fonts::efontCN_12);   // label 可能是中文 cmux 名
+    canvas.setTextSize(1);
+    canvas.setTextDatum(top_left);
+    char line[52];
+    snprintf(line, sizeof(line), "%s [%d/%d]", rotTag_, rotIdx_ + 1, rotTotal_);
+    canvas.fillRect(0, 0, canvasW - 44, 13, BG);   // 清左侧条，留右上 badge(~40px)
+    canvas.setTextColor(0x8410, BG);
+    canvas.drawString(line, 2, 1);
+    if (rotPinned_) {                              // 钉态：底部橙横幅（与审批同色系）
+        canvas.fillRect(0, canvasH - 14, canvasW, 14, 0xFB00);
+        canvas.setTextColor(TFT_WHITE, 0xFB00);
+        canvas.setTextDatum(bottom_left);
+        char b[52];
+        snprintf(b, sizeof(b), "input: %s", rotTag_);
+        canvas.drawString(b, 4, canvasH - 2);
+    }
+    canvas.setFont(&fonts::Font0);
     canvas.setTextDatum(top_left);
 }
 
@@ -301,6 +328,10 @@ bool ok() { return ready; }
 
 void setState(AgentState s) { baseState_ = s; if (ready && mode_ == NORMAL) applyTarget(); }
 void setBadge(int total, int running) { badgeTotal_ = total; badgeRunning_ = running; }
+void setSessionTag(const char* tag, int idx, int total, bool pinned) {
+    if (tag) utf8lcpy(rotTag_, tag, sizeof(rotTag_)); else rotTag_[0] = 0;
+    rotIdx_ = idx; rotTotal_ = total; rotPinned_ = pinned;
+}
 void setToast(const char* text) {
     strncpy(toast_, text ? text : "", sizeof(toast_) - 1);
     toast_[sizeof(toast_) - 1] = 0;
@@ -422,6 +453,7 @@ void tick(uint32_t dtMs) {
     if (!gif.playFrame(false, &delayMs)) { gif.reset(); gif.playFrame(false, &delayMs); }
     drawBadge();
     if (toastMs_ > 0) { toastMs_ -= (int32_t)dtMs; drawToast(); }
+    drawSessionTag();   // 顶栏会话标识 + 钉态横幅（盖在 toast 之上）
     canvas.pushSprite(0, 0);
     nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
 }

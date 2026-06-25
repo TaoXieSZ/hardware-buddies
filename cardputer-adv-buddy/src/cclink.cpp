@@ -80,6 +80,9 @@ void applyJson(const char* line) {
             } else {
                 s.sessions[n].label[0] = 0;
             }
+            // per-session 状态 + 等待 FIFO 序号（rotation/pin）；缺省 → idle / 0。
+            s.sessions[n].state   = (int)agentStateFromWire(v["st"]);
+            s.sessions[n].waitSeq = v["ws"] | 0u;
             n++;
         }
         s.nSessions = n;
