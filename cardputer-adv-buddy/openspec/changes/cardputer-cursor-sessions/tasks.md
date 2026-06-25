@@ -45,8 +45,12 @@
 ## 6. cursor-bridge cmux 对账（真机暴露）  ✅ monorepo + pytest 195
 - [x] 6.1 `cmux_control.cursor_session_labels()`：列活 Cursor surface（title `cursor-<UUID>` 正则提 sid → label）。测试 `test_cursor_session_labels_lists_live_cursor_panes`
 - [x] 6.2 cursor-bridge `cmux_cursor_label_loop`（15s 轮询）填 `state.session_labels`={cmux_sid:label}；`_build_cursor_sessions` 改成**以 cmux 活 pane 为准**、按 UUID 首段 join hook st/ws，僵尸会话排除；cmux 不可用回退 hook 列表。测试 `test_build_cursor_sessions_uses_live_cmux_panes` + fallback
-- [ ] 6.3 真机：设备列出的 Cursor 会话都能 enter 切到对应 pane + 显 label —— 待同步线上 cursor 仓 + 真机
-- ⚠️ 同步：cmux_control→claude-desktop-buddy(+cursor 仓)，cursor-bridge→claude-desktop-buddy-cursor
+- [x] 6.3 真机（2026-06-25）：cursor-bridge cmux 对账 loop 跑通（日志 `cmux cursor labels refreshed: 1 pane(s)`）→ 设备 Cursor 列表只剩活 cmux pane + label，**enter 能切到 Cursor pane**。用户确认「现在可以了」✅
+- [x] 用户约束「只看 cmux 上的 Cursor session」：`_build_cursor_sessions` 只列 cmux 活 pane，无 cmux pane 不列、cmux 不可达则空（去掉 hook 兜底）
+- [x] 同步：cursor-bridge→`claude-desktop-buddy-cursor`（自包含 `_cmux_cursor_panes`，无 control_plane 依赖，实测真 cmux 拿到活 pane）；cc-bridge focus_by_cursor_sid→`claude-desktop-buddy`
+
+## ✅ 全功能真机通关（2026-06-25）
+一块 cardputer 同时显示 Claude + Cursor 会话；Cursor 列表只剩 cmux 活 pane（带 label）；enter 可切到 Cursor pane。剩 5.2 单 owner 迁移文档、Codex（后续）。
 
 ## 后续（不在本轮）
 - Codex 状态源（先查 Codex CLI 有无 hook；没有→cmux pane 活性给粗 busy/idle）
