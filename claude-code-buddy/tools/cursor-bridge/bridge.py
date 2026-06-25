@@ -223,23 +223,74 @@ EXT_PUSH_INTERVAL_S = 2.0
 
 
 def _build_cursor_sessions(state: BuddyState) -> list:
-    """sessions[] snapshot from _sessions + session_labels (no to_payload
-    side effects). sid = Cursor session UUID (== cmux title cursor-<UUID>)."""
-    out = []
-    labels = getattr(state, "session_labels", {})   # 老 buddy_core 可能没有此字段
+    """sessions[] snapshot. Source of truth = LIVE cmux Cursor panes
+    (state.session_labels {cmux_sid: label}, populated by cmux_cursor_label_loop)
+    so the device list == focusable panes (not stale hook-history sessions).
+    Per-session st/ws joined from hook-tracked _sessions by the first UUID
+    segment. If cmux reconciliation is unavailable (labels empty), fall back to
+    hook-tracked sessions (degraded: no label, may include stale). openspec
+    change cardputer-cursor-sessions.
+    """
+    labels = getattr(state, "session_labels", {})
+    # index hook-tracked sessions by first UUID segment for st/ws join
+    by_seg = {}
     for sid, s in state._sessions.items():
-        row = {"sid": sid, "running": bool(s.get("running"))}
-        lbl = labels.get(sid)
-        if lbl:
-            row["label"] = lbl
-        if s.get("st"):
-            row["st"] = s["st"]
-        if s.get("ws"):
-            row["ws"] = s["ws"]
-        out.append(row)
-        if len(out) >= 16:
-            break
+        by_seg.setdefault(sid.split("-")[0], (sid, s))
+
+    out = []
+    if labels:
+        for cmux_sid, label in labels.items():
+            hook = by_seg.get(cmux_sid.split("-")[0])
+            full_sid, s = (hook[0], hook[1]) if hook else (cmux_sid, {})
+            row = {"sid": full_sid, "running": bool(s.get("running"))}
+            if label:
+                row["label"] = label
+            if s.get("st"):
+                row["st"] = s["st"]
+            if s.get("ws"):
+                row["ws"] = s["ws"]
+            out.append(row)
+            if len(out) >= 16:
+                break
+    else:
+        for sid, s in state._sessions.items():   # fallback: hook-tracked
+            row = {"sid": sid, "running": bool(s.get("running"))}
+            if s.get("st"):
+                row["st"] = s["st"]
+            if s.get("ws"):
+                row["ws"] = s["ws"]
+            out.append(row)
+            if len(out) >= 16:
+                break
     return out
+
+
+async def cmux_cursor_label_loop(state: BuddyState, dirty: asyncio.Event):
+    """Poll cmux every 15s for LIVE Cursor panes → state.session_labels
+    {cursor_sid: label}. This makes the device's Cursor list match what
+    selectSession can actually focus (and carries human labels), instead of
+    cursor-bridge's hook-history sessions. Missing cmux → labels stay empty
+    (push falls back to hook sessions). openspec cardputer-cursor-sessions.
+    """
+    import logging
+    log = logging.getLogger("cursor-bridge")
+    try:
+        from control_plane.cmux_control import CmuxClient
+    except Exception:
+        log.info("cmux_cursor_label_loop: CmuxClient unavailable; cursor labels disabled")
+        return
+    cmux = CmuxClient()
+    loop = asyncio.get_event_loop()
+    while True:
+        await asyncio.sleep(15)
+        try:
+            labels = await loop.run_in_executor(None, cmux.cursor_session_labels)
+            if labels != getattr(state, "session_labels", None):
+                state.session_labels = labels
+                dirty.set()
+                log.info("cmux cursor labels refreshed: %d pane(s)", len(labels))
+        except Exception:
+            log.exception("cmux_cursor_label_loop tick failed")
 
 
 async def push_ext_sessions_loop(state: BuddyState, dirty: asyncio.Event):
@@ -326,7 +377,7 @@ if __name__ == "__main__":
         ptt_mode=PTT_MODE,
         keepalive_s=2.0,
         rtc_sync_on_connect=True,   # no Claude Desktop in the loop for cursor
-        extra_tasks=[reaper_loop, push_ext_sessions_loop],
+        extra_tasks=[reaper_loop, push_ext_sessions_loop, cmux_cursor_label_loop],
         log_fmt=_cursor_log_fmt,
         on_loop_start=_on_loop_start,
         serial_port=TAB5_SERIAL or None,

@@ -62,6 +62,30 @@ def test_per_session_state_in_payload(cursor, fresh_state):
     assert sess["s2"]["st"] == "tool"
 
 
+def test_build_cursor_sessions_uses_live_cmux_panes(cursor, fresh_state):
+    # The pushed list = live cmux panes (session_labels), joining hook st by
+    # UUID first segment — NOT the raw hook-history _sessions. A hook session
+    # whose pane is gone (not in labels) is excluded. (cardputer-cursor-sessions)
+    full = "66099139-1550-4241-bd6a-a177bfb0d21c"
+    cursor.apply_event(fresh_state, ev("UserPromptSubmit", session_id=full))
+    cursor.apply_event(fresh_state, ev("PreToolUse", session_id=full, tool_name="sh"))
+    cursor.apply_event(fresh_state, ev("UserPromptSubmit", session_id="zombie-999"))
+    fresh_state.session_labels = {"66099139-1550-4241": "my-cursor-proj"}  # live pane
+    rows = cursor._build_cursor_sessions(fresh_state)
+    by = {r.get("label"): r for r in rows}
+    assert "my-cursor-proj" in by                     # live pane listed, labeled
+    assert by["my-cursor-proj"]["sid"] == full        # joined to full hook sid
+    assert by["my-cursor-proj"]["st"] == "tool"       # hook st carried over
+    assert all(r["sid"] != "zombie-999" for r in rows)  # stale hook session excluded
+
+
+def test_build_cursor_sessions_fallback_without_cmux(cursor, fresh_state):
+    # No cmux labels → degrade to hook-tracked sessions (no crash).
+    cursor.apply_event(fresh_state, ev("UserPromptSubmit", session_id="h1"))
+    rows = cursor._build_cursor_sessions(fresh_state)
+    assert any(r["sid"] == "h1" for r in rows)
+
+
 # ─── token accounting (the reference behaviour) ───────────────────────
 
 def test_stop_accumulates_output_tokens(cursor, fresh_state):

@@ -411,6 +411,15 @@ def test_focus_by_cursor_sid_no_match_returns_none():
     assert c.focus_by_cursor_sid("") is None                # short-circuits
 
 
+def test_cursor_session_labels_lists_live_cursor_panes():
+    m = _CursorRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    labels = c.cursor_session_labels()
+    # the live Cursor pane's sid (from title cursor-<UUID>) → human label
+    assert "66099139-1550-4241" in labels
+    assert labels["66099139-1550-4241"]  # non-empty label from title
+
+
 def test_label_from_title_pure_autoname():
     # auto-name generated → title is a single pure name.
     assert label_from_title("hardware-buddies-setup") == "hardware-buddies-setup"

@@ -34,8 +34,19 @@
 - [ ] 5.2 BLE 单 owner 迁移文档 + install（cursor-bridge 不再需要自己的 Cursor stick）—— 待补
 
 ## 状态小结
-- 显示（轮播/列表）：真机通过 ✅。切 Cursor pane（2.3）：已实现 + 单测，待同步线上 + 真机验。
+- 显示（轮播/列表）：真机通过 ✅。切 Cursor pane 管道全通（设备发 selectSession → daemon focus_by_cursor_sid），真机验证 selectSession 到达 + focus 尝试。
 - 剩：5.2 单 owner 迁移文档；Codex（后续）。
+
+## ⚠️ 真机暴露的真问题：列表来源 = hook 历史 ≠ cmux 活 pane（2026-06-25）
+现象：设备列出 12b56ff4/646a554a/e121d286（cursor-bridge 按 hook 历史追踪，pane 已关/不在本 cmux），而当前活的 cmux Cursor pane `cursor-66099139` 没进列表 → 点哪个都 `no matching cmux surface`，且无 label（显 sid 前缀）。
+- 根因：cursor-bridge 会话列表来自 hook 历史（凡触发过 hook 都记），cmux 聚焦却要求是活 pane。两集合发散。
+- 修法（task 6）：给 cursor-bridge 加 **cmux 对账**——像 cc-bridge 的 cmux_label_loop 那样，会话列表来自 cmux 活 Cursor surface（title `cursor-<UUID>` → sid + label），device 列表 == 可聚焦集合，顺带拿到 label。老 cursor fork 当前无此环。
+
+## 6. cursor-bridge cmux 对账（真机暴露）  ✅ monorepo + pytest 195
+- [x] 6.1 `cmux_control.cursor_session_labels()`：列活 Cursor surface（title `cursor-<UUID>` 正则提 sid → label）。测试 `test_cursor_session_labels_lists_live_cursor_panes`
+- [x] 6.2 cursor-bridge `cmux_cursor_label_loop`（15s 轮询）填 `state.session_labels`={cmux_sid:label}；`_build_cursor_sessions` 改成**以 cmux 活 pane 为准**、按 UUID 首段 join hook st/ws，僵尸会话排除；cmux 不可用回退 hook 列表。测试 `test_build_cursor_sessions_uses_live_cmux_panes` + fallback
+- [ ] 6.3 真机：设备列出的 Cursor 会话都能 enter 切到对应 pane + 显 label —— 待同步线上 cursor 仓 + 真机
+- ⚠️ 同步：cmux_control→claude-desktop-buddy(+cursor 仓)，cursor-bridge→claude-desktop-buddy-cursor
 
 ## 后续（不在本轮）
 - Codex 状态源（先查 Codex CLI 有无 hook；没有→cmux pane 活性给粗 busy/idle）

@@ -731,6 +731,25 @@ class CmuxClient:
                 out[s.checkpoint_id] = label_from_title(s.title)
         return out
 
+    def cursor_session_labels(self) -> dict:
+        """{cursor_sid: human label} for live Cursor surfaces.
+
+        A Cursor pane has no resume_binding.checkpoint_id (cmux only binds
+        Claude panes); its session UUID is embedded in the title as
+        `cursor-<UUID>`. Keyed by that UUID (as it appears in the title — may be
+        a prefix) so cursor-bridge can list only LIVE, focusable Cursor panes
+        (not stale hook-history sessions) and attach a label. openspec change
+        cardputer-cursor-sessions.
+        """
+        out = {}
+        for s in self.list_sessions():
+            if s.checkpoint_id:           # a Claude pane — skip
+                continue
+            m = _re.search(r"cursor-([0-9a-fA-F-]+)", s.title or "")
+            if m:
+                out[m.group(1)] = label_from_title(s.title)
+        return out
+
     def pending_questions(self) -> list:
         """Pending AskUserQuestion feed items (see parse_pending_questions)."""
         rc, out, _err = self.run(self._rpc_argv("feed.list", {}))
