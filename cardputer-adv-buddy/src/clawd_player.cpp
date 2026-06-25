@@ -262,14 +262,18 @@ void drawSessions() {
             bool sel = (idx == sessSel_);
             int y = top + r * rowH;
             if (sel) canvas.fillRect(0, y - 1, canvasW, rowH, 0x2945);  // 选中行高亮底
-            canvas.setTextColor(sel ? TFT_WHITE : 0xCE59, sel ? 0x2945 : BG);
+            // agent 标记：claude=黄 + "cc"，cursor=灰蓝 + "cu"。颜色+文字双重区分。
+            bool isCursor = (strcmp(sess_[idx].agent, "cursor") == 0);
+            const char* atag = isCursor ? "cu" : "cc";
+            uint16_t rowCol = isCursor ? 0xCE59 : 0xFD20;
+            canvas.setTextColor(sel ? TFT_WHITE : rowCol, sel ? 0x2945 : BG);
             // 名字优先 cmux auto-name（label）；没有时 fallback sid 前 8 字符。
             char sid8[9];
             strncpy(sid8, sess_[idx].sid, 8); sid8[8] = 0;
             const char* nm = sess_[idx].label[0] ? sess_[idx].label : sid8;
             char nm2[40]; utf8lcpy(nm2, nm, sizeof(nm2));  // UTF-8 安全；超宽由 sprite 裁剪
-            char row[64];
-            snprintf(row, sizeof(row), "%c %d %s", sel ? '>' : ' ', idx + 1, nm2);
+            char row[72];
+            snprintf(row, sizeof(row), "%c%d %s %s", sel ? '>' : ' ', idx + 1, atag, nm2);
             canvas.drawString(row, 6, y);
             canvas.drawString(sess_[idx].running ? "run" : "idle", canvasW - 32, y);
         }
@@ -371,6 +375,8 @@ void showSessions(const BuddyState& bs) {
         sess_[i].running = bs.sessions[i].running;
         strncpy(sess_[i].label, bs.sessions[i].label, sizeof(sess_[i].label) - 1);
         sess_[i].label[sizeof(sess_[i].label) - 1] = 0;
+        strncpy(sess_[i].agent, bs.sessions[i].agent, sizeof(sess_[i].agent) - 1);
+        sess_[i].agent[sizeof(sess_[i].agent) - 1] = 0;
     }
     sessScroll_ = 0;
     sessSel_ = 0;

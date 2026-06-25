@@ -83,6 +83,11 @@ void applyJson(const char* line) {
             // per-session 状态 + 等待 FIFO 序号（rotation/pin）；缺省 → idle / 0。
             s.sessions[n].state   = (int)agentStateFromWire(v["st"]);
             s.sessions[n].waitSeq = v["ws"] | 0u;
+            // agent 标记（cursor-sessions）；缺省 = claude（空串）。
+            const char* ag = v["agent"];
+            if (ag) strncpy(s.sessions[n].agent, ag, sizeof(s.sessions[n].agent) - 1);
+            else    s.sessions[n].agent[0] = 0;
+            s.sessions[n].agent[sizeof(s.sessions[n].agent) - 1] = 0;
             n++;
         }
         s.nSessions = n;

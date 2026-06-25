@@ -20,9 +20,9 @@
 - [x] 2.3 selectSession 对 Cursor pane 聚焦：`cmux_control.focus_by_cursor_sid(sid)`（按 title 里 cursor-<UUID>/前缀匹配非 Claude surface → focus surface id）；`_select_session` 回退链 `focus_by_checkpoint or focus_by_cursor_sid`。测试：`test_focus_by_cursor_sid_matches_title_and_focuses` + no-match。pytest 192。⚠️ 仅 monorepo，未同步线上 cc-bridge、未真机
 - ⚠️ 三仓同步见 task 5.1（cc-bridge→claude-desktop-buddy / cursor-bridge→claude-desktop-buddy-cursor）
 
-## 3. 固件（可选 · 非核心）
-- [ ] 3.1 `cclink` 解析 `sessions[].agent`；`SessionInfo` 加 agent 字段
-- [ ] 3.2 `drawSessionTag` 标识前加 agent 标记（`▸`/`C·`）—— 默认延后
+## 3. 固件 agent 标记  ✅ 编译过
+- [x] 3.1 `SessionInfo` 加 `char agent[8]`；`cclink` 解析 `sessions[].agent`（空=claude）
+- [x] 3.2 `drawSessions` 会话列表每行 agent 标记：cursor=橙黄+"cu"，claude=灰蓝+"cc"（颜色+文字双重区分）。⚠️ 需烧固件。轮播顶栏 tag 的 agent 标记暂未做（按需扩）
 
 ## 4. 验证
 - [x] 4.1 单测：`test_ext_sessions_merge_into_payload` + `test_ext_sessions_stale_dropped`（pytest 190）

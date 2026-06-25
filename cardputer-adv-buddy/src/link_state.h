@@ -27,6 +27,8 @@ struct SessionInfo {
     // 供 clawd 主形象轮播 + 待输入时钉最早等待者（openspec change cardputer-session-rotation）。
     int state = 0;        // 实为 AgentState（用 int 存）；解析时经 agentStateFromWire 填
     uint32_t waitSeq = 0; // 进入等待的单调序号；0 = 不在等待
+    char agent[8] = {0};  // payload `agent`（"cursor"…）；空 = claude（默认本机）。
+                          // 列表里区分不同 agent（openspec change cardputer-cursor-sessions）。
 };
 
 // payload sessions[].st（小写短串）→ AgentState。缺省/未知 → Idle。
