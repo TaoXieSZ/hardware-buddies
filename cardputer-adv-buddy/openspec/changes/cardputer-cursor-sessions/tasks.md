@@ -2,10 +2,12 @@
 
 > 状态：proposal 草拟（探索产物），**未实现**。Codex 不在本轮（推迟）。
 
-## 0. Gating spike（开工前必须验）
-- [ ] 0.1 cmux 的 Cursor pane 有没有稳定 surface/binding（类似 Claude `resume_binding.checkpoint_id`）→ 决定会话归一 + selectSession 可行性
-- [ ] 0.2 聚合形态选型：(a) 新 aggregator / (b) cc-bridge 合流 / (c) 两 hook 同 socket —— 验最小可行，定 MVP
-- [ ] 0.3 确认 cursor_hook.js 投递的事件字段（是否带 session_id、能否标 agent）
+## 0. Gating spike
+- [x] 0.1 cmux Cursor pane：`resume_binding=null`（无 checkpoint），但有稳定 surface `id`/`ref` + title 嵌 `cursor-xxx` → **按 surface UUID 归一、按 surface id 聚焦**可行（见 design D2）。cmux feed 只有 claude events → Cursor 状态须自 cursor-bridge hook。
+- [x] 0.3 cursor_hook.js ✅ 带 `session_id`(=conversation_id) 且把 Cursor 事件翻译成 Claude-shaped events（复用 apply_event）→ 给 cursor-bridge 加 per-session 状态 = 套 cc-bridge 同款，几乎零额外逻辑
+- [x] 0.2b ID join ✅ **免费**：cursor hook `session_id` == cmux title `cursor-<UUID>`（同一 UUID 去前缀，实测 66099139/889f542f 在 cursor-bridge 日志各 35/122 次）。状态↔聚焦可干净 join，精确 selectSession 可行（早前「硬问题」判断作废，小样本误判）
+- [ ] 0.2 聚合形态选型：(a) 新 aggregator / (b) cc-bridge 合流（cursor-bridge 不连自己 BLE，把 sessions[] 喂给 cc-bridge）/ (c) 两 hook 同 socket。倾向 (b) 极简：单 BLE owner，绕开双 bridge 抢链路
+- [x] 0.4 Cursor hooks ✅ 实时 fire 丰富事件：实测发「继续」→ 日志 22:39 `approve: shell` + 22:40 `PostToolUse session=e121d286-ed97-4209-ae5d-bff47b95163c`（完整 UUID）。前置盲区清除，spike 全绿
 
 ## 1. Cursor per-session 状态（cursor-bridge）
 - [ ] 1.1 把 `set_session_state(sid, st)` 贴到 `cursor-bridge/bridge.py` 的 apply_event 各分支（对齐 cc-bridge：thinking/tool/waiting/idle）
