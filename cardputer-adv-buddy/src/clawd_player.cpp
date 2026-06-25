@@ -37,6 +37,9 @@ int32_t toastMs_ = 0;
 char rotTag_[40] = {0};
 int  rotIdx_ = 0, rotTotal_ = 0;
 bool rotPinned_ = false;
+// working(ToolUse) 态多动作：在 busy_0..3 间轮换，别老敲键盘
+int      busyVariant_ = 0;
+uint32_t busyNextMs_ = 0;
 
 // APPROVAL
 char apTool_[40] = {0}, apHint_[92] = {0};
@@ -101,7 +104,10 @@ const char* fileForState(AgentState s) {
     switch (s) {
         case AgentState::Idle:         return "idle.gif";
         case AgentState::Thinking:     return "clawd-thinking.gif";
-        case AgentState::ToolUse:      return "busy_1.gif";
+        case AgentState::ToolUse: {     // working：busy_0..3 轮换（见 tick busy 计时器）
+            static const char* kBusy[4] = {"busy_0.gif", "busy_1.gif", "busy_2.gif", "busy_3.gif"};
+            return kBusy[busyVariant_ & 3];
+        }
         case AgentState::Approval:     return "attention.gif";
         case AgentState::Done:         return "celebrate.gif";
         case AgentState::Notification: return "clawd-notification.gif";
@@ -448,6 +454,19 @@ void tick(uint32_t dtMs) {
     }
     if (!gifOpen) return;
     uint32_t now = millis();
+    // working(ToolUse) 态：每 ~2.5s 换一个 busy 变体（busy_0..3），别老敲键盘。
+    // 仅在纯 working（无 reaction/睡眠）时换；applyTarget 重开新变体 GIF。
+    static bool prevBusy = false;
+    bool nowBusy = (baseState_ == AgentState::ToolUse && !sleeping_ && reactionMs_ <= 0);
+    if (nowBusy) {
+        if (!prevBusy) busyNextMs_ = now + 2500;        // 刚进 working：当前变体先放一会儿
+        else if (now >= busyNextMs_) {
+            busyVariant_ = (busyVariant_ + 1) & 3;
+            busyNextMs_ = now + 2500;
+            applyTarget();                              // 切到新 busy 变体
+        }
+    }
+    prevBusy = nowBusy;
     if (now < nextFrameAt) return;
     int delayMs = 0;
     if (!gif.playFrame(false, &delayMs)) { gif.reset(); gif.playFrame(false, &delayMs); }
