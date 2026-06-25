@@ -331,6 +331,36 @@ def test_on_stick_line_answer_question_free_text_dispatches():
     assert got["rid"] == "R" and got["ids"] is None and got["text"] == "先跳过，你来定"
 
 
+def test_per_session_state_in_payload():
+    # 多 session 各自状态进 payload sessions[].st；聚合字段不变。
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    st._sessions["A"] = {"running": True}
+    st._sessions["B"] = {"running": True}
+    st.session_labels = {"A": "alpha", "B": "beta"}
+    st.set_session_state("A", "thinking")
+    st.set_session_state("B", "tool")
+    p = st.to_payload()
+    sess = {s["sid"]: s for s in p["sessions"]}
+    assert sess["A"]["st"] == "thinking" and sess["A"]["label"] == "alpha"
+    assert sess["B"]["st"] == "tool"
+    assert "total" in p and "running" in p and "msg" in p  # 聚合保留
+
+
+def test_waiting_assigns_fifo_seq():
+    # 进入 waiting 分配单调递增 ws；离开清零；重入拿更大的 seq。
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    st.set_session_state("A", "waiting")   # A 先等
+    st.set_session_state("B", "waiting")   # B 后等
+    assert 0 < st._sessions["A"]["ws"] < st._sessions["B"]["ws"]   # FIFO
+    st.set_session_state("A", "tool")      # A 离开等待
+    assert st._sessions["A"]["ws"] == 0
+    prev_b = st._sessions["B"]["ws"]
+    st.set_session_state("A", "waiting")   # A 重入 → 更大 seq（排到 B 之后）
+    assert st._sessions["A"]["ws"] > prev_b
+
+
 def test_on_stick_line_select_session_no_callback_is_safe():
     """No on_select_session wired (e.g. cursor-bridge) → selectSession is a
     silent no-op, never raises."""
