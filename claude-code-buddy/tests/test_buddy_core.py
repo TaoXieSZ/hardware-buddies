@@ -342,6 +342,58 @@ def test_on_stick_line_answer_question_dispatches_callback():
     assert got["rid"] == "R" and got["ids"] == ["opt0", "opt1"] and got["text"] is None
 
 
+def test_multi_question_sequential_accumulate_then_reply():
+    # openspec cardputer-multi-question: device answers each sub-question via a
+    # synthetic rid R#i; daemon accumulates and replies ONCE with all answers.
+    import json
+    import logging
+    import threading
+    from buddy_core.core import make_on_stick_line, BuddyState
+    got = {}
+    done = threading.Event()
+
+    def cb(rid, ids, text, selections=None):
+        got.update(rid=rid, ids=ids, text=text, selections=selections)
+        done.set()
+
+    st = BuddyState()
+    st.mq = {"rid": "RID", "cur": 0, "answers": [], "subq": [
+        {"header": "Q0", "options": [{"id": "a0", "label": "A0"}]},
+        {"header": "Q1", "options": [{"id": "b0", "label": "B0"}]},
+    ]}
+    on_line, _ = make_on_stick_line(
+        61, "tap", logging.getLogger("test"), state=st, on_answer_question=cb)
+
+    # answer sub-question 0 → accumulate, NO reply yet
+    on_line(json.dumps({"cmd": "answerQuestion", "rid": "RID#0", "ids": ["a0"]}))
+    assert not done.is_set()
+    assert st.mq["cur"] == 1 and st.mq["answers"] == ["A0"]
+
+    # answer sub-question 1 → complete → one reply with both answers
+    on_line(json.dumps({"cmd": "answerQuestion", "rid": "RID#1", "ids": ["b0"]}))
+    assert done.wait(2.0), "final reply not dispatched"
+    assert got["rid"] == "RID" and got["selections"] == ["A0", "B0"]
+    assert st.mq is None   # state cleared after completing
+
+
+def test_multi_question_stale_subindex_ignored():
+    import json
+    import logging
+    from buddy_core.core import make_on_stick_line, BuddyState
+    calls = []
+    st = BuddyState()
+    st.mq = {"rid": "RID", "cur": 1, "answers": ["A0"], "subq": [
+        {"header": "Q0", "options": [{"id": "a0", "label": "A0"}]},
+        {"header": "Q1", "options": [{"id": "b0", "label": "B0"}]},
+    ]}
+    on_line, _ = make_on_stick_line(
+        61, "tap", logging.getLogger("test"), state=st,
+        on_answer_question=lambda *a: calls.append(a))
+    # answering #0 again (already past) → ignored, no state change
+    on_line(json.dumps({"cmd": "answerQuestion", "rid": "RID#0", "ids": ["a0"]}))
+    assert st.mq["cur"] == 1 and calls == []
+
+
 def test_on_stick_line_answer_question_free_text_dispatches():
     # chat about it / cancel：固件回送 {rid, text}，回调收到 text、ids 为 None。
     import json

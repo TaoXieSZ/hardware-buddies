@@ -462,6 +462,31 @@ def test_parse_pending_questions_extracts_fields():
     assert q["rid"] == "RID1" and q["header"] == "H" and q["prompt"] == "pick one"
     assert q["multi"] is False and q["sid"] == "SID1"
     assert q["options"] == [{"id": "opt0", "label": "A"}, {"id": "opt1", "label": "B"}]
+    assert len(q["subq"]) == 1   # single-question item → one sub-question
+
+
+def test_parse_pending_questions_exposes_all_subquestions():
+    # Multi-question AskUserQuestion: questions[] has >1 entry → subq lists them all
+    # (openspec change cardputer-multi-question). top-level stays = q0 (back-compat).
+    from control_plane.cmux_control import parse_pending_questions
+    feed = json.dumps({"items": [
+        {"kind": "question", "status": "pending", "workstream_id": "claude-S",
+         "request_id": "MQ",
+         "question_options": [{"id": "a0", "label": "A0"}],   # q0 also top-level
+         "questions": [
+            {"header": "Q0", "prompt": "p0", "multi_select": False,
+             "options": [{"id": "a0", "label": "A0"}]},
+            {"header": "Q1", "prompt": "p1", "multi_select": False,
+             "options": [{"id": "b0", "label": "B0"}, {"id": "b1", "label": "B1"}]},
+         ]},
+    ]})
+    qs = parse_pending_questions(feed)
+    assert len(qs) == 1
+    sub = qs[0]["subq"]
+    assert len(sub) == 2
+    assert sub[0]["header"] == "Q0" and sub[0]["options"][0]["id"] == "a0"
+    assert sub[1]["header"] == "Q1" and [o["id"] for o in sub[1]["options"]] == ["b0", "b1"]
+    assert qs[0]["header"] == "Q0"   # top-level = first sub-question
 
 
 def test_parse_pending_questions_skips_expired_and_telemetry():
