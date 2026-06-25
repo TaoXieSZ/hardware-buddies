@@ -79,11 +79,42 @@ def test_build_cursor_sessions_uses_live_cmux_panes(cursor, fresh_state):
     assert all(r["sid"] != "zombie-999" for r in rows)  # stale hook session excluded
 
 
-def test_build_cursor_sessions_fallback_without_cmux(cursor, fresh_state):
-    # No cmux labels → degrade to hook-tracked sessions (no crash).
+def test_build_cursor_sessions_only_cmux_panes(cursor, fresh_state):
+    # Constraint: ONLY live cmux Cursor panes are listed. A hook session with
+    # no cmux pane (labels empty) yields an empty list — not the hook session.
     cursor.apply_event(fresh_state, ev("UserPromptSubmit", session_id="h1"))
-    rows = cursor._build_cursor_sessions(fresh_state)
-    assert any(r["sid"] == "h1" for r in rows)
+    assert cursor._build_cursor_sessions(fresh_state) == []   # no cmux pane → none
+
+
+def test_cmux_cursor_panes_parses_live_panes(cursor, monkeypatch):
+    # Self-contained cmux query: parse Cursor panes from cmux rpc output,
+    # skip Claude panes. (cardputer-cursor-sessions, no control_plane dep)
+    import subprocess
+    import json as _j
+
+    def fake_run(argv, **kw):
+        method = argv[2] if len(argv) > 2 else ""
+        class R:
+            pass
+        r = R()
+        if method == "workspace.list":
+            r.stdout = _j.dumps({"workspaces": [{"id": "W"}]})
+        elif method == "surface.list":
+            r.stdout = _j.dumps({"surfaces": [
+                {"title": "claude-x · 229a", "resume_binding":
+                    {"kind": "claude", "checkpoint_id": "C"}},
+                {"title": "CeLLM harness · hi · cursor-66099139-1550",
+                    "resume_binding": None},
+            ]})
+        else:
+            r.stdout = "{}"
+        return r
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    panes = cursor._cmux_cursor_panes()
+    assert "66099139-1550" in panes              # Cursor pane picked up
+    assert all("229a" not in k for k in panes)   # Claude pane skipped
+    assert panes["66099139-1550"]                # has a non-empty label
 
 
 # ─── token accounting (the reference behaviour) ───────────────────────

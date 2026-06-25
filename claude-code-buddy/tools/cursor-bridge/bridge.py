@@ -223,13 +223,13 @@ EXT_PUSH_INTERVAL_S = 2.0
 
 
 def _build_cursor_sessions(state: BuddyState) -> list:
-    """sessions[] snapshot. Source of truth = LIVE cmux Cursor panes
-    (state.session_labels {cmux_sid: label}, populated by cmux_cursor_label_loop)
-    so the device list == focusable panes (not stale hook-history sessions).
-    Per-session st/ws joined from hook-tracked _sessions by the first UUID
-    segment. If cmux reconciliation is unavailable (labels empty), fall back to
-    hook-tracked sessions (degraded: no label, may include stale). openspec
-    change cardputer-cursor-sessions.
+    """sessions[] snapshot — ONLY live cmux Cursor panes (state.session_labels
+    {cmux_sid: label}, populated by cmux_cursor_label_loop). Per-session st/ws
+    are joined from hook-tracked _sessions by the first UUID segment. Sessions
+    that exist only in hook history (pane closed / not in cmux) are NOT listed,
+    so the device's Cursor list == focusable cmux panes. If cmux is unreachable
+    (labels empty) the Cursor list is empty — by design, we only surface what
+    cmux actually has. openspec change cardputer-cursor-sessions.
     """
     labels = getattr(state, "session_labels", {})
     # index hook-tracked sessions by first UUID segment for st/ws join
@@ -238,31 +238,63 @@ def _build_cursor_sessions(state: BuddyState) -> list:
         by_seg.setdefault(sid.split("-")[0], (sid, s))
 
     out = []
-    if labels:
-        for cmux_sid, label in labels.items():
-            hook = by_seg.get(cmux_sid.split("-")[0])
-            full_sid, s = (hook[0], hook[1]) if hook else (cmux_sid, {})
-            row = {"sid": full_sid, "running": bool(s.get("running"))}
-            if label:
-                row["label"] = label
-            if s.get("st"):
-                row["st"] = s["st"]
-            if s.get("ws"):
-                row["ws"] = s["ws"]
-            out.append(row)
-            if len(out) >= 16:
-                break
-    else:
-        for sid, s in state._sessions.items():   # fallback: hook-tracked
-            row = {"sid": sid, "running": bool(s.get("running"))}
-            if s.get("st"):
-                row["st"] = s["st"]
-            if s.get("ws"):
-                row["ws"] = s["ws"]
-            out.append(row)
-            if len(out) >= 16:
-                break
+    for cmux_sid, label in labels.items():
+        hook = by_seg.get(cmux_sid.split("-")[0])
+        full_sid, s = (hook[0], hook[1]) if hook else (cmux_sid, {})
+        row = {"sid": full_sid, "running": bool(s.get("running"))}
+        if label:
+            row["label"] = label
+        if s.get("st"):
+            row["st"] = s["st"]
+        if s.get("ws"):
+            row["ws"] = s["ws"]
+        out.append(row)
+        if len(out) >= 16:
+            break
     return out
+
+
+# cmux binary — self-contained query (cursor-bridge has no control_plane module
+# in every deployment, so we shell out directly instead of importing CmuxClient).
+CMUX_BIN = os.environ.get(
+    "CMUX_BIN", "/Applications/cmux.app/Contents/Resources/bin/cmux")
+
+
+def _cmux_cursor_panes() -> dict:
+    """{cursor_sid: label} for LIVE cmux Cursor panes, by shelling out to cmux.
+    A Cursor pane has no claude resume_binding; its UUID is in the title as
+    cursor-<UUID>. Returns {} on any failure (caller leaves labels empty →
+    push falls back to hook sessions). openspec cardputer-cursor-sessions.
+    """
+    import subprocess
+    import re as _re
+
+    def _rpc(method, params):
+        try:
+            out = subprocess.run(
+                [CMUX_BIN, "rpc", method, json.dumps(params)],
+                capture_output=True, text=True, timeout=5).stdout
+            return json.loads(out)
+        except Exception:
+            return {}
+
+    panes = {}
+    wl = _rpc("workspace.list", {})
+    for ws in (wl.get("workspaces") or wl.get("items") or []):
+        wid = ws.get("id") or ""
+        sl = _rpc("surface.list", {"workspace": wid})
+        for s in (sl.get("surfaces") or sl.get("items") or []):
+            rb = s.get("resume_binding") or {}
+            if rb.get("kind") == "claude":          # a Claude pane — skip
+                continue
+            title = s.get("title") or ""
+            m = _re.search(r"cursor-([0-9a-fA-F-]+)", title)
+            if not m:
+                continue
+            head = title.split("· cursor-")[0].strip(" ·")   # drop the cursor-… tail
+            label = (head.split("·")[-1].strip() or head)[:24] if head else m.group(1)[:8]
+            panes[m.group(1)] = label
+    return panes
 
 
 async def cmux_cursor_label_loop(state: BuddyState, dirty: asyncio.Event):
@@ -274,17 +306,11 @@ async def cmux_cursor_label_loop(state: BuddyState, dirty: asyncio.Event):
     """
     import logging
     log = logging.getLogger("cursor-bridge")
-    try:
-        from control_plane.cmux_control import CmuxClient
-    except Exception:
-        log.info("cmux_cursor_label_loop: CmuxClient unavailable; cursor labels disabled")
-        return
-    cmux = CmuxClient()
     loop = asyncio.get_event_loop()
     while True:
         await asyncio.sleep(15)
         try:
-            labels = await loop.run_in_executor(None, cmux.cursor_session_labels)
+            labels = await loop.run_in_executor(None, _cmux_cursor_panes)
             if labels != getattr(state, "session_labels", None):
                 state.session_labels = labels
                 dirty.set()
