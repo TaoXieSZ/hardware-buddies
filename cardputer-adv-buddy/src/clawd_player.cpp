@@ -249,7 +249,9 @@ void drawSessions() {
     canvas.setFont(&fonts::efontCN_12);   // 中文会话名渲染（默认字体无 CJK glyph）
     canvas.setTextDatum(top_left);
     char title[24];
-    snprintf(title, sizeof(title), "SESSIONS (%d)", sessTotal_);
+    // 标题计数 = 实际列出的行数（含 cursor/codex 等 ext 会话），不是 payload.total
+    // （后者只算本机 claude，会跟列表对不上）。
+    snprintf(title, sizeof(title), "SESSIONS (%d)", sessN_);
     canvas.drawString(title, 6, 2);
     const int rowH = 14, top = 16, rows = (canvasH - top) / rowH;  // efontCN_12 行高
     if (sessN_ == 0) {
@@ -388,9 +390,8 @@ void showSessions(const BuddyState& bs) {
 void hideSessions() { if (mode_ == SESSIONS) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 void sessionsMove(int delta) {
     if (mode_ != SESSIONS || sessN_ == 0) return;
-    sessSel_ += delta;
-    if (sessSel_ < 0) sessSel_ = 0;
-    if (sessSel_ >= sessN_) sessSel_ = sessN_ - 1;
+    // 循环导航：到最后一个再按下 → 回到第一个；第一个再按上 → 到最后一个。
+    sessSel_ = ((sessSel_ + delta) % sessN_ + sessN_) % sessN_;
     // viewport 跟随选中：选中项移出可视区时滚动。
     const int rowH = 12, top = 18, rows = (canvasH - top) / rowH;
     if (sessSel_ < sessScroll_) sessScroll_ = sessSel_;
