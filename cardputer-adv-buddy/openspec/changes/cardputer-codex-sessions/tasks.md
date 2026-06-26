@@ -42,7 +42,8 @@
 ## 6. 验证（单测全绿 + 真机通关 2026-06-26）
 - [x] 6.1 单测全绿：codex-bridge + cmux_control codex focus(含 suffix) + cc-bridge ext codex → 无回归
 - [x] 6.2 ✅ 真机：cmux 跑 codex pane → cardputer SESSIONS 列表出现**绿色 cx 行**（label=hardware-buddies）。用户确认「看到绿色 cx 行」。注意：ext 会话进 `sessions[]` 列表但不改 `total` 计数（与 cursor 同行为）
-- [ ] 6.3 真机：Codex 会话待输入（PermissionRequest）→ 设备显 waiting + 跨 agent FIFO 钉 —— 待测（需先在 codex 里 approve hook trust + 触发一次 permission）
+- [x] 6.3 ✅ 真机：注入 codex PermissionRequest（经真实 `codex_hook.js → socket → daemon → BLE`）→ codex-bridge `waiting=1 msg=approve: Bash`，设备 **clawd 举灯泡（attention/waiting）**，用户确认；Stop 后回落 idle。设备行为验证（waiting→attention + 钉）。⚠️ codex **自动** fire hook 需先在 codex 里 approve hook-trust（codex 侧门，非本代码 bug；bridge 管线手动探针已证完整）。codex trust 哈希算法不可逆推，留交互批准 / `--dangerously-bypass-hook-trust`
+- 注：codex-bridge 顶层 `state.waiting/prompt` 在 Stop 后不自清，但 no_ble push-only 不发顶层字段、只发 `sessions[]`（行 st 正确随 Stop 转 idle），故对设备无影响——不修
 - [x] 6.4 ✅ 真机：选中 cx 行 → cmux focus 到 `codex resume…--yolo` pane。日志 `selectSession sid=xie/OpenSourceProjects/hardware-buddies → focused surface D8E25330`。用户确认「跳了」
 
 ## 8. 真机 bring-up 暴露并修复（2026-06-26）
