@@ -408,4 +408,10 @@ if __name__ == "__main__":
         on_loop_start=_on_loop_start,
         serial_port=TAB5_SERIAL or None,
         app="cursor",
+        # cursor-bridge owns no stick — it pushes ext_sessions to cc-bridge (the
+        # single BLE owner). Scanning for a non-existent Cursor-* device would
+        # contend with cc-bridge's cardputer link on the shared macOS BLE radio
+        # and can flap it (same failure mode codex-bridge hit 2026-06-26).
+        # Push-only: no BLE scan. Matches codex-bridge.
+        no_ble=True,
     )
