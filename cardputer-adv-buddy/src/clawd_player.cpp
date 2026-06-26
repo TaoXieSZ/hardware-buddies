@@ -262,10 +262,12 @@ void drawSessions() {
             bool sel = (idx == sessSel_);
             int y = top + r * rowH;
             if (sel) canvas.fillRect(0, y - 1, canvasW, rowH, 0x2945);  // 选中行高亮底
-            // agent 标记：claude=黄 + "cc"，cursor=灰蓝 + "cu"。颜色+文字双重区分。
-            bool isCursor = (strcmp(sess_[idx].agent, "cursor") == 0);
-            const char* atag = isCursor ? "cu" : "cc";
-            uint16_t rowCol = isCursor ? 0xCE59 : 0xFD20;
+            // agent 标记：claude=黄 "cc"，cursor=灰蓝 "cu"，codex=绿 "cx"。颜色+文字双重区分。
+            const char* agent = sess_[idx].agent;
+            const char* atag; uint16_t rowCol;
+            if (strcmp(agent, "cursor") == 0)      { atag = "cu"; rowCol = 0xCE59; }
+            else if (strcmp(agent, "codex") == 0)  { atag = "cx"; rowCol = 0x07E5; }
+            else                                   { atag = "cc"; rowCol = 0xFD20; }
             canvas.setTextColor(sel ? TFT_WHITE : rowCol, sel ? 0x2945 : BG);
             // 名字优先 cmux auto-name（label）；没有时 fallback sid 前 8 字符。
             char sid8[9];
