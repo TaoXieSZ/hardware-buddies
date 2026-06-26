@@ -39,11 +39,17 @@
 - [x] 5.2 核对：`cclink` 解析任意 `agent` 字符串（cursor 那轮已通用）+ `sid[40]` 容得下 codex UUID(36)——故 bridge 侧 sid 用 UUID 不用 cwd（避免 40 截断），cwd 走独立字段
 - [x] 编译 SUCCESS（Flash 43.6% / RAM 25.2%）→ 烧 `/dev/cu.usbmodem21401`，Hash verified + hard reset
 
-## 6. 验证（单测全绿；真机=明天验收）
-- [x] 6.1 单测全绿：codex-bridge 12 + cmux_control codex focus 2 + cc-bridge ext codex 1 → **全量 pytest 214 passed**，无回归
-- [ ] 6.2 真机（明天）：cmux 同跑 Claude+Cursor+Codex → cardputer 列表三 agent，各带 cc/cu/cx 标记
-- [ ] 6.3 真机（明天）：Codex 会话待输入（PermissionRequest）→ 设备显 waiting + 跨 agent FIFO 钉
-- [ ] 6.4 真机（明天）：选中 Codex 会话 → focus 到对应 cmux codex pane（cwd 匹配）
+## 6. 验证（单测全绿 + 真机通关 2026-06-26）
+- [x] 6.1 单测全绿：codex-bridge + cmux_control codex focus(含 suffix) + cc-bridge ext codex → 无回归
+- [x] 6.2 ✅ 真机：cmux 跑 codex pane → cardputer SESSIONS 列表出现**绿色 cx 行**（label=hardware-buddies）。用户确认「看到绿色 cx 行」。注意：ext 会话进 `sessions[]` 列表但不改 `total` 计数（与 cursor 同行为）
+- [ ] 6.3 真机：Codex 会话待输入（PermissionRequest）→ 设备显 waiting + 跨 agent FIFO 钉 —— 待测（需先在 codex 里 approve hook trust + 触发一次 permission）
+- [x] 6.4 ✅ 真机：选中 cx 行 → cmux focus 到 `codex resume…--yolo` pane。日志 `selectSession sid=xie/OpenSourceProjects/hardware-buddies → focused surface D8E25330`。用户确认「跳了」
+
+## 8. 真机 bring-up 暴露并修复（2026-06-26）
+- [x] 8.1 **BLE 三扫描器争用**：codex-bridge 作为第 3 个 bleak 扫描器（扫不存在的 `Codex-*`）挤掉 cc-bridge 的 cardputer 连接 → connect-then-drop flapping（串口 `[ble] connected`→`mtu=`→`conn=0`）。修：`buddy_core.run()` 加 `no_ble` 参数 + `_NullBleWriter`（push-only bridge 不建 BleWriter、不跑 reconnect_loop）；codex-bridge 传 `no_ble=True`。停掉 codex-bridge 即 `conn=1` 稳，加 no_ble 后三 daemon 共存稳定。**根因=环境/总线争用，非 firmware**
+- [x] 8.2 **focus 崩溃 `NameError: state`**：`_select_session` 闭包够不着 `state`（state 在 buddy_core.run() 内建）。原 codex 分支查 `state.ext_sessions` 拿 cwd → 崩。修：改无状态——codex sid **本身就是 cwd**（超 39 字符取尾段，适配固件 `sid[40]`），`focus_by_codex_cwd` 按 `cwd==sid or endswith(sid)` 匹配。`_select_session` 链：checkpoint → cursor_sid → codex_cwd(sid)
+- [x] 8.3 **dashboard import 崩**：codex-bridge 独立运行时自己目录无 dashboard.py（测试时靠 cursor-bridge 先加载留在 sys.path 才没暴露）。修：dashboard import 改 try/except 可选 + `_on_loop_start` guard
+- [x] 8.4 部署：codex-bridge 跑在 `claude-desktop-buddy/tools/codex-bridge/`（与 cc-bridge 同 checkout，socket pair）；install.sh 已合 `~/.codex/hooks.json`（7 事件，其它 17 hook 完好）。cc-bridge focus + cmux_control + core.py(no_ble) 已同步线上 claude-desktop-buddy 并 reload
 
 ## 7. 部署产物 + 跨层同步
 - [x] 7.1 部署产物（monorepo）：`com.codex-bridge.plist.template` + `install.sh`（venv+plist+`~/.codex/hooks.json` 嵌套 schema 合并）+ `README.md`。install.sh 的 jq 合并已在**真实 hooks.json 副本**上验证：输出合法、7 事件各加 1、其它工具 17 hook 完好、幂等。**未碰线上文件**
