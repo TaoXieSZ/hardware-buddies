@@ -45,7 +45,15 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from buddy_core import run, BuddyState
-from dashboard import start_dashboard, DEFAULT_PORT as DASH_DEFAULT_PORT
+# Dashboard is optional for codex-bridge (defaults OFF — see DASH_PORT). Unlike
+# cc-bridge/cursor-bridge we ship no dashboard.py in this dir, so a standalone
+# daemon launch has no `dashboard` module on sys.path; import lazily/guarded so
+# startup never crashes when it's absent.
+try:
+    from dashboard import start_dashboard, DEFAULT_PORT as DASH_DEFAULT_PORT
+except Exception:  # pragma: no cover - dashboard not shipped with codex-bridge
+    start_dashboard = None
+    DASH_DEFAULT_PORT = 0
 
 # ─── config ────────────────────────────────────────────────────────────
 SOCKET_PATH = os.environ.get("CODEX_BRIDGE_SOCKET", "/tmp/codex-bridge.sock")
@@ -241,16 +249,14 @@ def _build_codex_sessions(state: BuddyState) -> list:
     out = []
     for cwd, label in labels.items():
         hook = by_cwd.get(cwd)
-        # sid must round-trip through the firmware's char sid[40] buffer, so it
-        # can't be a (possibly >39 char) cwd path. Use the Codex session UUID
-        # when a hook bucket exists (36 chars); else a short cwd-basename id.
-        # cc-bridge focuses by the `cwd` field, NOT by sid, so sid only needs to
-        # be a stable ≤39-char identifier for display + selectSession echo.
-        if hook:
-            sid, s = hook[0][:39], hook[1]
-        else:
-            base = cwd.rstrip("/").split("/")[-1] or "root"
-            sid, s = ("cx-" + base)[:39], {}
+        s = hook[1] if hook else {}
+        # sid must round-trip through the firmware's char sid[40] buffer AND let
+        # cc-bridge focus the pane WITHOUT any daemon-side state (the select
+        # callback can't see BuddyState). So the sid IS the cwd — or its last 39
+        # chars when the path is longer — and cc-bridge's focus_by_codex_cwd
+        # matches a Codex pane whose requested_working_directory == sid OR ends
+        # with it. Display uses `label` (the basename); sid is the focus key.
+        sid = cwd if len(cwd) <= 39 else cwd[-39:]
         row = {"sid": sid, "running": bool(s.get("running")), "cwd": cwd}
         if label:
             row["label"] = label
@@ -397,8 +403,10 @@ DASH_PORT = int(os.environ.get("CODEX_BRIDGE_DASH_PORT", "0"))
 
 
 def _on_loop_start(ble, loop, log, state: BuddyState):
-    if DASH_PORT > 0:
+    if DASH_PORT > 0 and start_dashboard is not None:
         start_dashboard(state, ble, loop, log=log, port=DASH_PORT)
+    elif DASH_PORT > 0:
+        log.info("dashboard requested but module unavailable — skipping")
     else:
         log.info("dashboard disabled (CODEX_BRIDGE_DASH_PORT=0)")
 
@@ -419,4 +427,9 @@ if __name__ == "__main__":
         on_loop_start=_on_loop_start,
         serial_port=TAB5_SERIAL or None,
         app="codex",
+        # codex-bridge owns no stick — it pushes ext_sessions to cc-bridge (the
+        # single BLE owner). Scanning for a non-existent Codex-* device would
+        # contend with cc-bridge's cardputer link on the shared macOS BLE radio
+        # and flap it (observed 2026-06-26). Push-only: no BLE scan.
+        no_ble=True,
     )

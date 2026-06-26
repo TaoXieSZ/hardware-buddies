@@ -628,17 +628,15 @@ if __name__ == "__main__":
             # Claude pane (sid == checkpoint_id) first; fall back to a Cursor
             # pane (no checkpoint, sid in title as cursor-<UUID>) so the device
             # can focus Cursor sessions too (openspec cardputer-cursor-sessions).
-            surface = _cmux.focus_by_checkpoint(sid) or _cmux.focus_by_cursor_sid(sid)
-            if not surface:
-                # Codex pane: its cmux title is just "codex" with NO session-id,
-                # so sid matches no title. Map sid → cwd from the codex-bridge's
-                # pushed ext_sessions (each row carries cwd), then focus by
-                # directory (openspec cardputer-codex-sessions).
-                snap = (getattr(state, "ext_sessions", {}) or {}).get("codex") or {}
-                cwd = next((r.get("cwd") for r in snap.get("sessions", [])
-                            if r.get("sid") == sid and r.get("cwd")), None)
-                if cwd:
-                    surface = _cmux.focus_by_codex_cwd(cwd)
+            # Claude pane (sid == checkpoint_id) → Cursor pane (sid in title as
+            # cursor-<UUID>) → Codex pane. A Codex pane has no cmux session-id;
+            # codex-bridge makes the sid BE the pane's cwd (or its last 39 chars),
+            # so focus_by_codex_cwd matches requested_working_directory == sid or
+            # endswith(sid). Stateless — the select callback can't see BuddyState.
+            # (openspec cardputer-codex-sessions)
+            surface = (_cmux.focus_by_checkpoint(sid)
+                       or _cmux.focus_by_cursor_sid(sid)
+                       or _cmux.focus_by_codex_cwd(sid))
             if surface:
                 log.info("selectSession %s → focused surface %s", sid, surface)
             else:

@@ -101,9 +101,9 @@ def test_build_codex_sessions_joins_by_cwd(codex, fresh_state):
     rows = codex._build_codex_sessions(fresh_state)
     by = {r.get("label"): r for r in rows}
     assert "live" in by                                  # live pane listed, labeled
-    assert by["live"]["sid"] == "abc"                    # joined to hook sid by cwd
-    assert by["live"]["st"] == "tool"                    # hook st carried over
-    assert by["live"]["cwd"] == "/Users/txie/live"       # cwd carried for focus
+    assert by["live"]["sid"] == "/Users/txie/live"       # sid IS the cwd (focus key)
+    assert by["live"]["st"] == "tool"                    # hook st joined by cwd
+    assert by["live"]["cwd"] == "/Users/txie/live"       # cwd carried (informational)
     assert all(r["cwd"] != "/Users/txie/gone" for r in rows)  # dir w/o pane excluded
 
 
@@ -111,6 +111,18 @@ def test_build_codex_sessions_only_cmux_panes(codex, fresh_state):
     # ONLY live cmux Codex panes are listed; no labels → empty list.
     codex.apply_event(fresh_state, ev("UserPromptSubmit", sid="h1", cwd="/x"))
     assert codex._build_codex_sessions(fresh_state) == []
+
+
+def test_build_codex_sessions_long_cwd_sid_is_suffix(codex, fresh_state):
+    # sid must fit the firmware's char sid[40] (≤39). A long cwd → sid is its
+    # last 39 chars; cc-bridge's focus matches by endswith. (focus key, not UUID)
+    long_cwd = "/Users/txie/OpenSourceProjects/some/deeply/nested/hardware-buddies"
+    fresh_state.session_labels = {long_cwd: "hardware-buddies"}
+    rows = codex._build_codex_sessions(fresh_state)
+    assert len(rows) == 1
+    assert rows[0]["sid"] == long_cwd[-39:]              # bounded suffix
+    assert len(rows[0]["sid"]) <= 39
+    assert long_cwd.endswith(rows[0]["sid"])             # focus can match by endswith
 
 
 def test_build_codex_sessions_same_cwd_merges_latest(codex, fresh_state):
@@ -124,8 +136,8 @@ def test_build_codex_sessions_same_cwd_merges_latest(codex, fresh_state):
     fresh_state.session_labels = {"/dup": "dup"}
     rows = codex._build_codex_sessions(fresh_state)
     assert len(rows) == 1
-    assert rows[0]["sid"] == "new"                        # most-recently-seen kept
-    assert rows[0]["st"] == "thinking"
+    assert rows[0]["sid"] == "/dup"                       # sid IS the cwd (one per dir)
+    assert rows[0]["st"] == "thinking"                    # most-recently-seen st kept
 
 
 def test_cmux_codex_panes_parses_live_panes(codex, monkeypatch):

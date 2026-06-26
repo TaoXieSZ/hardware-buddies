@@ -767,7 +767,11 @@ class CmuxClient:
                 title = s.get("title") or ""
                 if "cursor-" in title or "codex" not in title.lower():
                     continue
-                if (s.get("requested_working_directory") or "") != want:
+                rwd = s.get("requested_working_directory") or ""
+                # `want` is the device-sent sid, which is the cwd or its last 39
+                # chars (firmware sid[40] cap) — so accept an exact match OR a
+                # suffix match. See codex-bridge _build_codex_sessions.
+                if rwd != want and not rwd.endswith(want):
                     continue
                 surface = s.get("id") or ""
                 if surface:

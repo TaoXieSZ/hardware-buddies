@@ -1430,6 +1430,32 @@ async def reconnect_loop(ble, log: logging.Logger):
         await asyncio.sleep(wait)
 
 
+class _NullBleWriter:
+    """A BLE writer that owns no device and NEVER scans.
+
+    Used by push-only bridges (e.g. codex-bridge) that have no stick of their
+    own — they feed their per-session snapshot to another bridge's socket
+    (single-BLE-owner aggregation) and must NOT run a BleakScanner. A real
+    BleWriter here would periodically `BleakScanner.discover()` for a
+    non-existent peer, and on macOS that scan contends with the OWNING bridge's
+    BLE link badly enough to make it connect-then-drop (observed 2026-06-26: a
+    3rd scanner flapped cc-bridge's cardputer link; removing the scan fixed it).
+    Implements the minimal `ble` surface run()/heartbeat_loop touch — all no-ops.
+    """
+
+    def __init__(self, log=None):
+        self.connected_prefixes = []
+
+    async def write(self, payload):
+        return None
+
+    async def ensure_connected(self):
+        return False
+
+    async def close(self):
+        return None
+
+
 # ─── entrypoint ────────────────────────────────────────────────────────
 def run(
     *,
@@ -1451,6 +1477,7 @@ def run(
     on_answer_question: "Callable[[str, list | None, str | None], None] | None" = None,
     serial_port: str | None = None,
     app: str = "",
+    no_ble: bool = False,
 ) -> None:
     """Configure logging, wire everything up, and run the event loop.
 
@@ -1499,7 +1526,12 @@ def run(
     # A single token (no comma) preserves the original single-peer
     # codepath so existing single-stick deployments are unaffected.
     prefixes = [p.strip() for p in device_prefix.split(",") if p.strip()]
-    if len(prefixes) > 1:
+    if no_ble:
+        # Push-only bridge (codex-bridge): own no device, never scan. Avoids
+        # contending with the owning bridge's BLE link on the shared macOS radio.
+        log.info("BLE disabled (no_ble) — push-only mode, no scanning")
+        ble = _NullBleWriter(log)
+    elif len(prefixes) > 1:
         log.info("multi-peer BLE: %s", prefixes)
         ble = MultiBleWriter(
             prefixes=prefixes,
@@ -1575,8 +1607,10 @@ def run(
         tasks = [
             asyncio.create_task(server.serve_forever()),
             asyncio.create_task(heartbeat_loop(state, ble, dirty, keepalive_s, log, log_fmt)),
-            asyncio.create_task(reconnect_loop(ble, log)),
         ]
+        if not no_ble:
+            # No reconnect/scan loop in push-only mode (no device to scan for).
+            tasks.append(asyncio.create_task(reconnect_loop(ble, log)))
         if extra_tasks:
             for factory in extra_tasks:
                 tasks.append(asyncio.create_task(factory(state, dirty)))

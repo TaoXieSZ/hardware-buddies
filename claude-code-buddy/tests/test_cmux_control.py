@@ -460,6 +460,15 @@ def test_focus_by_codex_cwd_no_match_returns_none():
     assert all(not (len(call) > 2 and call[2] == "surface.focus") for call in m.calls)
 
 
+def test_focus_by_codex_cwd_suffix_match():
+    # The device-sent sid may be the last 39 chars of a long cwd (firmware
+    # sid[40] cap), so focus accepts an endswith match on the pane's cwd.
+    m = _CodexRunner()                       # pane cwd = /Users/txie/proj-z
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_codex_cwd("txie/proj-z") == "CDX1"      # suffix of the cwd
+    assert c.focus_by_codex_cwd("proj-x") is None             # wrong suffix → no match
+
+
 def test_cursor_session_labels_lists_live_cursor_panes():
     m = _CursorRunner()
     c = CmuxClient(binary="CMUX", runner=m)
