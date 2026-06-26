@@ -718,6 +718,70 @@ class CmuxClient:
         self.activate_app()
         return match.surface
 
+    def focus_by_codex_cwd(self, cwd: str) -> Optional[str]:
+        """Focus the cmux surface running the Codex session in directory `cwd`.
+
+        cmux gives a Codex pane NO session-id — its title is just "codex",
+        unlike Cursor's `cursor-<UUID>` — so we can't match by id. The only
+        stable key shared with the Codex hook payload is the working directory:
+        the pane's `requested_working_directory` equals the hook's `cwd`
+        (verified byte-identical). Match a Codex pane (no Claude checkpoint,
+        title contains "codex", no "cursor-") whose requested_working_directory
+        == cwd and focus it. openspec change cardputer-codex-sessions.
+
+        Self-contained raw surface scan (not list_sessions, whose Session drops
+        requested_working_directory) so this stays consistent with the bridge's
+        _cmux_codex_panes label source — both key on requested_working_directory.
+
+        Known limitation: two Codex panes in one dir collide on cwd; we focus the
+        first match (cmux exposes nothing finer). Returns the surface UUID, or
+        None on no match / focus failure (caller treats None as a no-op).
+        """
+        want = (cwd or "").strip()
+        if not want:
+            return None
+
+        def _surfaces():
+            wrc, wout, _ = self.run(self._rpc_argv("window.list", {}))
+            wins = ([w.get("id", "") for w in json.loads(wout).get("windows", [])
+                     if w.get("id")] if wrc == 0 else []) or [""]
+            for win in wins:
+                params = {"window_id": win} if win else {}
+                wsrc, wsout, _ = self.run(self._rpc_argv("workspace.list", params))
+                if wsrc != 0:
+                    continue
+                for ws in json.loads(wsout).get("workspaces", []):
+                    src, sout, _ = self.run(
+                        self._rpc_argv("surface.list", {"workspace_id": ws.get("id", "")}))
+                    if src != 0:
+                        continue
+                    for s in json.loads(sout).get("surfaces", []):
+                        yield s
+
+        surface = None
+        try:
+            for s in _surfaces():
+                rb = s.get("resume_binding") or {}
+                if rb.get("kind") == "claude":            # a Claude pane — skip
+                    continue
+                title = s.get("title") or ""
+                if "cursor-" in title or "codex" not in title.lower():
+                    continue
+                if (s.get("requested_working_directory") or "") != want:
+                    continue
+                surface = s.get("id") or ""
+                if surface:
+                    break
+        except Exception:
+            return None
+        if not surface:
+            return None
+        rc, _out, _err = self.run(self._focus_argv(surface))
+        if rc != 0:
+            return None
+        self.activate_app()
+        return surface
+
     def _app_bundle(self) -> Optional[str]:
         """The .app bundle for self.binary (…/cmux.app/Contents/…/cmux → …/cmux.app)."""
         marker = "/Contents/"

@@ -321,6 +321,33 @@ def test_ext_sessions_stale_dropped():
     assert "cur1" not in sids and "claudeA" in sids
 
 
+def test_ext_sessions_codex_merges_alongside_cursor():
+    # The agent-keyed merge is agnostic: a third agent (codex) slots in with no
+    # cc-bridge change. Its rows carry a `cwd` field (used by cc-bridge focus,
+    # ignored by firmware) that must ride through to_payload untouched.
+    # (cardputer-codex-sessions)
+    import time
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    st._sessions["claudeA"] = {"running": True}
+    st.session_labels = {"claudeA": "alpha"}
+    now = time.monotonic()
+    st.ext_sessions["cursor"] = {
+        "sessions": [{"sid": "cur1", "label": "beta", "st": "tool", "running": True}],
+        "ts": now,
+    }
+    st.ext_sessions["codex"] = {
+        "sessions": [{"sid": "019f0287-codex", "label": "proj-z", "st": "waiting",
+                      "ws": 3, "running": True, "cwd": "/Users/txie/proj-z"}],
+        "ts": now,
+    }
+    sess = {s["sid"]: s for s in st.to_payload()["sessions"]}
+    assert sess["cur1"]["agent"] == "cursor"                 # cursor still tagged
+    assert sess["019f0287-codex"]["agent"] == "codex"        # codex tagged
+    assert sess["019f0287-codex"]["st"] == "waiting"
+    assert sess["019f0287-codex"]["cwd"] == "/Users/txie/proj-z"  # cwd preserved
+
+
 def test_on_stick_line_answer_question_dispatches_callback():
     import json
     import logging

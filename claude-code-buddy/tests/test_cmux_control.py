@@ -411,6 +411,55 @@ def test_focus_by_cursor_sid_no_match_returns_none():
     assert c.focus_by_cursor_sid("") is None                # short-circuits
 
 
+# ─── focus a Codex pane by cwd (cardputer-codex-sessions) ─────────────
+# cmux gives a Codex pane no session-id (title just "codex"); the only stable
+# key shared with the hook payload is the working directory, so we match the
+# pane's requested_working_directory == cwd. A sibling Cursor pane (cursor-…)
+# and a Claude pane (checkpoint) in the same fleet must NOT be picked.
+
+class _CodexRunner:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        method = argv[2] if len(argv) > 2 and argv[1] == "rpc" else ""
+        if method == "window.list":
+            return 0, json.dumps({"windows": [{"id": "W1"}]}), ""
+        if method == "workspace.list":
+            return 0, json.dumps({"window_id": "W1", "workspaces": [
+                {"id": "WX", "index": 0, "selected": True,
+                 "current_directory": "/Users/txie/proj-z"}]}), ""
+        if method == "surface.list":
+            return 0, json.dumps({"surfaces": [
+                {"id": "CLA1", "type": "terminal", "title": "repo · 229a",
+                 "requested_working_directory": "/Users/txie/proj-z",
+                 "resume_binding": {"kind": "claude", "checkpoint_id": "C"}},
+                {"id": "CUR1", "type": "terminal",
+                 "title": "p · cursor-66099139", "resume_binding": None,
+                 "requested_working_directory": "/Users/txie/proj-z"},
+                {"id": "CDX1", "type": "terminal", "title": "codex",
+                 "requested_working_directory": "/Users/txie/proj-z",
+                 "resume_binding": None}]}), ""
+        return 0, "", ""
+
+
+def test_focus_by_codex_cwd_matches_dir_and_focuses():
+    m = _CodexRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_codex_cwd("/Users/txie/proj-z") == "CDX1"   # the codex pane
+    assert _method_call(m.calls, "surface.focus") == \
+        ["CMUX", "rpc", "surface.focus", json.dumps({"surface_id": "CDX1"})]
+
+
+def test_focus_by_codex_cwd_no_match_returns_none():
+    m = _CodexRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_codex_cwd("/some/other/dir") is None    # no codex pane there
+    assert c.focus_by_codex_cwd("") is None                   # short-circuits, no calls
+    assert all(not (len(call) > 2 and call[2] == "surface.focus") for call in m.calls)
+
+
 def test_cursor_session_labels_lists_live_cursor_panes():
     m = _CursorRunner()
     c = CmuxClient(binary="CMUX", runner=m)
