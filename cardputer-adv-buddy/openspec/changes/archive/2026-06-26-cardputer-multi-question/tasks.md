@@ -24,6 +24,6 @@
 - [x] 3.4 N=1 退化
 - [x] 3.5 cancel 子问题 = skip 文本继续
 
-## 4. 跨层同步 + 验证
-- [ ] 4.1 同步线上 `claude-desktop-buddy`（cmux_control + cc-bridge），跑测
-- [ ] 4.2 真机：发一个含 2-3 问题的 AskUserQuestion → 设备逐个弹、逐个答 → 全答完我收到完整答复（不卡）
+## 4. 跨层同步 + 验证  ✅ 完成
+- [x] 4.1 同步线上 `claude-desktop-buddy`（cmux_control + core + bridge），patch 干净套用，live pytest 184，commit b852ddc
+- [x] 4.2 真机验证（2026-06-25）：发一个含 **3 个问题**的 AskUserQuestion → 设备 Q1 显 `[1/3]` → 答完自动弹 Q2 → 逐个答完，**Claude 端一次性收到完整 3 个答复、不卡**。用户确认逐个弹+进度+收齐 ✅。纯 daemon，未烧固件。
