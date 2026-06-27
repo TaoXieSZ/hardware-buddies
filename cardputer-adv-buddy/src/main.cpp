@@ -347,6 +347,17 @@ void loop() {
     bool idle = (bs.running == 0 && bs.waiting == 0);
     clawd::setSleeping(!online || (idle && g_motion.stillMs() > STILL_FOR_SLEEP));
 
+    // 电量：每 30s 读一次 ADC 电量喂给 NORMAL 顶栏角标；getBatteryLevel() <0=unknown
+    // （clawd 侧不显示）。频率对齐 StackChan(CoreS3 每 30s)，避免每帧 ADC 开销。
+    // openspec change cardputer-battery-indicator。范本 M5Unified HowToUse.ino:500。
+    {
+        static uint32_t batNextMs = 0;
+        if (now >= batNextMs) {
+            batNextMs = now + 30000;
+            clawd::setBattery(M5.Power.getBatteryLevel());
+        }
+    }
+
     sound::tick();
     clawd::tick(dt);
 

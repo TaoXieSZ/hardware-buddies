@@ -31,6 +31,7 @@ Mode mode_ = NORMAL;
 
 // NORMAL 角标 + toast
 int badgeTotal_ = 0, badgeRunning_ = 0;
+int8_t batPct_ = -1;   // 电量 %（<0=unknown 不显示）。openspec cardputer-battery-indicator
 char toast_[24] = {0};
 int32_t toastMs_ = 0;
 // 多会话轮播：当前会话标识 + 轮播位置 + 钉态（rotation）
@@ -143,16 +144,28 @@ void applyTarget() {
     if (strcmp(want, curFile) != 0) openFile(want);
 }
 
-// 右上角会话计数角标（NORMAL）
+// 右上角：电量 %（最右，三色档）+ 会话计数角标 T/R（电量左侧）。NORMAL。
+// 保留区清一次再画两项，避免电量位数变化(如 100%→85%)残留像素。
+// openspec change cardputer-battery-indicator。
 void drawBadge() {
-    char b[16];
-    snprintf(b, sizeof(b), "%d/%d", badgeTotal_, badgeRunning_);  // T/R 总会话/运行中
     canvas.setTextSize(1);
-    int w = (int)strlen(b) * 6 + 6;
-    canvas.fillRect(canvasW - w, 0, w, 12, BG);
-    canvas.setTextColor(CLAWD, BG);
+    canvas.fillRect(canvasW - 66, 0, 66, 12, BG);   // 清右上保留区(~66px：电量+T/R)
     canvas.setTextDatum(top_right);
-    canvas.drawString(b, canvasW - 2, 2);
+    int rightX = canvasW - 2;
+    if (batPct_ >= 0) {                              // 电量(最右)，<0=unknown 不画
+        char e[8];
+        snprintf(e, sizeof(e), "%d%%", batPct_);
+        uint16_t col = (batPct_ >= 50) ? 0x07E0     // 绿 ≥50%
+                     : (batPct_ >= 20) ? 0xFFE0     // 黄 20–49%
+                                       : 0xF800;    // 红 <20% 该充了
+        canvas.setTextColor(col, BG);
+        canvas.drawString(e, rightX, 2);
+        rightX -= (int)strlen(e) * 6 + 5;           // 让出电量宽度 + 间隔
+    }
+    char b[16];                                     // T/R 会话角标(电量左侧)
+    snprintf(b, sizeof(b), "%d/%d", badgeTotal_, badgeRunning_);  // 总会话/运行中
+    canvas.setTextColor(CLAWD, BG);
+    canvas.drawString(b, rightX, 2);
     canvas.setTextDatum(top_left);
 }
 
@@ -164,7 +177,7 @@ void drawSessionTag() {
     canvas.setTextDatum(top_left);
     char line[52];
     snprintf(line, sizeof(line), "%s [%d/%d]", rotTag_, rotIdx_ + 1, rotTotal_);
-    canvas.fillRect(0, 0, canvasW - 44, 13, BG);   // 清左侧条，留右上 badge(~40px)
+    canvas.fillRect(0, 0, canvasW - 66, 13, BG);   // 清左侧条，留右上保留区(~66px：电量+T/R)
     canvas.setTextColor(0x8410, BG);
     canvas.drawString(line, 2, 1);
     if (rotPinned_) {                              // 钉态：底部橙横幅（与审批同色系）
@@ -342,6 +355,8 @@ bool ok() { return ready; }
 
 void setState(AgentState s) { baseState_ = s; if (ready && mode_ == NORMAL) applyTarget(); }
 void setBadge(int total, int running) { badgeTotal_ = total; badgeRunning_ = running; }
+// 电量 %：clamp 到 [-1,100]；<0 视为 unknown（drawBadge 不画）。openspec cardputer-battery-indicator
+void setBattery(int pct) { batPct_ = (pct < 0) ? -1 : (int8_t)(pct > 100 ? 100 : pct); }
 void setSessionTag(const char* tag, int idx, int total, bool pinned) {
     if (tag) utf8lcpy(rotTag_, tag, sizeof(rotTag_)); else rotTag_[0] = 0;
     rotIdx_ = idx; rotTotal_ = total; rotPinned_ = pinned;
