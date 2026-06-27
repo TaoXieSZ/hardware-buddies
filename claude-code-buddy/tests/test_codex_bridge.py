@@ -140,11 +140,36 @@ def test_build_codex_sessions_same_cwd_merges_latest(codex, fresh_state):
     assert rows[0]["st"] == "thinking"                    # most-recently-seen st kept
 
 
-def test_cmux_codex_panes_parses_live_panes(codex, monkeypatch):
-    # Self-contained cmux query: pick Codex panes (title "codex"), keyed by
-    # requested_working_directory; skip Claude and Cursor panes.
+def test_cmux_codex_panes_from_session_file_kind(codex, monkeypatch, tmp_path):
+    # Detection via cmux's session file terminal.agent.kind — reliable even after
+    # a Codex pane retitles to its conversation topic (title no longer says
+    # "codex"). cwd = agent.workingDirectory (NOT requested_working_directory).
+    # label = user customTitle when set. Claude/Cursor agents are skipped.
+    import json as _j
+    session = {"windows": [{"tabManager": {"workspaces": [
+        {"panels": [
+            {"id": "CDX", "customTitle": "Agent HUB design", "customTitleSource": "user",
+             "terminal": {"agent": {"kind": "codex",
+                                    "workingDirectory": "/Users/txie/proj-z"}}},
+            {"id": "CLA", "terminal": {"agent": {"kind": "claude",
+                                                 "workingDirectory": "/c"}}},
+            {"id": "CUR", "terminal": {"agent": {"kind": "cursor",
+                                                 "workingDirectory": "/u"}}},
+        ]},
+    ]}}]}
+    f = tmp_path / "session.json"
+    f.write_text(_j.dumps(session))
+    monkeypatch.setattr(codex, "CMUX_SESSION_JSON", str(f))
+    panes = codex._cmux_codex_panes()
+    # the retitled codex pane is found by kind; label uses the user title
+    assert panes == {"/Users/txie/proj-z": "Agent HUB design"}
+
+
+def test_cmux_codex_panes_falls_back_to_rpc_when_no_session_file(codex, monkeypatch):
+    # No readable session file → fall back to the title-based surface.list scan.
     import subprocess
     import json as _j
+    monkeypatch.setattr(codex, "CMUX_SESSION_JSON", "/no/such/file.json")
 
     def fake_run(argv, **kw):
         method = argv[2] if len(argv) > 2 else ""
@@ -155,10 +180,6 @@ def test_cmux_codex_panes_parses_live_panes(codex, monkeypatch):
             r.stdout = _j.dumps({"workspaces": [{"id": "W"}]})
         elif method == "surface.list":
             r.stdout = _j.dumps({"surfaces": [
-                {"title": "claude-x · 229a", "requested_working_directory": "/c",
-                 "resume_binding": {"kind": "claude", "checkpoint_id": "C"}},
-                {"title": "proj · hi · cursor-66099139", "requested_working_directory": "/u",
-                 "resume_binding": None},
                 {"title": "codex", "requested_working_directory": "/Users/txie/proj-z",
                  "resume_binding": None},
             ]})
@@ -167,8 +188,7 @@ def test_cmux_codex_panes_parses_live_panes(codex, monkeypatch):
         return r
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    panes = codex._cmux_codex_panes()
-    assert panes == {"/Users/txie/proj-z": "proj-z"}     # only the Codex pane
+    assert codex._cmux_codex_panes() == {"/Users/txie/proj-z": "proj-z"}
 
 
 # ─── stale-session reaper ─────────────────────────────────────────────

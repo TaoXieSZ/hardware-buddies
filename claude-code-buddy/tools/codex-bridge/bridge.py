@@ -275,14 +275,60 @@ def _build_codex_sessions(state: BuddyState) -> list:
 CMUX_BIN = os.environ.get(
     "CMUX_BIN", "/Applications/cmux.app/Contents/Resources/bin/cmux")
 
+# cmux's session file is the ONLY place a pane's agent KIND is exposed: the
+# surface.list rpc omits it, and a running agent overwrites its pane title with
+# the conversation topic — so matching "codex" in the title stops working once
+# the session is live (and never worked across renamed panes). The session
+# file's terminal.agent.kind is stable. Override for tests / non-default installs.
+CMUX_SESSION_JSON = os.environ.get(
+    "CMUX_SESSION_JSON",
+    str(pathlib.Path.home()
+        / "Library/Application Support/cmux/session-com.cmuxterm.app.json"))
+
+
+def _cmux_agent_panes(kind: str) -> dict:
+    """{cwd: label} for live cmux panes whose terminal.agent.kind == kind, read
+    from cmux's session file. cwd = agent.workingDirectory (the agent PROCESS
+    cwd — NOT the surface's requested_working_directory, which is the launch dir
+    and can differ); this is what the agent's hooks report, so it's the right
+    join key. label = the user's customTitle when set, else the cwd basename.
+    Returns {} if the file is missing/unreadable. openspec cardputer-codex-sessions.
+    """
+    try:
+        with open(CMUX_SESSION_JSON, encoding="utf-8") as f:
+            doc = json.load(f)
+    except Exception:
+        return {}
+    panes, stack = {}, [doc]
+    while stack:
+        o = stack.pop()
+        if isinstance(o, dict):
+            term = o.get("terminal") or {}
+            ag = term.get("agent") or {}
+            if ag.get("kind") == kind:
+                cwd = ag.get("workingDirectory") or term.get("workingDirectory") or ""
+                if cwd:
+                    label = (o.get("customTitle") if o.get("customTitleSource") == "user"
+                             else None) or (cwd.rstrip("/").split("/")[-1] or cwd)
+                    panes[cwd] = label[:24]
+            stack.extend(o.values())
+        elif isinstance(o, list):
+            stack.extend(o)
+    return panes
+
 
 def _cmux_codex_panes() -> dict:
-    """{cwd: label} for LIVE cmux Codex panes, by shelling out to cmux. A Codex
-    pane has no Claude resume_binding and its title contains "codex" with no
-    `cursor-<UUID>` (that's a Cursor pane). Keyed by the pane's
-    requested_working_directory (our cwd join key). Returns {} on any failure.
+    """{cwd: label} for LIVE cmux Codex panes. Primary source is cmux's session
+    file (terminal.agent.kind == "codex"), reliable even after a pane retitles to
+    its conversation topic or moves to another workspace. Falls back to the old
+    title-based surface.list scan only when the session file can't be read.
     openspec cardputer-codex-sessions.
     """
+    panes = _cmux_agent_panes("codex")
+    if panes:
+        return panes
+    # Fallback: title-based rpc scan (catches pre-retitle panes if the session
+    # file is unavailable on this install).
     import subprocess
 
     def _rpc(method, params):
@@ -294,25 +340,19 @@ def _cmux_codex_panes() -> dict:
         except Exception:
             return {}
 
-    panes = {}
     wl = _rpc("workspace.list", {})
     for ws in (wl.get("workspaces") or wl.get("items") or []):
         wid = ws.get("id") or ""
         sl = _rpc("surface.list", {"workspace": wid})
         for s in (sl.get("surfaces") or sl.get("items") or []):
             rb = s.get("resume_binding") or {}
-            if rb.get("kind") == "claude":          # a Claude pane — skip
+            if rb.get("kind") == "claude" or "cursor-" in (s.get("title") or ""):
                 continue
-            title = s.get("title") or ""
-            if "cursor-" in title:                  # a Cursor pane — skip
-                continue
-            if "codex" not in title.lower():        # not a Codex pane
+            if "codex" not in (s.get("title") or "").lower():
                 continue
             cwd = s.get("requested_working_directory") or ""
-            if not cwd:
-                continue
-            label = (cwd.rstrip("/").split("/")[-1] or cwd)[:24]
-            panes[cwd] = label
+            if cwd:
+                panes[cwd] = (cwd.rstrip("/").split("/")[-1] or cwd)[:24]
     return panes
 
 

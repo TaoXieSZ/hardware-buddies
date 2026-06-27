@@ -444,7 +444,27 @@ class _CodexRunner:
         return 0, "", ""
 
 
-def test_focus_by_codex_cwd_matches_dir_and_focuses():
+def test_focus_by_codex_cwd_from_session_file(monkeypatch, tmp_path):
+    # Primary path: find the Codex pane by terminal.agent.kind in cmux's session
+    # file (reliable after the pane retitles), match agent.workingDirectory, focus
+    # its surface id. The surface's requested_working_directory may differ.
+    session = {"windows": [{"tabManager": {"workspaces": [{"panels": [
+        {"id": "CDX1", "title": "Agent HUB design",
+         "terminal": {"agent": {"kind": "codex",
+                                "workingDirectory": "/Users/txie/proj-z"}}},
+    ]}]}}]}
+    f = tmp_path / "session.json"
+    f.write_text(json.dumps(session))
+    monkeypatch.setattr(cc, "CMUX_SESSION_JSON", str(f))
+    m = _CodexRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_codex_cwd("/Users/txie/proj-z") == "CDX1"      # exact
+    assert c.focus_by_codex_cwd("txie/proj-z") == "CDX1"             # suffix (sid[40] cap)
+    assert c.focus_by_codex_cwd("/nope") is None
+
+
+def test_focus_by_codex_cwd_matches_dir_and_focuses(monkeypatch):
+    monkeypatch.setattr(cc, "CMUX_SESSION_JSON", "/no/such/file.json")  # force fallback
     m = _CodexRunner()
     c = CmuxClient(binary="CMUX", runner=m)
     assert c.focus_by_codex_cwd("/Users/txie/proj-z") == "CDX1"   # the codex pane
@@ -452,7 +472,8 @@ def test_focus_by_codex_cwd_matches_dir_and_focuses():
         ["CMUX", "rpc", "surface.focus", json.dumps({"surface_id": "CDX1"})]
 
 
-def test_focus_by_codex_cwd_no_match_returns_none():
+def test_focus_by_codex_cwd_no_match_returns_none(monkeypatch):
+    monkeypatch.setattr(cc, "CMUX_SESSION_JSON", "/no/such/file.json")
     m = _CodexRunner()
     c = CmuxClient(binary="CMUX", runner=m)
     assert c.focus_by_codex_cwd("/some/other/dir") is None    # no codex pane there
@@ -460,9 +481,10 @@ def test_focus_by_codex_cwd_no_match_returns_none():
     assert all(not (len(call) > 2 and call[2] == "surface.focus") for call in m.calls)
 
 
-def test_focus_by_codex_cwd_suffix_match():
+def test_focus_by_codex_cwd_suffix_match(monkeypatch):
     # The device-sent sid may be the last 39 chars of a long cwd (firmware
     # sid[40] cap), so focus accepts an endswith match on the pane's cwd.
+    monkeypatch.setattr(cc, "CMUX_SESSION_JSON", "/no/such/file.json")
     m = _CodexRunner()                       # pane cwd = /Users/txie/proj-z
     c = CmuxClient(binary="CMUX", runner=m)
     assert c.focus_by_codex_cwd("txie/proj-z") == "CDX1"      # suffix of the cwd
