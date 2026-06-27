@@ -315,3 +315,24 @@ def test_reaper_partial_stale_partial_fresh(cc, fresh_state):
     assert "s2" in fresh_state._sessions
     assert fresh_state.running == 1
     assert fresh_state.total == 1
+
+
+# ─── q_done: tool-completion clock for answered-question detection ─────
+# (cardputer question panel dismisses when answered outside the device)
+
+def test_q_done_advances_only_on_post_tool_use_and_stop(cc, fresh_state):
+    cc.apply_event(fresh_state, ev("SessionStart"))
+    cc.apply_event(fresh_state, ev("UserPromptSubmit"))
+    # AskUserQuestion ask phase: PreToolUse + PermissionRequest + Notification —
+    # none of these are a tool COMPLETION, so q_done must NOT be set yet.
+    cc.apply_event(fresh_state, ev("PreToolUse", tool_name="AskUserQuestion"))
+    cc.apply_event(fresh_state, ev("PermissionRequest", tool_name="AskUserQuestion"))
+    cc.apply_event(fresh_state, ev("Notification", message="waiting for your input"))
+    assert "q_done" not in fresh_state._sessions["s1"]   # still blocked → no completion
+    # Answer arrives → the AskUserQuestion tool completes → PostToolUse → q_done set.
+    cc.apply_event(fresh_state, ev("PostToolUse", tool_name="AskUserQuestion"))
+    first = fresh_state._sessions["s1"].get("q_done")
+    assert isinstance(first, float) and first > 0
+    # Stop also advances it (turn end = no longer blocked on the user).
+    cc.apply_event(fresh_state, ev("Stop"))
+    assert fresh_state._sessions["s1"]["q_done"] >= first

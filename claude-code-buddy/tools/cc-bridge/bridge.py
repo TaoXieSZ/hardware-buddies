@@ -328,6 +328,17 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
     # See openspec change 0004-cc-bridge-session-reaper.
     if sid in state._sessions:
         state._sessions[sid]["last_seen"] = time.monotonic()
+        # `q_done` advances ONLY on PostToolUse / Stop — a tool COMPLETED or the
+        # turn ENDED. An AskUserQuestion blocks the turn while pending, so no
+        # PostToolUse/Stop fires for that session until it's answered (verified:
+        # PreToolUse+PermissionRequest+Notification fire at ask time, then a gap,
+        # then PostToolUse at answer time). cmux_question_loop snapshots this
+        # clock when it surfaces a question and clears the device's question
+        # panel once it advances — so answering in cmux's / Claude's native UI
+        # (where cmux never transitions the question's 'pending' status) dismisses
+        # the cardputer panel promptly instead of waiting out the ~120s expiry.
+        if name in ("PostToolUse", "Stop"):
+            state._sessions[sid]["q_done"] = time.monotonic()
 
     return changed
 
@@ -423,12 +434,17 @@ async def cmux_question_loop(state: BuddyState, dirty: asyncio.Event) -> None:
         return
     cmux = CmuxClient()
     loop = asyncio.get_event_loop()
+    # real_rid of a question already detected as answered OUTSIDE the device
+    # (cmux / Claude native UI), so we don't keep re-surfacing it while cmux's
+    # feed still reports it 'pending'. Reset when no question is pending.
+    answered_rid = None
     while True:
         await asyncio.sleep(2)
         try:
             qs = await loop.run_in_executor(None, cmux.pending_questions)
             item = qs[0] if qs else None   # first pending AskUserQuestion (whole item)
             if item is None:
+                answered_rid = None
                 if state.pending_question is not None or state.mq is not None:
                     state.pending_question = None
                     state.mq = None
@@ -436,11 +452,31 @@ async def cmux_question_loop(state: BuddyState, dirty: asyncio.Event) -> None:
                     log.info("pending question: none")
                 continue
             real_rid = item["rid"]
+            if real_rid == answered_rid:
+                continue   # answered outside the device; stay dismissed
             subq = item.get("subq") or []
-            # New AskUserQuestion (different real rid) → (re)start the sequence.
+            q_sid = item.get("sid", "")   # asking Claude session_id (answer detection)
+            # New AskUserQuestion (different real rid) → (re)start the sequence,
+            # snapshotting the asking session's tool-completion clock (q_done).
             if not state.mq or state.mq.get("rid") != real_rid:
-                state.mq = {"rid": real_rid, "cur": 0, "answers": [], "subq": subq}
+                q_base = (state._sessions.get(q_sid) or {}).get("q_done", 0.0)
+                state.mq = {"rid": real_rid, "cur": 0, "answers": [], "subq": subq,
+                            "q_sid": q_sid, "q_base": q_base}
             mq = state.mq
+            # Answered outside the device? The asking session completed a tool /
+            # ended its turn AFTER the question appeared (q_done advanced past the
+            # snapshot) → it was answered even though cmux still says 'pending'.
+            # Dismiss now instead of waiting out the ~120s cmux expiry / age-gate.
+            if mq.get("q_sid") and (state._sessions.get(mq["q_sid"]) or {}).get(
+                    "q_done", 0.0) > mq.get("q_base", 0.0):
+                answered_rid = real_rid
+                if state.pending_question is not None or state.mq is not None:
+                    state.pending_question = None
+                    state.mq = None
+                    dirty.set()
+                    log.info("pending question %s answered outside device → cleared",
+                             real_rid[-24:])
+                continue
             cur = mq["cur"]
             if cur >= len(mq["subq"]):
                 continue   # all sub-questions answered; awaiting reply/clear
