@@ -480,3 +480,90 @@ def test_on_stick_line_select_session_no_callback_is_safe():
 
     on_line, _ = make_on_stick_line(61, "tap", logging.getLogger("test"))
     on_line(json.dumps({"cmd": "selectSession", "sid": "ABC"}))  # must not raise
+
+
+# ─── wait_permission: external-agent (Cursor) relay through cc-bridge ───────
+
+class _FakeBle:
+    """Permission-capable peer (no 'SC' in prefix → not short-circuited)."""
+    def __init__(self, prefixes=("Claude-7AFD",)):
+        self.connected_prefixes = list(prefixes)
+
+
+class _FakePermWriter:
+    def __init__(self):
+        self.buf = bytearray()
+
+    def write(self, b):
+        self.buf.extend(b)
+
+    async def drain(self):
+        pass
+
+
+def _drive_wait_permission(req):
+    """Run _handle_wait_permission with a peer connected; a concurrent task
+    plays 'the device' — once the prompt is up it asserts on state, then
+    resolves the pending future with decision 'once'. Returns (state, decision,
+    saw_prompt) where saw_prompt is the state.prompt captured while blocking."""
+    import json
+    import logging
+    from buddy_core.core import BuddyState, _handle_wait_permission
+
+    st = BuddyState()
+    pending = {}
+    w = _FakePermWriter()
+    captured = {}
+
+    async def _go():
+        async def device():
+            # Wait for the prompt to be surfaced + the future registered.
+            for _ in range(200):
+                if pending:
+                    captured["prompt"] = dict(st.prompt) if st.prompt else None
+                    captured["sessions_keys"] = list(st._sessions.keys())
+                    rid = next(iter(pending))
+                    pending[rid].get_loop().call_soon_threadsafe(
+                        pending[rid].set_result, "once")
+                    return
+                await asyncio.sleep(0.001)
+
+        await asyncio.gather(
+            _handle_wait_permission(req, w, st, asyncio.Event(), pending,
+                                    _FakeBle(), logging.getLogger("test")),
+            device(),
+        )
+
+    asyncio.run(_go())
+    reply = json.loads(bytes(w.buf).decode().strip())
+    return st, reply.get("decision"), captured
+
+
+def test_wait_permission_cursor_agent_does_not_pin_session():
+    # A relayed Cursor permission (agent='cursor') must NOT mint a bucket in
+    # cc-bridge's Claude _sessions — that phantom would inflate the reaper's
+    # total. It surfaces the prompt (tagged agent) and routes the decision.
+    st, decision, cap = _drive_wait_permission({
+        "action": "wait_permission", "id": "cursor_ab12_99", "tool": "shell",
+        "hint": "rm -rf /tmp/x", "timeout": 5.0,
+        "agent": "cursor", "session_id": "ab12cd34-cursor-session",
+    })
+    assert decision == "once"
+    assert cap["prompt"]["agent"] == "cursor"            # device can mark `cu`
+    assert cap["prompt"]["tool"] == "shell"
+    # the cursor sid never entered cc-bridge's session map (no phantom bucket)
+    assert "ab12cd34-cursor-session" not in cap["sessions_keys"]
+    assert st._sessions == {}                            # nothing lingered
+
+
+def test_wait_permission_claude_still_pins_session():
+    # Regression: a normal (no-agent) Claude permission STILL pins its session
+    # so the cardputer's FIFO rotation pins the asking session as before.
+    st, decision, cap = _drive_wait_permission({
+        "action": "wait_permission", "id": "req_1", "tool": "Bash",
+        "hint": "ls", "timeout": 5.0, "session_id": "claude-sid-1",
+    })
+    assert decision == "once"
+    assert "agent" not in cap["prompt"]                  # untagged for own agent
+    # the claude sid WAS pinned while waiting (bucket created)
+    assert "claude-sid-1" in cap["sessions_keys"]

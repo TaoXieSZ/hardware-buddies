@@ -38,7 +38,14 @@
 const fs   = require('fs');
 const net  = require('net');
 
-const SOCKET_PATH = process.env.CURSOR_BRIDGE_SOCKET || '/tmp/cursor-bridge.sock';
+// Permission asks go to cc-bridge (the SINGLE BLE owner of the cardputer),
+// NOT cursor-bridge: cursor-bridge runs push-only (no_ble) so it can't show a
+// prompt or receive the device's approve/deny. cc-bridge's _handle_wait_permission
+// surfaces it on the device and routes the keypress back. Override with
+// CURSOR_BRIDGE_PERMISSION_SOCKET if cc-bridge lives elsewhere. Other (async,
+// non-gating) Cursor events still flow to cursor-bridge via cursor_hook.js.
+const SOCKET_PATH = process.env.CURSOR_BRIDGE_PERMISSION_SOCKET
+    || process.env.CC_BRIDGE_SOCKET || '/tmp/cc-bridge.sock';
 const TIMEOUT_S   = Number(process.env.CURSOR_BRIDGE_PERMISSION_TIMEOUT_S || 8);
 const ECHO_ENABLED = (process.env.CURSOR_BRIDGE_PERMISSION_ECHO || '1') !== '0';
 
@@ -144,11 +151,16 @@ function main() {
     const rid = `cursor_${sid}_${Date.now()}`;
 
     const req = {
-        action: 'wait_permission',
-        id:      rid,
-        tool:    desc.tool,
-        hint:    desc.hint,
-        timeout: TIMEOUT_S,
+        action:  'wait_permission',
+        id:       rid,
+        tool:     desc.tool,
+        hint:     desc.hint,
+        timeout:  TIMEOUT_S,
+        // Tells cc-bridge this is a relayed Cursor permission: show + route the
+        // decision, but DON'T pin it into cc-bridge's Claude _sessions (would
+        // mint a phantom session / inflate the reaper total). Device marks `cu`.
+        agent:       'cursor',
+        session_id:  String(ev.conversation_id || ev.session_id || 'anon'),
     };
 
     // Hard process-level cap so we can never hang Cursor.

@@ -1320,6 +1320,14 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
     sid = req.get("session_id") or "anon"   # full session_id → per-session pin
     hint = (req.get("hint") or "")[:120]
     timeout = float(req.get("timeout", 6.0))
+    # External-agent permission relayed THROUGH this daemon (e.g. cursor-bridge
+    # is push-only / no_ble, so Cursor's beforeShellExecution hook sends its
+    # wait_permission straight to cc-bridge, the single BLE owner). Such a
+    # request carries `agent`; its sid belongs to the OTHER agent's session
+    # space, so we must NOT set_session_state it — that would mint a phantom
+    # bucket in OUR _sessions and inflate the reaper's total. We only surface
+    # the prompt globally and tag it so the device can mark which agent asked.
+    ext_agent = (req.get("agent") or "").strip()[:16]
 
     # Short-circuit: only Plus2 sticks have an A/B permission button.
     # StackChan-class peers (prefix contains "SC") can't reply, so the
@@ -1344,8 +1352,11 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
     # signalling dirty — the heartbeat loop will push it next tick.
     state.waiting = max(state.waiting, 1)
     state.prompt = {"id": rid, "tool": tool, "hint": hint}
+    if ext_agent:
+        state.prompt["agent"] = ext_agent   # device marks cu/cx vs own cc
     state.msg = f"approve: {tool}"
-    state.set_session_state(sid, "waiting")   # 归属到发起会话 + 分配 FIFO seq
+    if not ext_agent:
+        state.set_session_state(sid, "waiting")   # 归属到发起会话 + 分配 FIFO seq
     dirty.set()
 
     fut = asyncio.get_running_loop().create_future()
@@ -1362,7 +1373,8 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
         state.waiting = 0
         state.prompt = None
         state.msg = ""
-        state.set_session_state(sid, "idle")   # 离开等待，清 FIFO seq（后续 PreToolUse 会置 tool）
+        if not ext_agent:
+            state.set_session_state(sid, "idle")   # 离开等待，清 FIFO seq（后续 PreToolUse 会置 tool）
         dirty.set()
 
     try:
