@@ -41,6 +41,9 @@ bool rotPinned_ = false;
 // working(ToolUse) 态多动作：在 busy_0..3 间轮换，别老敲键盘
 int      busyVariant_ = 0;
 uint32_t busyNextMs_ = 0;
+// Idle 态偶尔飘一下 idle-reading（低频随机，非均匀轮播）。openspec cardputer-idle-variety。
+int      idleVariant_ = 0;   // 0=idle.gif / 1=clawd-idle-reading.gif
+uint32_t idleNextMs_ = 0;
 
 // APPROVAL
 char apTool_[40] = {0}, apHint_[92] = {0};
@@ -103,7 +106,8 @@ void drawCb(GIFDRAW* d) {
 
 const char* fileForState(AgentState s) {
     switch (s) {
-        case AgentState::Idle:         return "idle.gif";
+        case AgentState::Idle:          // idle.gif 为主，偶尔飘一下 idle-reading（见 tick idle 计时器）
+            return idleVariant_ ? "clawd-idle-reading.gif" : "idle.gif";
         case AgentState::Thinking:     return "clawd-thinking.gif";
         case AgentState::ToolUse: {     // working：busy_0..3 轮换（见 tick busy 计时器）
             static const char* kBusy[4] = {"busy_0.gif", "busy_1.gif", "busy_2.gif", "busy_3.gif"};
@@ -353,7 +357,12 @@ void begin() {
 
 bool ok() { return ready; }
 
-void setState(AgentState s) { baseState_ = s; if (ready && mode_ == NORMAL) applyTarget(); }
+void setState(AgentState s) {
+    // 重新进入 Idle 时从 idle.gif 开始，不沿用上次离开 Idle 时可能停留的 reading 变体。
+    if (s == AgentState::Idle && baseState_ != AgentState::Idle) idleVariant_ = 0;
+    baseState_ = s;
+    if (ready && mode_ == NORMAL) applyTarget();
+}
 void setBadge(int total, int running) { badgeTotal_ = total; badgeRunning_ = running; }
 // 电量 %：clamp 到 [-1,100]；<0 视为 unknown（drawBadge 不画）。openspec cardputer-battery-indicator
 void setBattery(int pct) { batPct_ = (pct < 0) ? -1 : (int8_t)(pct > 100 ? 100 : pct); }
@@ -491,6 +500,32 @@ void tick(uint32_t dtMs) {
         }
     }
     prevBusy = nowBusy;
+    // Idle 态：大多数时候 idle.gif，偶尔（低概率、非固定周期）飘一下 idle-reading 再切回，
+    // 呼应 upstream "Idle (random)" 语义，不做 busy_0..3 那种均匀顺序轮播。
+    // 首次判定延迟/命中率刻意调高：main.cpp 的 setSleeping 会在 Idle+静止 30s 后转
+    // sleep（!sleeping_ 会挡住本判定），窗口只有 ~30s，太保守会被 sleep 抢先盖掉，
+    // 真机验证过一次（10s 延迟+20% 命中率在 30s 内几乎看不到），故收紧到 3s 起判、
+    // 6s 一轮、40% 命中，5 轮内至少命中一次的概率 ~92%。openspec cardputer-idle-variety。
+    static bool prevIdle = false;
+    bool nowIdle = (baseState_ == AgentState::Idle && !sleeping_ && reactionMs_ <= 0);
+    if (nowIdle) {
+        if (!prevIdle) idleNextMs_ = now + 3000;        // 刚进 idle：3s 后开始判定
+        else if (now >= idleNextMs_) {
+            if (idleVariant_ == 0) {
+                if ((uint32_t)random(100) < 40) {        // ~40% 命中才切到 reading
+                    idleVariant_ = 1;
+                    idleNextMs_ = now + 5000;            // reading 停留 ~5s
+                } else {
+                    idleNextMs_ = now + 6000;            // 没中，6s 后再判一次
+                }
+            } else {
+                idleVariant_ = 0;                        // 到点必定切回 idle.gif
+                idleNextMs_ = now + 6000;                // 统一判定节奏，见上方注释
+            }
+            applyTarget();
+        }
+    }
+    prevIdle = nowIdle;
     if (now < nextFrameAt) return;
     int delayMs = 0;
     if (!gif.playFrame(false, &delayMs)) { gif.reset(); gif.playFrame(false, &delayMs); }

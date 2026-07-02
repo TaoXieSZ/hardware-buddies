@@ -9,7 +9,10 @@
   },
   "states": {
     "sleep": "sleep.gif",
-    "idle": "idle.gif",
+    "idle": [
+      "idle.gif",
+      "clawd-idle-reading.gif"
+    ],
     "busy": [
       "busy_0.gif",
       "busy_1.gif",
