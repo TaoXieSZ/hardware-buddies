@@ -270,6 +270,15 @@ void loop() {
             clawd::setToast("sent: enter");
             sound::play("nudge");
         }
+        // 物理 Backspace/Del 键 → 回送退格，纠正语音听写/nudge 打字打错的字符。
+        // 用 ks.backspace（HID KEY_BACKSPACE）。upstream inputText.ino 用 status.del，
+        // 但真机串口诊断实测 Cardputer-ADV 这颗键置位的是 backspace 而非 del
+        // （见 openspec/changes/cardputer-backspace-key/design.md Decisions 更新记录）。
+        if (ks.backspace) {
+            cclink::sendKeyName("backspace");
+            clawd::setToast("sent: backspace");
+            sound::play("nudge");
+        }
         for (auto c : ks.word) {
             // 音量调节(-/=)与 HELP 切换(h)——本地操作，不发命令
             if (c == '-') { sound::volumeDown(); char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }

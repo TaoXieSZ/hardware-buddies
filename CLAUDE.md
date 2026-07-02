@@ -95,6 +95,12 @@ swift build && swift run AhaKeyConfig
 - **Upstream `examples/` are ground truth** for hardware init (pins, freq, bus instance, init
   sequence) — not docs, not memory. The buddy platformio.ini headers cite the exact M5Stack
   example files they copied init from.
+- **...but ground truth can still differ by board *variant*.** Cardputer-ADV's physical
+  Backspace/Del key sets `KeysState.backspace` (HID `KEY_BACKSPACE`), not `.del` like stock
+  Cardputer's official `inputText.ino` example uses — same `M5Cardputer` library, different
+  physical keymap on the ADV board. When an upstream example's field/pin assumption doesn't
+  behave as documented, don't just re-read the example harder: add a throwaway
+  `Serial.printf` and confirm on the real (variant) device before trusting it.
 
 ## Working norms (apply across the repo)
 

@@ -68,6 +68,10 @@ clawd 角色包（`data/characters/clawd/`，约 1.3MB）在 LittleFS。串口�
 - 状态 JSON 字段 + 决定回送格式 ← `../claude-code-buddy/src/data.h _applyJson` + `main.cpp`（`cclink.cpp` 注释标行号）
 - AnimatedGIF 文件回调 + GIFDRAW ← `../claude-code-buddy/src/character.cpp`；clawd 资产 ← `characters/clawd/`
 - `M5.Imu` ← `m5stack/M5Unified` `examples/Basic/Imu`；键盘 KeysState(ok/esc/tab) ← M5Cardputer `Keyboard.h`
+  - ⚠️ **物理 Backspace/Del 键在 ADV 上置位的是 `.backspace`，不是 `.del`**：upstream 官方示例
+    `inputText.ino` 用 `status.del` 读退格（标准版 Cardputer 键盘映射），但 ADV 这颗键实测走
+    `KEY_BACKSPACE` HID 码。真机加一行 `Serial.printf` 打两个字段值现场验证的（见
+    `openspec/changes/cardputer-backspace-key/`），不要直接照抄标准版示例。
 
 ## 模块结构
 
