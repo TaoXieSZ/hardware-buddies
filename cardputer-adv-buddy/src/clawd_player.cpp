@@ -22,6 +22,7 @@ char curFile[24] = {0};
 
 AgentState baseState_ = AgentState::Idle;
 bool sleeping_ = false;
+bool online_ = false;   // BLE 是否连上 cc-bridge；!online_ 时顶栏常驻 Connecting...
 int32_t reactionMs_ = 0;
 const char* reactionFile_ = nullptr;
 
@@ -116,6 +117,7 @@ const char* fileForState(AgentState s) {
         case AgentState::Approval:     return "attention.gif";
         case AgentState::Done:         return "celebrate.gif";
         case AgentState::Notification: return "clawd-notification.gif";
+        case AgentState::Connecting:   return "clawd-carrying.gif";   // 未连上 cc-bridge
         default:                       return "idle.gif";
     }
 }
@@ -175,6 +177,14 @@ void drawBadge() {
 
 // 多会话轮播：顶栏左会话标识 + [i/N]；钉态底部横幅（NORMAL）。openspec cardputer-session-rotation。
 void drawSessionTag() {
+    if (!online_) {                          // 未连上 cc-bridge：常驻连接提示
+        canvas.setTextSize(1);
+        canvas.setTextDatum(top_left);
+        canvas.fillRect(0, 0, canvasW - 66, 13, BG);
+        canvas.setTextColor(0x8410, BG);     // 与会话标识同款灰
+        canvas.drawString("Connecting...", 2, 1);
+        return;
+    }
     if (rotTotal_ <= 0 || !rotTag_[0]) return;
     canvas.setFont(&fonts::efontCN_12);   // label 可能是中文 cmux 名
     canvas.setTextSize(1);
@@ -381,6 +391,8 @@ void setSleeping(bool sleep) {
     sleeping_ = sleep;
     if (ready && mode_ == NORMAL) applyTarget();
 }
+// 纯存标志：GIF 由 main.cpp 的 setState 驱动，顶栏每 tick 重绘，无需在此重开 GIF。
+void setOnline(bool on) { online_ = on; }
 void reactHeart() { reactionFile_ = "heart.gif"; reactionMs_ = 1500; if (ready && mode_ == NORMAL) applyTarget(); }
 void reactDizzy() { reactionFile_ = "dizzy.gif"; reactionMs_ = 1200; if (ready && mode_ == NORMAL) applyTarget(); }
 // 工具出错：error 用 reaction 而非持久状态——"failed:" 后紧跟 done/ready 会一闪而过，

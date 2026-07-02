@@ -54,7 +54,7 @@ clawd GIF 居中循环播放，随 Claude 会话状态切换：
 
 **接入**：广播 `Claude-<MAC末2字节>`（开放未加密的 debug NUS），由 macOS 上常驻的 `cc-bridge` 守护进程按前缀连上，收会话状态 JSON。
 
-会话状态 → clawd（派生顺序对齐 cc-bridge）：`waiting>0`→**attention** / `completed`→**celebrate** / `running≥1`→**busy** / 否则 **idle**；离线或久空闲 → **sleep**。右上角 `总数·运行数` 角标。
+会话状态 → clawd（派生顺序对齐 cc-bridge）：`waiting>0`→**attention** / `completed`→**celebrate** / `running≥1`→**busy** / 否则 **idle**；离线（未连上 cc-bridge）→ **Connecting**（carrying + 顶栏 `Connecting...`），仅在线且久静空闲 → **sleep**。右上角 `总数·运行数` 角标。
 
 **审批**：bridge 置 `prompt{tool,hint}` 时弹审批面板，键盘 **`ok`=approve once / `esc`=deny / `a`=always**；不按则超时回落 ask。决定经 NUS 回送 `{"cmd":"permission","id":..,"decision":..}`。
 **会话列表**：`tab` 开/关只读会话列表，`,`/`.` 滚动，`esc` 返回。

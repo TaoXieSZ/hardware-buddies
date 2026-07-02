@@ -19,7 +19,7 @@
 
 static Motion g_motion;
 static uint32_t g_lastMs = 0;
-static constexpr uint32_t STILL_FOR_SLEEP = 30000;
+static constexpr uint32_t STILL_FOR_SLEEP = 180000;  // 3min 静止才睡；留足 idle/idle-reading 清醒窗口
 static constexpr uint32_t APPROVAL_SAFETY_MS = 30000;  // 面板兜底超时(回落 ask)
 
 // 审批跟踪
@@ -313,9 +313,13 @@ void loop() {
         static uint32_t rotNextMs = 0;
         static uint8_t  rotIdx = 0;
         static int      lastAg = -1;
+        clawd::setOnline(online);
         uint8_t n = bs.nSessions;
         AgentState target;
-        if (n == 0) {
+        if (!online) {
+            target = AgentState::Connecting;               // 未连上：不跑派生/轮播（bs 必为全零）
+            clawd::setSessionTag(nullptr, 0, 0, false);
+        } else if (n == 0) {
             target = deriveAgentState(bs);                 // 回退：单聚合态
             clawd::setSessionTag(nullptr, 0, 0, false);
         } else {
@@ -352,9 +356,9 @@ void loop() {
         case MotionEvent::PickedUp: clawd::reactHeart(); break;
         default: break;
     }
-    // 离线 或 (空闲且久静) → clawd 睡眠
+    // 仅在线且空闲久静才睡；离线改由 Connecting 视觉呈现（openspec cardputer-connecting-state）
     bool idle = (bs.running == 0 && bs.waiting == 0);
-    clawd::setSleeping(!online || (idle && g_motion.stillMs() > STILL_FOR_SLEEP));
+    clawd::setSleeping(online && idle && g_motion.stillMs() > STILL_FOR_SLEEP);
 
     // 电量：每 30s 读一次 ADC 电量喂给 NORMAL 顶栏角标；getBatteryLevel() <0=unknown
     // （clawd 侧不显示）。频率对齐 StackChan(CoreS3 每 30s)，避免每帧 ADC 开销。

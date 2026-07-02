@@ -22,6 +22,7 @@ void setBattery(int pct);                  // 顶栏电量 %（<0=unknown 不显
 void setSessionTag(const char* tag, int idx, int total, bool pinned);
 void setToast(const char* text);          // 底部短暂提示(~1.5s,nudge 发送反馈)
 void setSleeping(bool sleep);
+void setOnline(bool on);                   // BLE 是否连上 cc-bridge；!on 时顶栏常驻 Connecting...
 void reactHeart();
 void reactDizzy();
 void reactError();                        // 工具出错临时动画(error-120.gif, ~2.5s)

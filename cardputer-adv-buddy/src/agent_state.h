@@ -9,5 +9,6 @@ enum class AgentState : uint8_t {
     Approval,     // 等待审批（manual 模式）
     Done,         // 本轮完成
     Notification, // 提示用户输入（Claude 等待输入）
+    Connecting,   // BLE 未连上 cc-bridge（开机/断链），Connecting 视觉
     Count
 };

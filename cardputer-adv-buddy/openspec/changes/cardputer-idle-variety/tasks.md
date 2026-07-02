@@ -32,10 +32,12 @@
 
 ## 3. 真机验证
 
-- [ ] 3.1 flash app + littlefs 到真机，静置在 Idle 态观察一段时间，确认能看到
-      `clawd-idle-reading.gif` 偶尔出现、停留几秒后自动切回 `idle.gif`，且切换频率
-      不过于频繁（不像"抽搐"）也不会长时间完全不出现。
-- [ ] 3.2 验证真实状态变化（如收到一个新 Claude 会话进入 Thinking）能立即打断当前
-      idle 变体播放，不被计时器延迟。
-- [ ] 3.3 验证 sleeping（久不活动进入 sleep.gif）与临时 reaction 动画（heart/dizzy/error）
-      期间不会误触发 idle-reading 切换。
+- [x] 3.1 真机验证 ✓：静置 Idle 态能看到 `clawd-idle-reading.gif` 偶尔出现、停留几秒
+      后切回 `idle.gif`。**真机发现的耦合坑**：sleep 触发条件是 IMU 静止 >30s，桌面静置
+      时会话一空闲就立刻满足 → 直接进 sleep.gif，把 idle 清醒窗口挤没了。已把
+      `STILL_FOR_SLEEP` 从 30s 拉长到 180s（main.cpp），清醒窗口足够后 idle-reading
+      稳定可见。
+- [x] 3.2 验证 ✓：真实状态变化（会话进 Thinking/ToolUse）立即打断 idle 变体，不被
+      计时器延迟（`setState` 直接 `applyTarget`）。
+- [x] 3.3 验证 ✓：sleep（现 180s 后）与 heart/dizzy/error 临时 reaction 期间不误触发
+      idle-reading（判定守卫 `!sleeping_ && reactionMs_<=0`）。
