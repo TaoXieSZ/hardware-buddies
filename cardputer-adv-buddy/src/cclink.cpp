@@ -17,10 +17,12 @@
 namespace {
 BuddyState g_state;
 bool g_changed = false;
-// 一行状态 JSON 缓冲。daemon 的 heartbeat 含 entries[8]×~91(=728) + sessions[8]
-// + tokens/model/limits 等，多 session 时轻松 >1KB。旧值 640 会把整帧丢弃
-// (poll 里 OVERFLOW 分支)，导致 prompt 永远收不到、审批面板不弹。2048 留足余量。
-char g_line[2048];
+// 一行状态 JSON 缓冲。daemon 的 heartbeat 含 entries[8]×~91(=728) + sessions[<=16]
+// + tokens/model/limits，再叠加 question 字段(rid~90 + text92 + 6 选项×~40 + header)
+// 时轻松 >2KB。2048 在「多会话 + 待答问题」并发时会顶爆 → 整帧丢弃(poll OVERFLOW
+// 分支) → 问题/审批面板闪现或收不到(真机实测 [cclink] OVERFLOW drop at 2047)。
+// 4096 给 16 会话 + 问题的最坏组合留足余量；+2KB 静态对堆无压力。
+char g_line[4096];
 size_t g_li = 0;
 
 // 设备名 = "Claude-" + BT MAC 末两字节（照搬 claude-code-buddy startBt）。
