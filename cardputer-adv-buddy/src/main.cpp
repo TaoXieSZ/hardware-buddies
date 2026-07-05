@@ -22,6 +22,26 @@ static uint32_t g_lastMs = 0;
 static constexpr uint32_t STILL_FOR_SLEEP = 180000;  // 3min 静止才睡；留足 idle/idle-reading 清醒窗口
 static constexpr uint32_t APPROVAL_SAFETY_MS = 30000;  // 面板兜底超时(回落 ask)
 
+// ── 自动息屏（背光层，独立于 sleep.gif）──────────────────────────────
+// 无物理活动(按键 OR IMU 明显运动)超阈值 → setBrightness(0) 关背光护屏省电；
+// 物理活动恢复到原亮度。SCREEN_OFF_MS < STILL_FOR_SLEEP(180s)：屏可能先于/独立于
+// sleep.gif 态灭掉——没关系，背光层与 GIF 层解耦，sleep.gif 关背光时不可见、亮时立现。
+// ⚠️ 活动/唤醒只认物理输入，绝不用 cclink::changed()（每心跳为真会导致永不息屏）。
+static constexpr uint32_t SCREEN_OFF_MS = 60000;     // 1min 无按键且无 IMU 运动 → 熄屏
+static uint8_t g_savedBrightness = 255;              // 息屏前的原亮度（setup 里用 getBrightness() 抓一次）
+static bool g_screenOff = false;                     // 当前是否已息屏
+
+static void screenOff() {
+    if (g_screenOff) return;                         // 幂等，避免重复调
+    M5Cardputer.Display.setBrightness(0);
+    g_screenOff = true;
+}
+static void screenOn() {
+    if (!g_screenOff) return;                        // 幂等
+    M5Cardputer.Display.setBrightness(g_savedBrightness);  // 恢复原值，绝不硬编码 255
+    g_screenOff = false;
+}
+
 // 审批跟踪
 static char g_shownId[40] = {0};
 static uint32_t g_promptShownMs = 0;
@@ -52,6 +72,7 @@ void setup() {
     M5Cardputer.Display.setRotation(1);  // 横屏 240x135
     Serial.begin(115200);
 
+    g_savedBrightness = M5Cardputer.Display.getBrightness();  // 抓 begin 后的原亮度供息屏恢复
     g_motion.begin();
     clawd::begin();
     sound::begin();
@@ -359,6 +380,20 @@ void loop() {
     // 仅在线且空闲久静才睡；离线改由 Connecting 视觉呈现（openspec cardputer-connecting-state）
     bool idle = (bs.running == 0 && bs.waiting == 0);
     clawd::setSleeping(online && idle && g_motion.stillMs() > STILL_FOR_SLEEP);
+
+    // ── 自动息屏判定（背光层，独立于上面的 sleep.gif）────────────────────
+    // 活动 = 物理输入：按键(keyEvent) OR IMU 明显运动（stillMs() 在运动帧自动归零）。
+    // g_lastKeyMs 记最后一次按键时刻；IMU 运动直接看 stillMs()，无需单独读 IMU。
+    // 唤醒键不消费：keyEvent 只是顺带唤醒背光，按键本身仍照常在上面各层被处理——
+    // 更简单，也符合「一次按键既亮屏又生效」的用户预期。
+    static uint32_t g_lastKeyMs = 0;
+    if (keyEvent) g_lastKeyMs = now;
+    bool activity = keyEvent || g_motion.stillMs() < SCREEN_OFF_MS;  // 有按键或近期有运动
+    if (activity) {
+        screenOn();                                  // 息屏态下任一物理活动 → 立即恢复背光（幂等）
+    } else if (g_motion.stillMs() > SCREEN_OFF_MS && (now - g_lastKeyMs) > SCREEN_OFF_MS) {
+        screenOff();                                 // 既无运动又无按键达阈值 → 熄屏
+    }
 
     // 电量：每 30s 读一次 ADC 电量喂给 NORMAL 顶栏角标；getBatteryLevel() <0=unknown
     // （clawd 侧不显示）。频率对齐 StackChan(CoreS3 每 30s)，避免每帧 ADC 开销。
