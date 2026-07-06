@@ -27,8 +27,10 @@ struct SessionInfo {
     // 供 clawd 主形象轮播 + 待输入时钉最早等待者（openspec change cardputer-session-rotation）。
     int state = 0;        // 实为 AgentState（用 int 存）；解析时经 agentStateFromWire 填
     uint32_t waitSeq = 0; // 进入等待的单调序号；0 = 不在等待
-    char agent[8] = {0};  // payload `agent`（"cursor"…）；空 = claude（默认本机）。
+    char agent[16] = {0}; // payload `agent`（"cursor"/"codex"/"opencode"…）；空 = claude（默认本机）。
                           // 列表里区分不同 agent（openspec change cardputer-cursor-sessions）。
+                          // ⚠️ 至少 16：'opencode' 是 8 字符，agent[8] 会截成 'opencod' →
+                          // drawSessions 的 strcmp(agent,"opencode") 失配、错标成 cc。
 };
 
 // payload sessions[].st（小写短串）→ AgentState。缺省/未知 → Idle。
