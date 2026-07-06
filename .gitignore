@@ -24,3 +24,6 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+
+# Agent tool scratch dirs
+.omc/
