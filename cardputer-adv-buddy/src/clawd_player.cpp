@@ -26,8 +26,8 @@ bool online_ = false;   // BLE 是否连上 cc-bridge；!online_ 时顶栏常驻
 int32_t reactionMs_ = 0;
 const char* reactionFile_ = nullptr;
 
-// 合成模式：优先级 APPROVAL > SESSIONS > HELP > NORMAL
-enum Mode { NORMAL, APPROVAL, QUESTION, SESSIONS, HELP };
+// 合成模式：优先级 APPROVAL > QUESTION > SESSIONS > NOTES > NOTEBOOK > HELP > NORMAL
+enum Mode { NORMAL, APPROVAL, QUESTION, SESSIONS, NOTES, NOTEBOOK, HELP };
 Mode mode_ = NORMAL;
 
 // NORMAL 角标 + toast
@@ -35,6 +35,10 @@ int badgeTotal_ = 0, badgeRunning_ = 0;
 int8_t batPct_ = -1;   // 电量 %（<0=unknown 不显示）。openspec cardputer-battery-indicator
 char toast_[24] = {0};
 int32_t toastMs_ = 0;
+// 本机录音持久指示（顶栏左 "REC mm:ss" 红）。录音是持续态，非 1.5s toast。
+// openspec change cardputer-voice-notes。
+bool     recording_ = false;
+uint32_t recElapsedMs_ = 0;
 // 多会话轮播：当前会话标识 + 轮播位置 + 钉态（rotation）
 char rotTag_[40] = {0};
 int  rotIdx_ = 0, rotTotal_ = 0;
@@ -66,6 +70,18 @@ _QOpt qOpts_[6];
 uint8_t qN_ = 0;
 int qSel_ = 0;             // 光标
 bool qChecked_[6] = {false}; // multiSelect 勾选态
+
+// NOTES（笔记浏览+回放）— showNotes 时快照，复用 SESSIONS 滚动列表范式
+char notesNames_[32][32];
+uint8_t notesN_ = 0;
+int notesSel_ = 0;
+int notesScroll_ = 0;       // viewport 顶部索引
+int8_t notesPlaying_ = -1;  // 正在回放的笔记索引（-1=无），用于列表显示 ▶
+
+// NOTEBOOK（键盘笔记本）— 简易文本编辑器
+#define NB_BUF_SIZE 600
+char nbBuf_[NB_BUF_SIZE] = {0};
+int  nbLen_ = 0, nbCursor_ = 0;     // 文本长度 + 光标位置（字符索引）
 
 // --- LittleFS 文件回调（照搬 character.cpp）---
 void* openCb(const char* fn, int32_t* pSize) {
@@ -216,6 +232,21 @@ void drawToast() {
     canvas.setTextDatum(top_left);
 }
 
+// 本机录音持久指示：顶栏左红点 + "REC mm:ss"。录音态取代会话标识/Connecting 那条左栏，
+// 优先级更高（录音进行中最需要看到），画在同一左侧条区域（留出右上电量/角标保留区）。
+void drawRecIndicator() {
+    canvas.setFont(&fonts::Font0);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(top_left);
+    canvas.fillRect(0, 0, canvasW - 66, 13, BG);   // 清左侧条（同 drawSessionTag 的保留区）
+    canvas.fillCircle(6, 6, 4, 0xF800);             // 红点
+    uint32_t sec = recElapsedMs_ / 1000;
+    char line[16];
+    snprintf(line, sizeof(line), "REC %02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
+    canvas.setTextColor(0xF800, BG);                // 红
+    canvas.drawString(line, 14, 2);
+}
+
 // 审批面板（APPROVAL）
 void drawApproval() {
     canvas.fillSprite(BG);
@@ -296,6 +327,7 @@ void drawSessions() {
             const char* atag; uint16_t rowCol;
             if (strcmp(agent, "cursor") == 0)      { atag = "cu"; rowCol = 0xCE59; }
             else if (strcmp(agent, "codex") == 0)  { atag = "cx"; rowCol = 0x07E5; }
+            else if (strcmp(agent, "opencode") == 0) { atag = "oc"; rowCol = 0x05FF; }
             else                                   { atag = "cc"; rowCol = 0xFD20; }
             canvas.setTextColor(sel ? TFT_WHITE : rowCol, sel ? 0x2945 : BG);
             // 名字优先 cmux auto-name（label）；没有时 fallback sid 前 8 字符。
@@ -348,6 +380,95 @@ void drawQuestion() {
     canvas.drawString(qMulti_ ? "1-N tog·ok交·c聊·esc跳" : "1-N 选·ok·c聊·esc跳", 6, canvasH - 13);
     canvas.setFont(&fonts::Font0);   // 复位默认字体
 }
+
+// 笔记列表（NOTES，复刻 SESSIONS 滚动列表范式）。
+// 标题 NOTES(N)，每行文件名；空列表 "(no notes)"。回放中顶栏 ▶ playing。
+void drawNotes() {
+    canvas.fillSprite(BG);
+    canvas.setTextColor(CLAWD, BG);
+    canvas.setTextSize(1);
+    canvas.setFont(&fonts::efontCN_12);   // 中文文件名渲染
+    canvas.setTextDatum(top_left);
+    char title[24];
+    snprintf(title, sizeof(title), "NOTES (%d)", notesN_);
+    canvas.drawString(title, 6, 2);
+    const int rowH = 14, top = 16, rows = (canvasH - top) / rowH;  // efontCN_12 行高
+    if (notesN_ == 0) {
+        canvas.setTextColor(0x8410, BG);
+        canvas.drawString("(no notes)", 6, top);
+    } else {
+        for (int r = 0; r < rows; r++) {
+            int idx = notesScroll_ + r;
+            if (idx >= notesN_) break;
+            bool sel = (idx == notesSel_);
+            int y = top + r * rowH;
+            if (sel) canvas.fillRect(0, y - 1, canvasW, rowH, 0x2945);  // 选中行高亮底
+            bool playing = (idx == notesPlaying_);
+            canvas.setTextColor(sel ? TFT_WHITE : (playing ? 0x07E0 : 0xCE59),
+                                sel ? 0x2945 : BG);
+            char row[40];
+            snprintf(row, sizeof(row), "%c%c %s", sel ? '>' : ' ',
+                     playing ? 0x10 /* ▶ */ : ' ', notesNames_[idx]);
+            canvas.drawString(row, 6, y);
+        }
+    }
+    if (notesScroll_ > 0) canvas.drawString("^", canvasW - 10, top);
+    if (notesScroll_ + rows < notesN_) canvas.drawString("v", canvasW - 10, canvasH - rowH);
+    canvas.setFont(&fonts::Font0);   // 复位默认字体
+}
+
+// 键盘笔记本（NOTEBOOK）— 简易文本编辑器。顶栏标题 + [x/600] 字符数。
+// 左对齐单色文本，光标闪烁实心方块。单行最多 ~39 字符，超出自动折行。
+void drawNotebook() {
+    canvas.fillSprite(BG);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(top_left);
+
+    // 顶栏：标题 + 字符数
+    canvas.setTextColor(CLAWD, BG);
+    char title[24];
+    snprintf(title, sizeof(title), "NOTEBOOK [%d/%d]", nbLen_, NB_BUF_SIZE);
+    canvas.drawString(title, 4, 1);
+    canvas.drawFastHLine(0, 12, canvasW, CLAWD);
+
+    // 文本渲染：逐字符画，遇 '\n' 换行，超宽折行。光标闪烁：实心块覆盖在字符上。
+    const int L = 4, startY = 15, rowH = 12, maxX = canvasW - 4;
+    int x = L, y = startY, charIdx = 0;
+    bool blinkOn = (millis() / 400) % 2;  // ~400ms 闪烁周期
+
+    canvas.setTextColor(TFT_WHITE, BG);
+    for (int i = 0; i < nbLen_; i++) {
+        // 在文本渲染后若遇到光标位且闪烁在位 → 画光标块
+        if (i == nbCursor_ && blinkOn) {
+            canvas.fillRect(x, y, 7, rowH, TFT_WHITE);
+        }
+
+        char c = nbBuf_[i];
+        if (c == '\n') {
+            x = L; y += rowH;
+            charIdx++;
+            if (y + rowH > canvasH) break;   // 超出屏幕不画
+            continue;
+        }
+
+        // 折行
+        if (x + 7 > maxX) { x = L; y += rowH; }
+        if (y + rowH > canvasH) break;
+
+        canvas.drawChar(c, x, y);
+        x += 7;   // Font0 字符宽 ~6px + 1px spacing
+        charIdx++;
+    }
+
+    // 光标在文本末尾
+    if (nbCursor_ == nbLen_ && blinkOn) {
+        canvas.fillRect(x, y, 7, rowH, TFT_WHITE);
+    }
+
+    // 底栏提示
+    canvas.setTextColor(0x8410, BG);
+    canvas.drawString("esc=save+exit", 4, canvasH - 12);
+}
 }  // namespace
 
 namespace clawd {
@@ -385,6 +506,7 @@ void setToast(const char* text) {
     toast_[sizeof(toast_) - 1] = 0;
     toastMs_ = 1500;
 }
+void setRecording(bool on, uint32_t elapsedMs) { recording_ = on; recElapsedMs_ = elapsedMs; }
 
 void setSleeping(bool sleep) {
     if (sleep == sleeping_) return;
@@ -421,7 +543,7 @@ void showSessions(const BuddyState& bs) {
     sessScroll_ = 0;
     sessSel_ = 0;
     sessTotal_ = bs.total;
-    if (mode_ != APPROVAL && mode_ != QUESTION) mode_ = SESSIONS;
+    if (mode_ != APPROVAL && mode_ != QUESTION && mode_ != NOTES && mode_ != NOTEBOOK) mode_ = SESSIONS;
 }
 void hideSessions() { if (mode_ == SESSIONS) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 void sessionsMove(int delta) {
@@ -480,7 +602,72 @@ uint8_t questionSelectedIds(const char** out, uint8_t maxN) {
 }
 bool questionVisible() { return mode_ == QUESTION; }
 
-void showHelp() { if (mode_ != APPROVAL && mode_ != QUESTION && mode_ != SESSIONS) mode_ = HELP; }
+void showNotes(const char (*names)[32], uint8_t n, int8_t playingIdx) {
+    notesN_ = n > 32 ? 32 : n;
+    for (uint8_t i = 0; i < notesN_; i++) {
+        strncpy(notesNames_[i], names[i], sizeof(notesNames_[i]) - 1);
+        notesNames_[i][sizeof(notesNames_[i]) - 1] = 0;
+    }
+    notesSel_ = 0;
+    notesScroll_ = 0;
+    notesPlaying_ = playingIdx;
+    if (mode_ != APPROVAL && mode_ != QUESTION) mode_ = NOTES;
+}
+void hideNotes() { if (mode_ == NOTES) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); notesPlaying_ = -1; } }
+void notesMove(int delta) {
+    if (mode_ != NOTES || notesN_ == 0) return;
+    notesSel_ = ((notesSel_ + delta) % notesN_ + notesN_) % notesN_;
+    const int rowH = 14, top = 16, rows = (canvasH - top) / rowH;
+    if (notesSel_ < notesScroll_) notesScroll_ = notesSel_;
+    else if (notesSel_ >= notesScroll_ + rows) notesScroll_ = notesSel_ - rows + 1;
+}
+const char* notesSelected() {
+    if (mode_ != NOTES || notesSel_ < 0 || notesSel_ >= notesN_) return "";
+    return notesNames_[notesSel_];
+}
+bool notesVisible() { return mode_ == NOTES; }
+
+// ── NOTEBOOK ──
+void showNotebook() {
+    nbLen_ = 0; nbCursor_ = 0;
+    nbBuf_[0] = 0;
+    if (mode_ != APPROVAL && mode_ != QUESTION) mode_ = NOTEBOOK;
+}
+void hideNotebook(bool save) {
+    if (mode_ == NOTEBOOK) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); }
+}
+void notebookKey(char c) {
+    if (mode_ != NOTEBOOK) return;
+    if (nbLen_ >= NB_BUF_SIZE - 1) return;
+    // 光标在中间时：后移后续字符
+    if (nbCursor_ < nbLen_) {
+        memmove(nbBuf_ + nbCursor_ + 1, nbBuf_ + nbCursor_, nbLen_ - nbCursor_);
+    }
+    nbBuf_[nbCursor_] = c;
+    nbLen_++;
+    nbCursor_++;
+    nbBuf_[nbLen_] = 0;
+}
+void notebookBackspace() {
+    if (mode_ != NOTEBOOK) return;
+    if (nbCursor_ <= 0) return;
+    // 光标前移 + 删除前一个字符
+    if (nbCursor_ < nbLen_) {
+        memmove(nbBuf_ + nbCursor_ - 1, nbBuf_ + nbCursor_, nbLen_ - nbCursor_);
+    }
+    nbCursor_--;
+    nbLen_--;
+    nbBuf_[nbLen_] = 0;
+}
+void notebookNewline() {
+    notebookKey('\n');
+}
+const char* notebookText() {
+    return (mode_ == NOTEBOOK) ? nbBuf_ : "";
+}
+bool notebookVisible() { return mode_ == NOTEBOOK; }
+
+void showHelp() { if (mode_ != APPROVAL && mode_ != QUESTION && mode_ != SESSIONS && mode_ != NOTES && mode_ != NOTEBOOK) mode_ = HELP; }
 void hideHelp() { if (mode_ == HELP) { mode_ = NORMAL; strcpy(curFile, ""); applyTarget(); } }
 bool helpVisible() { return mode_ == HELP; }
 
@@ -490,6 +677,8 @@ void tick(uint32_t dtMs) {
     if (mode_ == APPROVAL) { drawApproval(); canvas.pushSprite(0, 0); return; }
     if (mode_ == QUESTION) { drawQuestion(); canvas.pushSprite(0, 0); return; }
     if (mode_ == SESSIONS) { drawSessions(); canvas.pushSprite(0, 0); return; }
+    if (mode_ == NOTES)    { drawNotes();    canvas.pushSprite(0, 0); return; }
+    if (mode_ == NOTEBOOK) { drawNotebook(); canvas.pushSprite(0, 0); return; }
     if (mode_ == HELP)     { drawHelp();     canvas.pushSprite(0, 0); return; }
 
     // NORMAL：推进 GIF + 角标
@@ -543,7 +732,9 @@ void tick(uint32_t dtMs) {
     if (!gif.playFrame(false, &delayMs)) { gif.reset(); gif.playFrame(false, &delayMs); }
     drawBadge();
     if (toastMs_ > 0) { toastMs_ -= (int32_t)dtMs; drawToast(); }
-    drawSessionTag();   // 顶栏会话标识 + 钉态横幅（盖在 toast 之上）
+    // 录音态：REC 指示占据左侧条，优先于会话标识/Connecting（录音进行中最需可见）。
+    if (recording_) drawRecIndicator();
+    else drawSessionTag();   // 顶栏会话标识 + 钉态横幅（盖在 toast 之上）
     canvas.pushSprite(0, 0);
     nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
 }

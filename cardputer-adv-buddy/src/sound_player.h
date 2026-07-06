@@ -12,4 +12,9 @@ void playEvent(const char* name);  // 播放 /sounds/<name>.wav（hook 事件，
 void volumeUp();                   // 音量 +25（= 键）
 void volumeDown();                 // 音量 -25（- 键）
 int  volume();                     // 当前音量 0-255
+// 录音互斥：Mic 与 Speaker 共用 I2S。录音器起录调 releaseForMic()（停音+Speaker.end()），
+// 停录调 resume()（Speaker.begin()）。releaseForMic 期间 play/tone/playEvent 全部短路。
+// 成对调用，绝不留 Speaker 死掉。openspec change cardputer-voice-notes。
+void releaseForMic();              // 让出 I2S 给 Mic：停当前音 + Speaker.end() + 静音
+void resume();                     // 归还 I2S：Speaker.begin() + 解静音
 }

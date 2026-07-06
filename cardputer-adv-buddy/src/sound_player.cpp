@@ -26,6 +26,7 @@ uint32_t    g_playAfterMs = 0;  // millis() 时间戳，到了才允许播放（
 int      g_volume = 25;         // 初始音量 0-255（-/= 键步进 25，tone 与 wav 共用）
 uint8_t* g_wavBuf = nullptr;    // wav 读入缓冲（复用；playWav 异步播放期间不可覆盖）
 size_t   g_wavCap = 0;
+bool     g_released = false;    // 录音让出 I2S 期间为 true：play/tone/playEvent 全部短路
 }  // namespace
 
 namespace sound {
@@ -38,6 +39,7 @@ void begin() {
 }
 
 void play(const char* name) {
+    if (g_released) return;         // 录音态：不动 Speaker（已 end，I2S 归 Mic）
     const Note* seq = nullptr;
     if      (strcmp(name, "approval")    == 0) seq = SND_APPROVAL;
     else if (strcmp(name, "done")        == 0) seq = SND_DONE;
@@ -57,6 +59,7 @@ bool busy() { return g_seq != nullptr; }
 // 播放 hook 事件 wav：从 LittleFS 读 /sounds/<name>.wav 到 RAM → playWav(异步)。
 // 文件不存在则 no-op —— 只有关键事件放了 wav，bridge 发的其他 play 字段自动忽略。
 void playEvent(const char* name) {
+    if (g_released) return;         // 录音态：不动 Speaker（已 end，I2S 归 Mic）
     if (!name || !name[0]) return;
     char path[48];
     snprintf(path, sizeof(path), "/sounds/%s.wav", name);
@@ -76,11 +79,29 @@ void playEvent(const char* name) {
     M5Cardputer.Speaker.playWav(g_wavBuf, len);
 }
 
-void volumeUp()   { g_volume = g_volume + 25 > 255 ? 255 : g_volume + 25; M5Cardputer.Speaker.setVolume(g_volume); M5Cardputer.Speaker.tone(1175, 40); }
-void volumeDown() { g_volume = g_volume - 25 < 0   ? 0   : g_volume - 25; M5Cardputer.Speaker.setVolume(g_volume); M5Cardputer.Speaker.tone(880, 40); }
+void volumeUp()   { g_volume = g_volume + 25 > 255 ? 255 : g_volume + 25; M5Cardputer.Speaker.setVolume(g_volume); if (!g_released) M5Cardputer.Speaker.tone(1175, 40); }
+void volumeDown() { g_volume = g_volume - 25 < 0   ? 0   : g_volume - 25; M5Cardputer.Speaker.setVolume(g_volume); if (!g_released) M5Cardputer.Speaker.tone(880, 40); }
 int  volume()     { return g_volume; }
 
+// 录音起：停当前序列 + Speaker.end() 让出 I2S，置 released 短路后续 play/tone。
+// 抄 mic_wav_record.ino:101（Speaker.end()）。与 resume() 成对。
+void releaseForMic() {
+    if (g_released) return;
+    M5Cardputer.Speaker.stop();
+    g_seq = nullptr;                // 丢弃未播完的序列，避免 resume 后突然接着响
+    M5Cardputer.Speaker.end();
+    g_released = true;
+}
+// 录音停：Speaker.begin() 归还 I2S + 解 released，并恢复音量。抄 mic_wav_record.ino:332。
+void resume() {
+    if (!g_released) return;
+    M5Cardputer.Speaker.begin();
+    M5Cardputer.Speaker.setVolume(g_volume);
+    g_released = false;
+}
+
 void tick() {
+    if (g_released) return;         // 录音态：Speaker 已 end，不推进序列
     if (g_playAfterMs > 0) {
         if (millis() < g_playAfterMs) return;
         g_playAfterMs = 0;

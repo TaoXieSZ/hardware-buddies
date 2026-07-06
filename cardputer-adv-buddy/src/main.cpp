@@ -16,6 +16,7 @@
 #include "clawd_player.h"
 #include "cclink.h"
 #include "sound_player.h"
+#include "recorder.h"
 
 static Motion g_motion;
 static uint32_t g_lastMs = 0;
@@ -76,6 +77,7 @@ void setup() {
     g_motion.begin();
     clawd::begin();
     sound::begin();
+    recorder::begin();
     cclink::begin();                     // 广播 Claude-XXXX,等 cc-bridge 连
     Serial.printf("[main] heap after init=%u\n", (unsigned)ESP.getFreeHeap());
     g_lastMs = millis();
@@ -123,6 +125,8 @@ void loop() {
     bool snapApproval = clawd::approvalVisible();
     bool snapQuestion = clawd::questionVisible();
     bool snapSessions = clawd::sessionsVisible();
+    bool snapNotes    = clawd::notesVisible();
+    bool snapNotebook = clawd::notebookVisible();
     bool snapHelp     = clawd::helpVisible();
 
     // ── 审批层(最高优先)──
@@ -242,8 +246,8 @@ void loop() {
     }
     if (!bs.hasQuestion) { g_shownQRid[0] = 0; g_dismissedQRid[0] = 0; }
 
-    // ── 会话列表(无审批/问题时,tab 开关,esc 关,,/. 选,enter/space 切换)──
-    if (!snapApproval && !snapQuestion && keyEvent) {
+    // ── 会话列表(无审批/问题/笔记/笔记本时,tab 开关,esc 关,,/. 选,enter/space 切换)──
+    if (!snapApproval && !snapQuestion && !snapNotes && !snapNotebook && keyEvent) {
         if (ks.tab) {
             if (snapSessions) clawd::hideSessions();
             else clawd::showSessions(bs);
@@ -272,7 +276,7 @@ void loop() {
     }
 
     // ── HELP 覆盖层(h 键切换,esc/backtick 关)──
-    if (!snapApproval && !snapSessions && keyEvent) {
+    if (!snapApproval && !snapSessions && !snapNotes && !snapNotebook && keyEvent) {
         if (snapHelp) {
             if (ks.esc) { clawd::hideHelp(); }
             for (auto c : ks.word) {
@@ -281,10 +285,108 @@ void loop() {
         }
     }
 
-    // ── 快捷 nudge(NORMAL 模式:非审批、非会话、非帮助、非问答)──
-    // 守卫加 !snapQuestion：问答面板开着时键盘归问答层独占（与审批/会话/帮助一致），
-    // 否则按 'c'(chat) 会连带触发 NORMAL 层 'c'(commit) 双触发。
-    if (keyEvent && !snapApproval && !snapSessions && !snapHelp && !snapQuestion) {
+    // ── 笔记列表(无审批/问答/会话/帮助时,l 键在 NORMAL 块开关；列表内键盘独占)──
+    if (keyEvent && !snapApproval && !snapQuestion && !snapSessions && !snapHelp) {
+        if (snapNotes) {
+            bool play  = ks.enter;
+            bool close = ks.esc;
+            bool del   = ks.backspace;     // 删选中笔记
+            int  volD  = 0;                // 音量调整方向（-1=降 +1=升）
+            for (auto c : ks.word) {
+                if (c == '`')                  close = true;
+                else if (c == ' ')             play = true;
+                else if (c == ',' || c == ';') clawd::notesMove(-1);
+                else if (c == '.' || c == '/') clawd::notesMove(1);
+                else if (c == 'l' || c == 'L') { close = true; break; }
+                else if (c == '-')             volD = -1;
+                else if (c == '=')             volD = 1;
+            }
+            // 音量（优先于 close/play/del：同帧只做一项）
+            if (volD != 0) {
+                if (recorder::isPlaying()) {
+                    recorder::adjVolume(volD * 25);
+                } else {
+                    if (volD > 0) sound::volumeUp(); else sound::volumeDown();
+                }
+                char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume());
+                clawd::setToast(t);
+            } else if (close) {
+                if (recorder::isPlaying()) recorder::stopPlayback();
+                clawd::hideNotes();
+            } else if (del) {
+                // 删选中笔记 → SD.remove → 刷新列表
+                const char* sel = clawd::notesSelected();
+                if (sel && sel[0]) {
+                    // 正在播这个文件 → 先停再删
+                    if (recorder::isPlaying()) recorder::stopPlayback();
+                    if (recorder::deleteNote(sel)) {
+                        clawd::setToast("deleted");
+                    } else {
+                        clawd::setToast("del fail");
+                    }
+                    // 刷新列表（可能删后变空或位置变）
+                    char names[REC_MAX_NOTES][REC_NOTE_NAME_LEN];
+                    uint8_t n = recorder::listNotes(names, REC_MAX_NOTES);
+                    clawd::showNotes(names, n, -1);
+                }
+            } else if (play) {
+                // 正在播 → 停止；否则播选中
+                if (recorder::isPlaying()) {
+                    recorder::stopPlayback();
+                    // 回列表：刷新列表清除 ▶ 指示
+                    char names[REC_MAX_NOTES][REC_NOTE_NAME_LEN];
+                    uint8_t n = recorder::listNotes(names, REC_MAX_NOTES);
+                    clawd::showNotes(names, n, -1);
+                } else {
+                    const char* sel = clawd::notesSelected();
+                    if (sel && sel[0] && recorder::playNote(sel)) {
+                        // 播成功：刷新列表显示 ▶
+                        char names[REC_MAX_NOTES][REC_NOTE_NAME_LEN];
+                        uint8_t n = recorder::listNotes(names, REC_MAX_NOTES);
+                        // 找当前播放文件在列表中的位置
+                        int8_t playingIdx = -1;
+                        for (uint8_t i = 0; i < n; i++) {
+                            if (strcmp(names[i], sel) == 0) { playingIdx = (int8_t)i; break; }
+                        }
+                        clawd::showNotes(names, n, playingIdx);
+                        clawd::setToast("playing");
+                    } else {
+                        clawd::setToast("play fail");
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 键盘笔记本(无审批/问答/会话/帮助/笔记时,k 键开关；笔记本内键盘独占)──
+    if (keyEvent && !snapApproval && !snapQuestion && !snapSessions && !snapHelp && !snapNotes) {
+        if (snapNotebook) {
+            bool save = ks.esc;                            // esc=存盘退出
+            bool bs   = ks.backspace;
+            for (auto c : ks.word) {
+                if (c == '`')  save = true;                // backtick 也存盘退出
+                else if (c == '\n' || c == '\r')            // enter/newline
+                    clawd::notebookNewline();
+                else if (c >= 0x20 && c < 0x7f)            // 可打印 ASCII
+                    clawd::notebookKey(c);
+            }
+            if (bs) clawd::notebookBackspace();
+            if (save) {
+                const char* txt = clawd::notebookText();
+                if (txt && txt[0]) {
+                    if (recorder::saveTextNote(txt))
+                        clawd::setToast("saved");
+                    else
+                        clawd::setToast("save fail");
+                }
+                clawd::hideNotebook(true);
+            }
+        }
+    }
+
+    // ── 快捷 nudge(NORMAL 模式:非审批、非会话、非帮助、非问答、非笔记、非笔记本)──
+    // 守卫加 !snapNotes / !snapNotebook：覆盖层打开时键盘归各层独占。
+    if (keyEvent && !snapApproval && !snapSessions && !snapHelp && !snapQuestion && !snapNotes && !snapNotebook) {
         // 物理 Enter → 给聚焦的 Claude 终端注入 Enter（语音(v PTT)录完提交用）。
         if (ks.enter) {
             cclink::sendKeyName("enter");
@@ -305,6 +407,28 @@ void loop() {
             if (c == '-') { sound::volumeDown(); char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }
             if (c == '=') { sound::volumeUp();   char t[16]; snprintf(t, sizeof(t), "vol %d", sound::volume()); clawd::setToast(t); break; }
             if (c == 'h' || c == 'H') { clawd::showHelp(); break; }
+            // 'n'：本机语音便签录音起停（openspec change cardputer-voice-notes）。本地操作，
+            // 不发命令。起录挂载 SD 失败 → toast "no SD" 不进录音态。
+            if (c == 'n' || c == 'N') {
+                if (recorder::isRecording()) { recorder::endRecord(); clawd::setToast("rec saved"); }
+                else if (recorder::beginRecord())      clawd::setToast("rec start");
+                else                                   clawd::setToast("no SD");
+                break;
+            }
+            // 'l'：笔记列表浏览+回放（openspec change cardputer-note-playback）。本地操作，
+            // 不发命令。列表为空或 SD 未挂载也显示 "(no notes)" 不崩。
+            if (c == 'l' || c == 'L') {
+                char names[REC_MAX_NOTES][REC_NOTE_NAME_LEN];
+                uint8_t n = recorder::listNotes(names, REC_MAX_NOTES);
+                int8_t playingIdx = recorder::isPlaying() ? -1 : -1;  // 初始无人在播
+                clawd::showNotes(names, n, playingIdx);
+                break;
+            }
+            // 'k'：键盘笔记本（打字 → esc 存 SD）。本地操作，不发命令。
+            if (c == 'k' || c == 'K') {
+                clawd::showNotebook();
+                break;
+            }
             for (auto& n : NUDGES) {
                 if (c != n.key) continue;
                 if (n.keyName) cclink::sendKeyName(n.keyName);
@@ -388,7 +512,9 @@ void loop() {
     // 更简单，也符合「一次按键既亮屏又生效」的用户预期。
     static uint32_t g_lastKeyMs = 0;
     if (keyEvent) g_lastKeyMs = now;
-    bool activity = keyEvent || g_motion.stillMs() < SCREEN_OFF_MS;  // 有按键或近期有运动
+    // 录音进行中也算活动：屏保持亮，不遮 REC 指示（openspec change cardputer-voice-notes）。
+    bool activity = keyEvent || g_motion.stillMs() < SCREEN_OFF_MS || recorder::isRecording()
+                    || snapNotes || snapNotebook || recorder::isPlaying();
     if (activity) {
         screenOn();                                  // 息屏态下任一物理活动 → 立即恢复背光（幂等）
     } else if (g_motion.stillMs() > SCREEN_OFF_MS && (now - g_lastKeyMs) > SCREEN_OFF_MS) {
@@ -406,6 +532,25 @@ void loop() {
         }
     }
 
+    // 录音态：每帧抓一小段写盘（分帧，不阻塞）；驱动持久 REC 指示显示/更新/隐藏。
+    if (recorder::isRecording()) recorder::tick();
+    clawd::setRecording(recorder::isRecording(), recorder::elapsedMs());
+
+    // 回放态：每帧流式播一小段；播完（EOF）自动回到列表，刷新清除 ▶ 指示。
+    static bool g_wasPlaying = false;
+    if (recorder::isPlaying()) {
+        recorder::tickPlayback();
+        g_wasPlaying = true;
+    } else if (g_wasPlaying) {
+        g_wasPlaying = false;
+        // 回放刚结束（EOF 或 stopPlayback）：若列表还开着则刷新，清除 ▶
+        if (snapNotes) {
+            char names[REC_MAX_NOTES][REC_NOTE_NAME_LEN];
+            uint8_t n = recorder::listNotes(names, REC_MAX_NOTES);
+            clawd::showNotes(names, n, -1);
+        }
+    }
+
     sound::tick();
     clawd::tick(dt);
 
@@ -416,5 +561,5 @@ void loop() {
                       online ? 1 : 0, bs.total, bs.running, bs.waiting,
                       bs.promptId[0] ? bs.promptId : "-", (unsigned)ESP.getFreeHeap());
     }
-    delay(5);
+    delay(recorder::isPlaying() ? 1 : 5);  // 回放中缩间隔减少 chunk 间隙
 }
