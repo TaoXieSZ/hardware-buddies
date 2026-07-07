@@ -75,7 +75,6 @@ static constexpr int FRAME_T = 8,  FRAME_B = FACE_AREA_H - 8;
 
 // --- Ears (robot cat-ears, triangles above frame) ---
 static constexpr int EAR_LX = 60,  EAR_RX = 260, EAR_TY = 0, EAR_BY = 18;
-// Outer triangle tip at top, base at FRAME_T level
 
 // --- Eyes ---
 static constexpr int EYE_LX     = 125, EYE_RX = 195, EYE_Y = 88;
@@ -111,31 +110,22 @@ struct ServoStep {
     int16_t  y;         // pitch delta from PITCH_BASELINE (ignored when rotateX)
     uint16_t speed;     // 0..1000 (for move() calls; ignored when rotateX)
     uint16_t dwellMs;   // ms to wait after issuing this step
-    bool     rotateX;   // true → x is rotation velocity, use rotateYaw(x)
+    bool     rotateX;   // true -> x is rotation velocity, use rotateYaw(x)
 };
 
-// --- IDLE: wide breathing sweeps with a slow rotation flourish every few cycles
-// The 360-degree yaw can sweep ±20 degrees comfortably; the step table does a
-// full left-to-right "looking around" motion with an occasional slow rotation
-// segment so the head explores the full range.
+// --- IDLE: wide breathing sweeps with a slow rotation flourish every cycle ---
 static const ServoStep PAT_IDLE[] = {
-    // Gentle sweep left -- use wider angles now
     { -200,  30, 120, 3000, false },   // look left + slight up, ~3s
     {    0,  20, 120, 2500, false },   // center, up
     {  200,  30, 120, 3000, false },   // look right + slight up, ~3s
     {    0,  20, 120, 2500, false },   // center, up
-    // Slow rotation flourish -- uses full 360 capability
     {  250,   0,   0, 2000, true  },   // rotate CW for 2s (velocity 250)
     {    0,   0,   0,  500, false },   // pause after spin
-    // Exhale: lower head slightly
-    {    0, -15, 100, 3000, false },   // center, slight down
+    {    0, -15, 100, 3000, false },   // center, slight down (exhale)
     { 0, 0, 0, 0, false }             // loop (~20s total cycle)
 };
 
-// --- THINKING: dramatic head tilt using full yaw and pitch range ---
-// The thinking pose should look decidedly different from idle -- extreme yaw
-// angles (50 degrees off-center) + high pitch (head tilted way up) reads
-// as "pondering something profound."
+// --- THINKING: dramatic head tilt ---
 static const ServoStep PAT_THINKING[] = {
     {  500, 180, 250, 3500, false },   // hard right + gaze way up (pitch 60+18=78deg)
     {    0, 200, 200, 1500, false },   // center, extremely up
@@ -145,17 +135,11 @@ static const ServoStep PAT_THINKING[] = {
 };
 
 // --- REPLYING: joyful spin dance + nod ---
-// The BSP rotation (PWM/velocity mode) gives smooth continuous spinning. We
-// alternate between a spin segment (CW, pause, CCW, pause) and a nodding
-// segment. The step machine handles the mode switch transparently: rotateYaw()
-// calls SwitchMode internally, and the next move() switches back.
 static const ServoStep PAT_REPLYING[] = {
-    // Spin segment -- joyful full rotation
     {  400,   0,   0, 1000, true  },   // spin CW at velocity 400 for 1s
-    {    0,   0,   0,  200, false },   // brief pause (position-mode park at 0)
+    {    0,   0,   0,  200, false },   // brief pause
     { -400,   0,   0, 1000, true  },   // spin CCW at velocity 400 for 1s
     {    0,   0,   0,  200, false },   // brief pause
-    // Nod segment
     {    0, 150, 300, 350, false },    // nod way up
     {    0, -20, 300, 350, false },    // nod down
     {    0, 150, 300, 350, false },
@@ -164,9 +148,7 @@ static const ServoStep PAT_REPLYING[] = {
     { 0, 0, 0, 0, false }
 };
 
-// --- ERROR: violent wide shake using the full speed and range ---
-// ±300 = ±30 degrees at speed 600 is aggressive but well within the 360-degree
-// servo's capability. Six fast swings make a clear "NO NO NO" head shake.
+// --- ERROR: violent wide shake ---
 static const ServoStep PAT_ERROR[] = {
     {  300,  30, 600, 180, false },    // throw head right + slight up
     { -300,  30, 600, 180, false },    // throw head left
@@ -196,6 +178,9 @@ static uint32_t g_lastLedMs    = 0;
 static uint8_t  g_ledPos       = 0;
 static bool     g_ledFlashOn   = false;
 
+// ---- Re-entrancy guard ------------------------------------------------------
+static bool g_inTurn = false;
+
 // ---- Text Overlay (shown in bottom band during REPLY / ERROR) ---------------
 static String g_overlayLine1;
 static String g_overlayLine2;
@@ -220,23 +205,20 @@ static int16_t clampedPitch(int16_t base, int16_t delta) {
 }
 
 // ---- Shared face base: frame + ears + nose + cheeks --------------------------
-// Called at the start of every face-draw function (after clearFaceArea).
 static void drawFaceBase(int offsetY) {
-    // --- Face frame (subtle rounded-rect border) ---
+    // Face frame
     M5.Display.fillRoundRect(FRAME_L, FRAME_T, FRAME_R - FRAME_L, FRAME_B - FRAME_T,
                              6, FACE_GREY);
     M5.Display.fillRoundRect(FRAME_L + 2, FRAME_T + 2, FRAME_R - FRAME_L - 4,
                              FRAME_B - FRAME_T - 4, 6, FACE_BG);
 
-    // --- Robot cat-ears ---
-    // Left ear: outer triangle (grey) + inner triangle (yellow)
+    // Robot cat-ears
     M5.Display.fillTriangle(EAR_LX, EAR_TY,
                             EAR_LX - 18, FRAME_T,
                             EAR_LX + 18, FRAME_T, FACE_GREY);
     M5.Display.fillTriangle(EAR_LX, EAR_TY + 3,
                             EAR_LX - 12, FRAME_T - 1,
                             EAR_LX + 12, FRAME_T - 1, FACE_YELLOW);
-    // Right ear
     M5.Display.fillTriangle(EAR_RX, EAR_TY,
                             EAR_RX - 18, FRAME_T,
                             EAR_RX + 18, FRAME_T, FACE_GREY);
@@ -244,32 +226,28 @@ static void drawFaceBase(int offsetY) {
                             EAR_RX - 12, FRAME_T - 1,
                             EAR_RX + 12, FRAME_T - 1, FACE_YELLOW);
 
-    // --- Nose (tiny triangle, centered) ---
+    // Nose
     M5.Display.fillTriangle(NOSE_X, NOSE_Y + offsetY,
                             NOSE_X - NOSE_W/2, NOSE_Y + NOSE_W + offsetY,
                             NOSE_X + NOSE_W/2, NOSE_Y + NOSE_W + offsetY,
                             FACE_PINK);
 
-    // --- Blush cheeks ---
+    // Blush cheeks
     M5.Display.fillCircle(CHEEK_LX, CHEEK_Y + offsetY, CHEEK_R, FACE_PINK);
     M5.Display.fillCircle(CHEEK_RX, CHEEK_Y + offsetY, CHEEK_R, FACE_PINK);
-    // Cheek highlights (tiny white dots)
     M5.Display.fillCircle(CHEEK_LX + 2, CHEEK_Y - 2 + offsetY, 2, FACE_WHITE);
     M5.Display.fillCircle(CHEEK_RX + 2, CHEEK_Y - 2 + offsetY, 2, FACE_WHITE);
 }
 
-// ---- Draw a single eye (left or right), with or without eyelid cover ----------
-// eyelidPct: 0.0 = fully open, 1.0 = fully closed
+// ---- Draw a single eye -------------------------------------------------------
 static void drawEye(int cx, int cy, int r, int px, int py, float eyelidPct) {
     if (eyelidPct > 1.0f) eyelidPct = 1.0f;
     if (eyelidPct < 0.0f) eyelidPct = 0.0f;
 
-    // Eye white
     M5.Display.fillCircle(cx, cy, r, FACE_WHITE);
-    // Outline
     M5.Display.drawCircle(cx, cy, r, FACE_BLACK);
 
-    // Upper eyelid line (small arc at top of eye)
+    // Lower eyelid accent (arc 200-340 CW passes through 270deg = bottom of eye)
     if (eyelidPct < 0.95f) {
         M5.Display.drawArc(cx, cy, r - 1, r, 200, 340, FACE_GREY);
     }
@@ -283,38 +261,29 @@ static void drawEye(int cx, int cy, int r, int px, int py, float eyelidPct) {
         }
     }
 
-    // Pupil (visible portion shrinks with eyelid)
     if (eyelidPct < 0.8f) {
         M5.Display.fillCircle(cx + px, cy + py, PUPIL_R, FACE_BLACK);
-        // Two highlights (anime-style catchlights)
         M5.Display.fillCircle(cx + px + 3, cy + py - 4, 3, FACE_WHITE);
         M5.Display.fillCircle(cx + px - 2, cy + py - 2, 2, FACE_WHITE);
     }
 }
 
-// ---------------------------------------------------------------------------
-//  IDLE face
-// ---------------------------------------------------------------------------
+// ---- Face Drawing Functions --------------------------------------------------
+
 static void drawIdleFace(float eyelidPct) {
     clearFaceArea();
     drawFaceBase(0);
     drawEye(EYE_LX, EYE_Y, EYE_R, 0, 0, eyelidPct);
     drawEye(EYE_RX, EYE_Y, EYE_R, 0, 0, eyelidPct);
-
-    // --- Smile mouth (wide crescent) ---
     M5.Display.fillArc(MOUTH_X, MOUTH_Y, 24, 12, 0, 180, FACE_WHITE);
     M5.Display.fillArc(MOUTH_X, MOUTH_Y, 18, 6, 0, 180, FACE_BG);
 }
 
-// ---------------------------------------------------------------------------
-//  THINKING face
-// ---------------------------------------------------------------------------
 static void drawThinkingFace(float bobY) {
     clearFaceArea();
     int by = (int)bobY;
     drawFaceBase(by);
 
-    // --- Eyebrows: thick, angled lines ---
     for (int dx = -1; dx <= 1; dx++) {
         M5.Display.drawLine(EYE_LX - 22, EYE_Y - 28 + by + dx,
                             EYE_LX + 10, EYE_Y - 38 + by + dx, FACE_WHITE);
@@ -322,16 +291,13 @@ static void drawThinkingFace(float bobY) {
                             EYE_RX + 22, EYE_Y - 28 + by + dx, FACE_WHITE);
     }
 
-    // --- Eyes: pupils shifted up-right (looking up/thinking) ---
     drawEye(EYE_LX, EYE_Y + by, EYE_R, 4, -6, 0.0f);
     drawEye(EYE_RX, EYE_Y + by, EYE_R, 4, -6, 0.0f);
 
-    // --- Pursed "thinking" mouth: small oval + two tiny vertical lines ---
     M5.Display.fillArc(MOUTH_X, MOUTH_Y + by, 5, 4, 0, 360, FACE_WHITE);
     M5.Display.drawLine(MOUTH_X - 8, MOUTH_Y - 7 + by, MOUTH_X - 8, MOUTH_Y - 2 + by, FACE_WHITE);
     M5.Display.drawLine(MOUTH_X + 8, MOUTH_Y - 7 + by, MOUTH_X + 8, MOUTH_Y - 2 + by, FACE_WHITE);
 
-    // --- Thought-bubble dots ---
     uint32_t ms = millis();
     int dotCycle = (int)(((ms - g_stateEntryMs) / 400) % 4);
     if (dotCycle >= 1) M5.Display.fillCircle(145, 28 + by, 5, FACE_CYAN);
@@ -339,21 +305,16 @@ static void drawThinkingFace(float bobY) {
     if (dotCycle >= 3) M5.Display.fillCircle(175, 28 + by, 5, FACE_CYAN);
 }
 
-// ---------------------------------------------------------------------------
-//  REPLYING face
-// ---------------------------------------------------------------------------
 static void drawReplyingFace(uint8_t mouthShape) {
     clearFaceArea();
     drawFaceBase(0);
 
-    // 5 mouth shapes for smoother talking animation
     static constexpr int M_W[5] = { 20, 15, 10, 12, 18 };
     static constexpr int M_H[5] = { 14, 10,  5,  7, 12 };
     int mw = M_W[mouthShape % 5];
     int mh = M_H[mouthShape % 5];
     int mb = (mouthShape == 0) ? -3 : (mouthShape == 2) ? 3 : (mouthShape == 4) ? -1 : 0;
 
-    // --- Eyes: large pupils + sparkle ---
     drawEye(EYE_LX, EYE_Y, EYE_R, 0, 0, 0.0f);
     M5.Display.fillCircle(EYE_LX, EYE_Y, 10, FACE_BLACK);
     M5.Display.fillCircle(EYE_LX + 3, EYE_Y - 4, 4, FACE_WHITE);
@@ -364,22 +325,16 @@ static void drawReplyingFace(uint8_t mouthShape) {
     M5.Display.fillCircle(EYE_RX + 3, EYE_Y - 4, 4, FACE_WHITE);
     M5.Display.fillCircle(EYE_RX - 4, EYE_Y - 5, 3, FACE_CYAN);
 
-    // --- Talking mouth ---
     M5.Display.fillArc(MOUTH_X, MOUTH_Y + mb, mw, mh, 0, 360, FACE_WHITE);
 }
 
-// ---------------------------------------------------------------------------
-//  ERROR face
-// ---------------------------------------------------------------------------
 static void drawErrorFace() {
     clearFaceArea();
     drawFaceBase(0);
 
-    // --- Red accent bars at upper corners ---
     M5.Display.fillRect(FRAME_L, FRAME_T, 30, 3, FACE_RED);
     M5.Display.fillRect(FRAME_R - 30, FRAME_T, 30, 3, FACE_RED);
 
-    // --- X-shaped eyes: double lines for thickness ---
     for (int d = -1; d <= 1; d++) {
         M5.Display.drawLine(EYE_LX - 16 + d, EYE_Y - 16,
                             EYE_LX + 16 + d, EYE_Y + 16, FACE_RED);
@@ -393,20 +348,16 @@ static void drawErrorFace() {
                             EYE_RX - 16 + d, EYE_Y + 16, FACE_RED);
     }
 
-    // --- Frown mouth ---
     M5.Display.fillArc(MOUTH_X, MOUTH_Y + 10, 22, 10, 180, 360, FACE_RED);
     M5.Display.fillArc(MOUTH_X, MOUTH_Y + 10, 14, 4, 180, 360, FACE_BG);
 
-    // --- Error blush (red tint) ---
     M5.Display.fillCircle(CHEEK_LX, CHEEK_Y, CHEEK_R, FACE_RED);
     M5.Display.fillCircle(CHEEK_RX, CHEEK_Y, CHEEK_R, FACE_RED);
 
-    // --- Sweat drops (sliding down) ---
     uint32_t ms = millis();
     float dropPhase = fmodf((float)(ms - g_stateEntryMs) / 600.0f, 1.0f);
     int dropY1 = 40 + (int)(dropPhase * 40.0f);
     int dropY2 = 40 + (int)(fmodf(dropPhase + 0.33f, 1.0f) * 40.0f);
-
     auto drawDrop = [](int x, int y) {
         M5.Display.fillTriangle(x, y, x - 5, y + 10, x + 5, y + 10, FACE_CYAN);
     };
@@ -439,12 +390,6 @@ static void setAgentState(AgentState next) {
     }
 }
 
-// ---- Servo step machine ----------------------------------------------------
-// For position steps: calls Motion.move(x, pitch, speed).  The BSP handles
-// servo mode switching internally -- if the previous step was a rotateYaw()
-// (PWM/velocity mode), the next move() automatically switches back to position
-// mode via SwitchMode() inside the ScsServo class.
-
 static void stepServoPattern(AgentState state) {
     const ServoStep* pat = PATTERNS[(int)state];
     if (!pat) return;
@@ -456,26 +401,20 @@ static void stepServoPattern(AgentState state) {
 
     const ServoStep& s = pat[g_servoStepIdx];
     if (s.dwellMs == 0 && s.speed == 0 && !s.rotateX) {
-        // Sentinel: loop
         g_servoStepIdx = 0;
         g_lastServoMs  = 0;
         return;
     }
 
     if (s.rotateX) {
-        // Rotation step: switch to PWM/velocity mode and rotate continuously
-        // x is the velocity (-1000..+1000); BSP clamps and maps internally.
         M5StackChan.Motion.rotateYaw(s.x);
     } else {
-        // Position step: standard move command
         M5StackChan.Motion.move(s.x, clampedPitch(PITCH_BASELINE, s.y), s.speed);
     }
 
     g_lastServoMs = now;
     g_servoStepIdx++;
 }
-
-// ---- LED step machine ------------------------------------------------------
 
 static void stepLedPattern(AgentState state) {
     uint32_t now = millis();
@@ -533,8 +472,6 @@ static void stepLedPattern(AgentState state) {
     }
 }
 
-// ---- Blink engine: returns eyelid position 0.0=open .. 1.0=closed ----------
-
 static float computeBlink() {
     uint32_t now = millis();
 
@@ -561,8 +498,6 @@ static float computeBlink() {
 
     return 0.0f;
 }
-
-// ---- Face drawing dispatcher -------------------------------------------------
 
 static void drawRobotFace(AgentState state) {
     uint32_t now = millis();
@@ -594,8 +529,6 @@ static void drawRobotFace(AgentState state) {
     }
     }
 }
-
-// ---- Master tick ------------------------------------------------------------
 
 static void animateAll(AgentState state) {
     drawRobotFace(state);
@@ -667,7 +600,11 @@ static String readProtocolLine(uint32_t timeoutMs) {
     return "";
 }
 
+// Guarded against re-entrancy: only one turn can be in-flight at a time.
 static void sendTurn(const char* prompt) {
+    if (g_inTurn) return;
+    g_inTurn = true;
+
     setAgentState(STATE_THINKING);
     showLines("思考中…", nullptr);
     beep();
@@ -698,6 +635,16 @@ static void sendTurn(const char* prompt) {
         while (millis() < endTime) { M5StackChan.update(); animateAll(g_agentState); delay(10); }
     }
 
+    showPrompt();
+    g_inTurn = false;
+}
+
+static void nextPreset() {
+    g_promptIndex = (g_promptIndex + 1) % NUM_PROMPTS;
+    showPrompt();
+}
+static void prevPreset() {
+    g_promptIndex = (g_promptIndex - 1 + NUM_PROMPTS) % NUM_PROMPTS;
     showPrompt();
 }
 
@@ -733,13 +680,15 @@ void loop() {
     M5StackChan.update();
     animateAll(g_agentState);
 
+    // -- Primary: screen touch --
     auto touch = M5.Touch.getDetail();
     if (touch.wasPressed()) {
         sendTurn(PROMPTS[g_promptIndex]);
         g_promptIndex = (g_promptIndex + 1) % NUM_PROMPTS;
-        showPrompt();
+        // sendTurn() always ends with showPrompt(); no need to call it again.
     }
 
+    // -- Bonus: body 3-zone touch --
     const auto& intensities = M5StackChan.TouchSensor.getIntensities();
     static bool wasTouched[3] = {false, false, false};
     for (int z = 0; z < 3; z++) {
@@ -748,26 +697,18 @@ void loop() {
             if (z == 1) {
                 sendTurn(PROMPTS[g_promptIndex]);
                 g_promptIndex = (g_promptIndex + 1) % NUM_PROMPTS;
-                showPrompt();
             } else if (z == 2) {
-                g_promptIndex = (g_promptIndex + 1) % NUM_PROMPTS;
-                showPrompt();
-            } else {
-                g_promptIndex = (g_promptIndex - 1 + NUM_PROMPTS) % NUM_PROMPTS;
-                showPrompt();
+                nextPreset();
+            } else {  // z == 0
+                prevPreset();
             }
         }
         wasTouched[z] = nowTouched;
     }
 
-    if (M5StackChan.TouchSensor.wasSwipedForward()) {
-        g_promptIndex = (g_promptIndex + 1) % NUM_PROMPTS;
-        showPrompt();
-    }
-    if (M5StackChan.TouchSensor.wasSwipedBackward()) {
-        g_promptIndex = (g_promptIndex - 1 + NUM_PROMPTS) % NUM_PROMPTS;
-        showPrompt();
-    }
+    // -- Bonus: swipe gestures --
+    if (M5StackChan.TouchSensor.wasSwipedForward())  { nextPreset(); }
+    if (M5StackChan.TouchSensor.wasSwipedBackward()) { prevPreset(); }
 
     delay(10);
 }
