@@ -252,19 +252,22 @@ static void drawEye(int cx, int cy, int r, int px, int py, float eyelidPct) {
         M5.Display.drawArc(cx, cy, r - 1, r, 200, 340, FACE_GREY);
     }
 
-    if (eyelidPct > 0.0f) {
-        int coverH = (int)((float)(r * 2 + 6) * eyelidPct);
-        if (coverH > 0) {
-            M5.Display.fillRect(cx - r - 3, cy - r - 3, r * 2 + 6, coverH, FACE_BG);
-            M5.Display.drawCircle(cx, cy, r, FACE_BLACK);
-            M5.Display.drawArc(cx, cy, r - 1, r, 200, 340, FACE_GREY);
-        }
-    }
-
+    // Pupil + catchlights (drawn BEFORE eyelid cover so blink overlays them)
     if (eyelidPct < 0.8f) {
         M5.Display.fillCircle(cx + px, cy + py, PUPIL_R, FACE_BLACK);
         M5.Display.fillCircle(cx + px + 3, cy + py - 4, 3, FACE_WHITE);
         M5.Display.fillCircle(cx + px - 2, cy + py - 2, 2, FACE_WHITE);
+    }
+
+    // Eyelid cover rect -- must be last so it overlays pupil/catchlights
+    if (eyelidPct > 0.0f) {
+        int coverH = (int)((float)(r * 2 + 6) * eyelidPct);
+        if (coverH > 0) {
+            M5.Display.fillRect(cx - r - 3, cy - r - 3, r * 2 + 6, coverH, FACE_BG);
+            // Redraw outline + eyelid accent over the cover so they stay visible
+            M5.Display.drawCircle(cx, cy, r, FACE_BLACK);
+            M5.Display.drawArc(cx, cy, r - 1, r, 200, 340, FACE_GREY);
+        }
     }
 }
 
@@ -275,8 +278,8 @@ static void drawIdleFace(float eyelidPct) {
     drawFaceBase(0);
     drawEye(EYE_LX, EYE_Y, EYE_R, 0, 0, eyelidPct);
     drawEye(EYE_RX, EYE_Y, EYE_R, 0, 0, eyelidPct);
-    M5.Display.fillArc(MOUTH_X, MOUTH_Y, 24, 12, 0, 180, FACE_WHITE);
-    M5.Display.fillArc(MOUTH_X, MOUTH_Y, 18, 6, 0, 180, FACE_BG);
+    M5.Display.fillArc(MOUTH_X, MOUTH_Y, 28, 15, 0, 180, FACE_WHITE);
+    M5.Display.fillArc(MOUTH_X, MOUTH_Y, 20, 9, 0, 180, FACE_BG);
 }
 
 static void drawThinkingFace(float bobY) {
@@ -294,7 +297,7 @@ static void drawThinkingFace(float bobY) {
     drawEye(EYE_LX, EYE_Y + by, EYE_R, 4, -6, 0.0f);
     drawEye(EYE_RX, EYE_Y + by, EYE_R, 4, -6, 0.0f);
 
-    M5.Display.fillArc(MOUTH_X, MOUTH_Y + by, 5, 4, 0, 360, FACE_WHITE);
+    M5.Display.fillCircle(MOUTH_X, MOUTH_Y + by, 5, FACE_WHITE);
     M5.Display.drawLine(MOUTH_X - 8, MOUTH_Y - 7 + by, MOUTH_X - 8, MOUTH_Y - 2 + by, FACE_WHITE);
     M5.Display.drawLine(MOUTH_X + 8, MOUTH_Y - 7 + by, MOUTH_X + 8, MOUTH_Y - 2 + by, FACE_WHITE);
 
@@ -309,10 +312,9 @@ static void drawReplyingFace(uint8_t mouthShape) {
     clearFaceArea();
     drawFaceBase(0);
 
-    static constexpr int M_W[5] = { 20, 15, 10, 12, 18 };
-    static constexpr int M_H[5] = { 14, 10,  5,  7, 12 };
-    int mw = M_W[mouthShape % 5];
-    int mh = M_H[mouthShape % 5];
+    // Talking mouth: 5 filled circles of varying radius for open/closed effect
+    static constexpr int M_R[5] = { 20, 15, 9, 12, 18 };
+    int mr = M_R[mouthShape % 5];
     int mb = (mouthShape == 0) ? -3 : (mouthShape == 2) ? 3 : (mouthShape == 4) ? -1 : 0;
 
     drawEye(EYE_LX, EYE_Y, EYE_R, 0, 0, 0.0f);
@@ -325,7 +327,7 @@ static void drawReplyingFace(uint8_t mouthShape) {
     M5.Display.fillCircle(EYE_RX + 3, EYE_Y - 4, 4, FACE_WHITE);
     M5.Display.fillCircle(EYE_RX - 4, EYE_Y - 5, 3, FACE_CYAN);
 
-    M5.Display.fillArc(MOUTH_X, MOUTH_Y + mb, mw, mh, 0, 360, FACE_WHITE);
+    M5.Display.fillCircle(MOUTH_X, MOUTH_Y + mb, mr, FACE_WHITE);
 }
 
 static void drawErrorFace() {
