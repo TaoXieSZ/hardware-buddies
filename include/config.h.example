@@ -1,0 +1,10 @@
+#pragma once
+
+#define WIFI_SSID      "YOUR_WIFI"
+#define WIFI_PASS      "YOUR_PASS"
+
+// dispatch voice gateway (OpenAI-compatible). Host = the Mac running dispatch.
+#define GATEWAY_HOST   "192.168.5.155"
+#define GATEWAY_PORT   60630
+#define GATEWAY_PATH   "/v1/voice/chat/completions"
+#define GATEWAY_TOKEN  "YOUR_VOICE_GATEWAY_TOKEN"   // Bearer, = ConvoAI custom-LLM api_key
