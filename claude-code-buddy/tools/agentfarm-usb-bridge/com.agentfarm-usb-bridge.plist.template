@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentfarm-usb-bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__VENV_PYTHON__</string>
+    <string>__BRIDGE_PY__</string>
+    <string>--port</string>
+    <string>__SERIAL_PORT__</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/agentfarm-usb-bridge.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/agentfarm-usb-bridge.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENTFARM_USB_BRIDGE_LOG</key>
+    <string>__LOG_DIR__/agentfarm-usb-bridge.log</string>
+  </dict>
+</dict>
+</plist>
