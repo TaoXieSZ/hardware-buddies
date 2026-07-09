@@ -32,7 +32,24 @@ tools/
   cursor-bridge/        # ~200 LOC adapter: Cursor apply_event + last_seen
    bridge.py            # tracking + token accumulation + stale reaper +
                         # 2s keepalive + RTC sync on connect
+  codex-bridge/         # Codex CLI → cc-bridge (no BLE, push-only ext_sessions).
+   bridge.py            # cmux agent.kind codex detection + cwd-join focus.
+   omx-plugin/          # Codex auto-drive OMX hook plugin.
+  opencode-bridge/      # OpenCode CLI → cc-bridge (no BLE, push-only).
+   bridge.py            # cmux agent.kind + tty fallback (manual opencode panes)
+                        # discovery; pushes ext_sessions agent:"opencode".
+   cardputer-permission.mjs  # OpenCode permission.asked → cc-bridge RPC.
+   install.sh           # venv + launchd plist + opencode.json plugin repoint.
+  agentfarm-usb-bridge/ # Agent Farm → Tab5 USB-CDC serial (no BLE, no buddy_core).
+   bridge.py            # polls trigger-cursor admin API, streams JSON lines to P4.
+   install.sh           # venv + launchd plist (auto-detects Tab5 by serial 80:F1:B2:).
 ```
+
+> **Single source of truth:** the standalone clone at
+> `~/OpenSourceProjects/claude-desktop-buddy/` has been RETIRED (2026-07-09,
+> openspec change `consolidate-standalone-buddy`). All bridges now run from
+> this monorepo path. The launchd plists in `~/Library/LaunchAgents/` point
+> here; do not re-point them at the old standalone location.
 
 PlatformIO envs — two firmware targets:
 - **Plus2/Plus** (compile from `src/*.cpp`): `m5stickc-plus2`,

@@ -12,4 +12,4 @@
 
 ## 3. Commit
 
-- [ ] 3.1 One commit: `feat(cardputer-adv): keep backlight on while an agent is running or waiting`, referencing the level-based `agentActive` condition
+- [x] 3.1 One commit: `feat(cardputer-adv): keep backlight on while an agent is running or waiting`, referencing the level-based `agentActive` condition
