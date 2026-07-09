@@ -304,6 +304,9 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
         err = (ev.get("error") or ev.get("message") or "")[:60]
         state.msg = f"failed: {tool}"
         state.add_entry(f"✗ {tool} {err}".rstrip())
+        # 工具失败 = 本轮结束，清掉残留的待审批状态。PermissionRequest 路径设的
+        # waiting/prompt 不会自己清，否则固件审批面板会一直盖住 error 动画。
+        _clear_waiting(state)
         changed = True
 
     elif name == "hud":
@@ -672,6 +675,7 @@ if __name__ == "__main__":
             # (openspec cardputer-codex-sessions)
             surface = (_cmux.focus_by_checkpoint(sid)
                        or _cmux.focus_by_cursor_sid(sid)
+                       or _cmux.focus_by_opencode_sid(sid)
                        or _cmux.focus_by_codex_cwd(sid))
             if surface:
                 log.info("selectSession %s → focused surface %s", sid, surface)

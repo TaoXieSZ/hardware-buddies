@@ -805,6 +805,78 @@ class CmuxClient:
             return None
         return None
 
+    def focus_by_opencode_sid(self, sid: str) -> Optional[str]:
+        """Focus the cmux surface running the OpenCode session with agent.sessionId == sid.
+
+        Unlike codex (cwd-based join) or cursor (title-based join), opencode panes
+        carry agent.sessionId in the cmux session file — same as Claude's
+        checkpoint_id. So we match by sessionId directly. Falls back to title-based
+        surface.list scan if the session file is unreadable.
+        """
+        sid = (sid or "").strip()
+        if not sid:
+            return None
+        # Primary: cmux session file (terminal.agent.kind == "opencode")
+        try:
+            with open(CMUX_SESSION_JSON, encoding="utf-8") as f:
+                doc = json.load(f)
+            stack = [doc]
+            while stack:
+                o = stack.pop()
+                if isinstance(o, dict):
+                    ag = (o.get("terminal") or {}).get("agent") or {}
+                    if ag.get("kind") == "opencode" and ag.get("sessionId") == sid:
+                        surface = o.get("id")
+                        if surface:
+                            return surface
+                    stack.extend(o.values())
+                elif isinstance(o, list):
+                    stack.extend(o)
+        except Exception:
+            pass
+        # Fallback: title-based surface.list scan (pane titles may contain the sid prefix).
+        try:
+            wrc, wout, _ = self.run(self._rpc_argv("window.list", {}))
+            wins = ([w.get("id", "") for w in json.loads(wout).get("windows", [])
+                     if w.get("id")] if wrc == 0 else []) or [""]
+            for win in wins:
+                params = {"window_id": win} if win else {}
+                wsrc, wsout, _ = self.run(self._rpc_argv("workspace.list", params))
+                if wsrc != 0:
+                    continue
+                for ws in json.loads(wsout).get("workspaces", []):
+                    ssrc, sout, _ = self.run(
+                        self._rpc_argv("surface.list", {"workspace": ws.get("id", "")}))
+                    if ssrc != 0:
+                        continue
+                    for s in json.loads(sout).get("surfaces", []):
+                        title = s.get("title") or ""
+                        if sid[:12] in title:  # ses_XXXXXXXXXXXX prefix match
+                            return s.get("id") or None
+        except Exception:
+            return None
+        return None
+
+    def _opencode_surface_for_sid(self, sid: str) -> Optional[str]:
+        """surface_id for opencode pane with agent.sessionId == sid (no focus side-effect)."""
+        try:
+            with open(CMUX_SESSION_JSON, encoding="utf-8") as f:
+                doc = json.load(f)
+            stack = [doc]
+            while stack:
+                o = stack.pop()
+                if isinstance(o, dict):
+                    ag = (o.get("terminal") or {}).get("agent") or {}
+                    if ag.get("kind") == "opencode" and ag.get("sessionId") == sid:
+                        if o.get("id"):
+                            return o["id"]
+                    stack.extend(o.values())
+                elif isinstance(o, list):
+                    stack.extend(o)
+        except Exception:
+            pass
+        return None
+
     def _app_bundle(self) -> Optional[str]:
         """The .app bundle for self.binary (…/cmux.app/Contents/…/cmux → …/cmux.app)."""
         marker = "/Contents/"
