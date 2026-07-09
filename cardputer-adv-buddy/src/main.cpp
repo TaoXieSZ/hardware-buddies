@@ -513,10 +513,15 @@ void loop() {
     static uint32_t g_lastKeyMs = 0;
     if (keyEvent) g_lastKeyMs = now;
     // 录音进行中也算活动：屏保持亮，不遮 REC 指示（openspec change cardputer-voice-notes）。
+    // agent 活动也算活动（openspec change wake-on-agent-active）：有 session 在跑或在等
+    // （审批/问答）→ 屏保持亮，别让用户错过 busy 动画和审批面板。电平语义而非边沿：
+    // 只要 running/waiting > 0 就不进入息屏；全部 idle 后恢复正常 60s 息屏。注意不能用
+    // cclink::changed()（每心跳为真会永不熄屏）——用 bs.running/bs.waiting 计数才安全。
+    bool agentActive = bs.running > 0 || bs.waiting > 0;
     bool activity = keyEvent || g_motion.stillMs() < SCREEN_OFF_MS || recorder::isRecording()
-                    || snapNotes || snapNotebook || recorder::isPlaying();
+                    || snapNotes || snapNotebook || recorder::isPlaying() || agentActive;
     if (activity) {
-        screenOn();                                  // 息屏态下任一物理活动 → 立即恢复背光（幂等）
+        screenOn();                                  // 息屏态下任一活动 → 立即恢复背光（幂等）
     } else if (g_motion.stillMs() > SCREEN_OFF_MS && (now - g_lastKeyMs) > SCREEN_OFF_MS) {
         screenOff();                                 // 既无运动又无按键达阈值 → 熄屏
     }
