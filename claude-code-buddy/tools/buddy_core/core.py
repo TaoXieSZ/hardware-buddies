@@ -192,23 +192,28 @@ class BuddyState:
                 if len(sess) >= 16:
                     break
             p["sessions"] = sess
-        # 合并外部 agent（cursor-bridge 推来的 ext_sessions）。本机会话默认 agent=claude
-        # （不带字段，固件视缺省为 claude）；ext 每条标自己的 agent。超过 EXT_STALE_SEC
-        # 没更新的快照丢弃（cursor-bridge 挂了不留幽灵）。全表共用 16 上限。
+        # 合并外部 agent（cursor/codex/opencode bridge 推来的 ext_sessions）。
+        # 本机会话默认 agent=claude（不带字段，固件视缺省为 claude）；ext 每条标自己的 agent。
+        # 超过 EXT_STALE_SEC 没更新的快照丢弃（bridge 挂了不留幽灵）。
+        # ── 槽位分配：ext sessions 先占，剩余给本地 Claude ──
+        # 避免本地 16 slots 全被 Claude 占满 → ext 全被挤出（常见于多 agent 场景）。
         if self.ext_sessions:
             now = time.monotonic()
-            merged = p.get("sessions", [])
+            # 先收集所有有效的 ext sessions
+            ext_rows = []
             for _agent, _snap in self.ext_sessions.items():
                 if now - _snap.get("ts", 0) > self.EXT_STALE_SEC:
                     continue
                 for _row in _snap.get("sessions", []):
-                    if len(merged) >= 16:
-                        break
                     r = dict(_row)
                     r["agent"] = _agent
-                    merged.append(r)
-            if merged:
-                p["sessions"] = merged
+                    ext_rows.append(r)
+            # ext 先占槽（上限 16），剩余给本地
+            merged = ext_rows[:16]
+            room = 16 - len(merged)
+            if room > 0 and p.get("sessions"):
+                merged = merged + p["sessions"][:room]
+            p["sessions"] = merged
         # 待应答的 AskUserQuestion（cardputer question 应答器）。字段紧凑 + 截断防固件
         # 行缓冲溢出；固件回送 option id，cc-bridge 再 id→label 调 feed.question.reply。
         if self.pending_question:
