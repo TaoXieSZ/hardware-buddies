@@ -265,8 +265,10 @@ first authorized dispatch.
 - **[Home-LAN device endpoint is exposed]** → Require a high-entropy bearer,
   store it in NVS, cap request size, and do not expose the device or gateway to
   the public Internet.
-- **[Primary Mac or home IP changes]** → Reserve stable DHCP addresses for the
-  Mac and Tab5; show disconnected state without blocking the local UI.
+- **[Primary Mac or home IP changes]** → Keep the existing DHCP configuration
+  unchanged; read the current Tab5 address with `wifi --status`, update the
+  local `.env.tab5`, restart only the gateway, and keep the UI usable while
+  disconnected.
 - **[Lifecycle events are ephemeral]** → Treat the in-process feed as status,
   not an audit log; retain bounded device history and provide an explicit
   refresh path for current state.
@@ -312,8 +314,9 @@ Rollback is layered:
 
 - Should the first production touch action merely open/status the terminal, or
   submit one fixed `tab5-operator` prompt?
-- Which stable Primary-Mac LAN address should be reserved for the device Base
-  URL?
+- Resolved: do not alter router or device network settings solely for this
+  integration; DHCP address recovery is an operational step, not a deployment
+  gate.
 - Should the landscape/PPA extension be proposed upstream separately from the
   ST7121 board-support PR?
 - Is on-device microphone input a later extension of this terminal or a

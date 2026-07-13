@@ -21,7 +21,7 @@ Tab5 上的 SSH 终端固件（见 `docs/tab5-ssh-terminal-runbook.md`；SSH 工
 | esp-claw 源码 | `/Users/txie/OpenSourceProjects/esp-claw` |
 | 用的板配置 | **`m5stack_tab5_st7121`**（自建变体，见 §3） |
 | SoftAP（配网热点） | `esp-claw-214601`（无密码）@ `192.168.4.1` |
-| STA IP（家里 Wi-Fi，DHCP） | `192.168.0.107`（可能变，建议路由器按 MAC 绑静态） |
+| STA IP（家里 Wi-Fi，DHCP） | `192.168.0.102`（当前值，允许变化） |
 | LLM provider | DeepSeek |
 
 ---
@@ -227,8 +227,9 @@ npm run tab5-local-gateway:pm2:stop
 - Tab5 C6 Wi-Fi MAC：`58:e6:c5:21:46:00`
 - P4 USB/JTAG MAC：`80:f1:b2:d1:51:7d`
 
-路由器应按 **C6 Wi-Fi MAC** 固定 Tab5 IP；不是按 P4 MAC。IP 漂移后先从串口
-`wifi --status` 读取 `sta_ip`，再更新 `TAB5_DEVICE_EVENT_URL`。
+本集成刻意保持现有 DHCP/Wi-Fi 配置，不要求修改路由器，也不占用 USB 作为
+常驻数据通道。IP 漂移后从串口 `wifi --status` 读取 `sta_ip`，更新
+`.env.tab5` 中的 `TAB5_DEVICE_EVENT_URL`，再只重启 `tab5-local-gateway`。
 `esp-claw.local` 在本机仍无法解析。
 
 ### 7.4 已验证证据
@@ -275,5 +276,4 @@ idf.py -p /dev/cu.usbmodem1401 flash
 
 - [ ] `m5stack_tab5_st7121` 变体值得给上游 espressif/esp-claw 提 PR（官方目前只支持老批次 Tab5）。
       分支已在本地 `feat/m5stack-tab5-st7121-panel`，未 push。
-- [ ] 路由器按 C6 Wi-Fi MAC `58:e6:c5:21:46:00` 绑定静态 IP。
 - [ ] 若日后想回 SSH 终端固件：见 `docs/tab5-ssh-terminal-runbook.md`。

@@ -57,7 +57,7 @@
 
 ## 7. Enable fixed-definition chat
 
-- [ ] 7.1 Reserve stable home-LAN addresses for the Primary Mac and Tab5 and document the chosen gateway Base URL
+- [x] 7.1 Keep the existing DHCP/Wi-Fi configuration unchanged and document how to recover when either LAN address changes
 - [x] 7.2 Configure ESP-Claw's OpenAI-compatible provider to use the gateway with the device-facing token
 - [x] 7.3 Explicitly enable LAN binding and chat only after bearer, prompt-size, concurrency, generic-error, and fixed-definition checks pass
 - [x] 7.4 Confirm request-supplied model, definition, dynamic flag, or session selector cannot escape `tab5-operator`

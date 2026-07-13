@@ -27,17 +27,14 @@ The user explicitly authorized implementation edits in:
 - Boot log reported logical 1280×720 and physical 720×1280.
 - User confirmed the screen is landscape and upright with USB on the left.
 
-### Missing evidence
+### Final evidence
 
-- Host tests for rectangle mapping, clipping, stride, bounds, and in-place
-  rejection.
-- Physical four-corner/center/edge touch and horizontal/vertical drag tests.
-- LVGL partial-flush and Lua full/dirty-rectangle runtime evidence.
-- Repeated animation and display owner-switch stress evidence.
-- A proven portrait rollback binary or a rollback/reflash drill.
-
-The implementation is therefore functionally promising but not yet accepted
-against the complete `tab5-esp-claw-landscape` specification.
+- Host geometry tests cover mapping, clipping, stride, bounds, and framebuffer
+  overlap.
+- Physical touch passed all corners, center, edges, and drag direction.
+- LVGL partial refresh, Lua dirty/full drawing, display-owner switching, and
+  competing Lua display ownership were verified on the device.
+- The known portrait image at `c182a77` remains the documented rollback.
 
 ## Current apply progress
 
@@ -47,19 +44,19 @@ against the complete `tab5-esp-claw-landscape` specification.
   geometry remained correct.
 - Physical touch acceptance hit TL/TR/BL/BR/C and recorded a positive
   left-to-right drag delta.
-- Gateway event forwarding now sends the sanitized event as the direct JSON
-  body, and a subprocess test proves SIGTERM closes both listener and SSE.
+- The final local bare-Dispatcher gateway uses isolated `config.tab5.yaml` and
+  `.env.tab5`, sends sanitized events directly, and exits cleanly on SIGTERM.
 - Lua HTTP now supports `poll(timeout_ms)`, backward-compatible
   `serve_forever()`, and native NVS-backed bearer gating before body reads.
-- The Agent Farm Skill and initial two-column Lua terminal are implemented but
-  not yet flashed or physically accepted.
-
-### Blocker
-
-The Tab5 USB-Serial-JTAG device stopped enumerating after the latest test run.
-No `/dev/cu.usbmodem*` port is currently present, so the native bearer gate,
-NVS masking, packaged terminal, and cooperative HTTP/LVGL loop cannot be
-flashed or accepted until the device is reconnected.
+- The Agent Farm Skill, two-column terminal, automatic boot job, native bearer
+  gate, NVS masking, bounded history, persistent error reaction, and
+  concurrent-task fallback were flashed and physically accepted.
+- One owner-authorized device Web Chat completed the full path and returned
+  `WEBCHAT_OK`; usage was attributed to the fixed `tab5-operator`.
+- Independent reviews approved the final ESP-Claw and Agent Farm diffs.
+- The existing DHCP/Wi-Fi configuration is intentionally unchanged. Address
+  drift is recovered by reading `wifi --status`, updating `.env.tab5`, and
+  restarting only the gateway.
 
 ### Thermal regression resolved
 
