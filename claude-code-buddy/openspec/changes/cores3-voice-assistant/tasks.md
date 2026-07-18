@@ -25,12 +25,15 @@
 
 ## 3. 音频链路（先本地闭环，不接云）
 
-- [ ] 3.1 抄 M5Unified CoreS3 mic 示例 verbatim：PTT 按住触摸屏采集 16 kHz mono PCM，
-      松开结束；串口打印采样统计验证
-- [ ] 3.2 Mic/Speaker 半双工切换封装（Speaker.end→Mic.begin 与反向），实测无爆音/卡死
-- [ ] 3.3 下行播放：基于 `audio_ringbuf.h` + `playRaw` 模式实现 24 kHz PCM 流式播放
-      （PSRAM 缓冲），用本地生成的测试 PCM 验证
-- [ ] 3.4 回环 demo：录 3 秒 → 重采样/直接以 16 kHz 播回，验证整条本地音频链
+- [x] 3.1 抄 M5Unified CoreS3 mic 示例 verbatim：PTT 按住触摸屏采集 16 kHz mono PCM，
+      松开结束；串口打印采样统计验证（教训：record() 必须一块/tick，贪心循环会阻塞
+      loop 饿死松手检测——见 audio_io.cpp 注释）
+- [x] 3.2 Mic/Speaker 半双工切换封装（Speaker.end→Mic.begin 与反向），实测无爆音/卡死
+      （切换时一行良性 I2S uninstall 日志，Microphone.ino 同款）
+- [x] 3.3 下行播放：playRaw 2 槽队列照抄 audio_play.cpp；缓冲改 PSRAM 线性双指针
+      （云端突发下发会冲掉 overwrite-oldest ring，偏差理由见 audio_io.h 注释）
+- [x] 3.4 回环 demo 真机验证（2026-07-18）：1.64s / 3.06s 两轮录放，松手即停，
+      时长与按住一致，回放清晰（音量夹逼 ≥96 运行时生效）
 
 ## 4. Realtime WebSocket 客户端
 
