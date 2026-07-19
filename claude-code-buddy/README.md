@@ -226,7 +226,8 @@ prompt window only (privacy + bounds the I²C-bus side effect).
 
 同一台 CoreS3 的**另一个独立产品**：刷这个 env 后 StackChan 变成直连阿里云百炼
 `qwen-audio-3.0-realtime-flash` 的中文语音桌宠（音色 longpaopao_v3.6，萌系人设
-"小抓"）。**不依赖 Mac / daemon / BLE**，只要 2.4G WiFi。
+"小咪"，屏上是矢量绘制的黑白美短猫脸）。**不依赖 Mac / daemon / BLE**，只要
+2.4G WiFi。
 
 交互：摸屏唤醒（懒连接，~1s 就绪）→ **按住屏幕说话，松开听回答**（松手→首声
 1.2-1.9s，字幕同步滚回复文本）→ 空闲 5 分钟自动断开打盹。

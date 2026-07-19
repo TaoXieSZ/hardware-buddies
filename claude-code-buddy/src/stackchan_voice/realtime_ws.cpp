@@ -13,11 +13,11 @@ constexpr const char* HOST = "dashscope.aliyuncs.com";
 constexpr const char* PATH =
     "/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash";
 
-// 人设定稿（任务 1.4，用户 2026-07-18 拍板；音色 longpaopao_v3.6）。
+// 人设定稿（音色 longpaopao_v3.6 用户 2026-07-18 拍板；2026-07-19 改名小咪）。
 // 与 tools/voice-prototype/talk_once.py 的 INSTRUCTIONS 保持一致。
 constexpr const char* VOICE = "longpaopao_v3.6";
 constexpr const char* INSTRUCTIONS =
-    "你是小抓，一只住在主人桌面上的黑白美短小猫桌宠（StackChan 机器人）。"
+    "你是小咪，一只住在主人桌面上的黑白美短小猫桌宠（StackChan 机器人）。"
     "性格活泼粘人，说话口语化、偶尔卖萌，中文回答。"
     "硬性要求：每次回答不超过 3 句话，不要列清单，不要长篇大论。";
 

@@ -1,8 +1,9 @@
 // StackChan 语音助手固件入口（openspec change cores3-voice-assistant）。
 //
 // 独立产品：CoreS3 直连 DashScope Realtime (qwen-audio-3.0-realtime-flash)，
-// PTT 按住说话。本文件替代 buddy 的 src/stackchan/main.cpp（无 BLE 桥），
-// 复用 character_chan/motion/settings/sound + wifi_stream 的 wifiEnsureUp。
+// PTT 按住说话，屏上是矢量猫脸"小咪"（cat_face.cpp，无 GIF/LittleFS 依赖）。
+// 本文件替代 buddy 的 src/stackchan/main.cpp（无 BLE 桥），复用 motion/
+// settings + wifi_stream 的 wifiEnsureUp。
 //
 // 会话状态机（spec cores3-voice-assistant）：
 //   SLEEP --touch--> CONNECTING --session.updated--> READY --hold--> LISTENING
@@ -15,12 +16,12 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 
-#include "../stackchan/character_chan.h"
+#include "../stackchan/character_chan.h"   // 仅用 CharState 枚举（motion 同套）
 #include "../stackchan/motion.h"
 #include "../stackchan/settings.h"
-#include "../stackchan/sound.h"
 #include "../stackchan/wifi_stream.h"
 #include "audio_io.h"
+#include "cat_face.h"
 #include "realtime_ws.h"
 
 #ifndef STACKCHAN_DASHSCOPE_KEY
@@ -51,9 +52,9 @@ char s_subtitle[384];
 size_t s_subtitle_len = 0;
 
 void setFace(uint8_t char_state, const char* subtitle) {
-  characterSetState(char_state);
+  catFaceSetState(char_state);
   motionSetState(char_state);
-  if (subtitle) characterSetSubtitle(subtitle);
+  if (subtitle) catFaceSetSubtitle(subtitle);
 }
 
 bool touchPressed() {
@@ -86,7 +87,7 @@ void onTranscript(const char* utf8, size_t len) {
   memcpy(s_subtitle + s_subtitle_len, utf8, len);
   s_subtitle_len += len;
   s_subtitle[s_subtitle_len] = 0;
-  characterSetSubtitle(s_subtitle);
+  catFaceSetSubtitle(s_subtitle);
 }
 void onDone() {
   s_ev_done = true;
@@ -111,18 +112,9 @@ void setup() {
 
   settingsInit();
 
-  const char* char_name = settingsGetCharName();
-  if (!char_name || !*char_name) {
-#ifdef BUDDY_DEFAULT_CHAR
-    char_name = BUDDY_DEFAULT_CHAR;
-#else
-    char_name = nullptr;
-#endif
-  }
-  characterInit(char_name);
-  characterSetVoiceMode(true);
+  // 小咪的脸：纯矢量绘制，不依赖 GIF 角色包/LittleFS（uploadfs 都免了）。
+  catFaceInit();
 
-  soundInit();
   // NVS 音量是 buddy 的历史值（实测低到 12/255），语音回放下限夹到 96。
   // 只改 RAM 不写 NVS，不污染 buddy 的设置。
   if (M5.Speaker.getVolume() < 96) M5.Speaker.setVolume(96);
@@ -147,9 +139,10 @@ void setup() {
 
 void loop() {
   M5.update();
-  characterTick();
+  catFaceTick();
   motionTick();
   rtLoop();
+  if (s_state == ST_SPEAKING) catFaceSetTalking(voicePlayActive());
   // 喂喇叭已移交独立播放任务（audio_io.cpp playTask，10ms 周期）——主循环
   // 被 TLS 阻塞读卡多久都不再影响出声。这里只负责多抽水加速下载。
   if (s_state == ST_THINKING || s_state == ST_SPEAKING) {
@@ -179,7 +172,7 @@ void loop() {
           enterState(ST_SLEEP, CHAR_SLEEP, "WiFi 连不上，检查 wifi_secrets.ini");
           break;
         }
-        characterSetSubtitle("连服务器……");
+        catFaceSetSubtitle("连服务器……");
         s_ev_ready = false;
         if (!rtBegin({onSessionReady, onAudio, onTranscript, onDone, onError},
                      STACKCHAN_DASHSCOPE_KEY)) {

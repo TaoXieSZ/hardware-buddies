@@ -68,4 +68,13 @@
       2026-07-19 用户过验收清单确认"都是对的"）
 - [x] 6.3 `make test` 全绿（2026-07-19：pytest + native Unity 40/40）；README
       "StackChan (CoreS3)" 下新增语音助手固件小节（刷法/交互/费用护栏/排障指引）
-- [ ] 6.4 用户 review + commit（不 push）
+- [x] 6.4 用户 review + commit + push（2026-07-19，用户授权推 origin）
+
+## 7. 增量：小咪猫脸 + 改名（2026-07-19 用户追加）
+
+- [x] 7.1 `cat_face.{h,cpp}`：黑白美短猫脸纯矢量渲染，经典 StackChan 特写风格
+      （整屏即脸，只画放大的大眼+ω 嘴，斑块从屏幕边缘溢出）+ 状态表情
+      （打盹眯眼/倾听大眼/思考上瞟/说话张嘴+吐舌/眨眼）+ efontCN_24 字幕滚动带；
+      弃用 GIF 角色包与 LittleFS（voice env 不再需要 uploadfs）
+- [x] 7.2 人设改名 小抓 → 小咪（固件 instructions / 原型脚本 / README 同步）
+- [x] 7.3 真机验收：特写猫脸颜值 + 表情状态切换 + 字幕可读性，2026-07-19 用户拍板
