@@ -61,6 +61,31 @@ DashScope Realtime API（qwen-audio-3.0-realtime-flash，2026-07-15 发布）：
     vs 新 `{WorkspaceId}.maas` 域名）、模型 ID 字符串、Manual 模式事件序列、音色试听
     （Cherry/Ethan…）。固件里的协议常量以原型实测为准。
 
+## 音频卡顿排障记录（2026-07-18/19 真机连环坑，按时间序）
+
+播放链路从"开头特别卡"修到"全程丝滑"共 4 版，每版的教训都值得留档：
+
+1. **[根因错判] 以为是起播没存货** → 加 0.5s 预缓冲，没用。meter 仪表（1 行/秒打
+   缓冲水位）上线后发现下载速度是播放的 1.4-3 倍，供给根本不缺。
+2. **[真根因] 喂喇叭的人被绊住，不是粮不够。** M5.Speaker 每通道只有 2 个 playRaw
+   槽（当时 512 样本=21ms/槽，共 43ms 余量），由主循环喂；而主循环处理 25KB TLS
+   记录时 mbedtls 阻塞读会卡 **~550ms**（underrun 计数器实锤：缓冲躺着 4-8 秒音频、
+   队列却干涸半秒 ×4 次）。**缓冲加多大都治不了"没人来喂"。**
+3. **[终解] 专职播放任务。** `xTaskCreatePinnedToCore(playTask, core0, prio3)`，
+   10ms 周期喂喇叭；SPSC volatile 双指针 + `__sync_synchronize()` 发布屏障。
+   主循环卡多久都不影响出声。附带修掉 GIF 渲染抖动造成的 1-8ms 微断口。
+4. **[次坑] "静默 250ms 就起播"的兜底后门**：生成期 delta 间隙经常 >250ms，会在只
+   攒 0.4s 时抢跑。删除；短回复由 EOS（response.done 解锁）覆盖。
+5. **[库坑] arduinoWebSockets 单帧上限 15KB 且无 #ifndef**，-D 覆盖不了，25KB delta
+   帧直接被 1009 断链 → `tools/patch_websockets_max.py` pre 脚本幂等补丁到 48KB。
+6. **[流程坑] esptool 输出被 grep 过滤太狠，没发现复位没执行**——设备带着被改写中
+   的 flash 继续跑旧代码，"越修越卡"其实测的是旧固件。此后烧录必须保留
+   `Hard resetting` 行 + 复位后 grep `[boot]` 确认。
+7. **[环境坑] macOS 无定位权限时 `ipconfig getsummary` 输出字面量 `<redacted>`**，
+   当真 SSID 写进 wifi_secrets.ini 会让 `<` 炸掉编译命令行。SSID 只能用户提供。
+8. **[采集坑] `M5.Mic.record()` 必须一块/tick**：贪心 while 循环会阻塞 loop 直到
+   缓冲录满，饿死触摸释放检测（10.00s 整的录音就是这个症状）。
+
 ## Risks / Trade-offs
 
 - [协议新、文档在漂移（发布仅 3 天）] → 原型先行；固件协议常量集中一个头文件，改动面小。

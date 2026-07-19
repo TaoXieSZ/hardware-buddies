@@ -33,5 +33,8 @@ size_t audioMicBytes();
 // --- 流式播放（audioSpkStart 之后） ---
 void voicePlayStart(uint32_t sample_rate);            // 清缓冲、设采样率
 size_t voicePlayFeed(const uint8_t* pcm, size_t len); // 追加 PCM；返回实收字节
+void voicePlayEos();                                  // 数据流结束（解锁预缓冲）
+void voicePlayGetStats(uint32_t* underruns, uint32_t* dry_ms);  // 本轮卡顿账单
 void voicePlayPump();                                 // 每 tick 喂 2 槽队列
 bool voicePlayActive();                               // 在播或仍有待播数据
+size_t voicePlayBuffered();                           // 未播字节（供需观测）

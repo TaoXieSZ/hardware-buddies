@@ -37,19 +37,24 @@
 
 ## 4. Realtime WebSocket 客户端
 
-- [ ] 4.1 抄 arduinoWebSockets `examples/` 的 WSS 初始化 verbatim，内置阿里云根 CA，
-      连通并完成 `session.update`（人设+音色）
-- [ ] 4.2 上行：按住期间 ~100 ms 分帧 base64 `append`，松开发 `commit`+`response.create`
-- [ ] 4.3 下行：类型嗅探 + 流式 base64 解码入 ring buffer 播放；小事件走 ArduinoJson；
-      `response.done` 收轮
-- [ ] 4.4 每轮串口打印 usage/token 统计（费用观察）
+- [x] 4.1 抄 arduinoWebSockets `examples/` 的 WSS 初始化 verbatim，内置阿里云根 CA
+      （GlobalSign R3，从 macOS 信任库提取），连通并完成 `session.update`（人设+音色）；
+      真机 session ready ~1.1s。库 15KB 帧上限用 pre 脚本补丁到 48KB（见 design 排障 5）
+- [x] 4.2 上行：按住期间 100ms 分帧 base64 `append` 边录边传，松开发
+      `commit`+`response.create`；真机松手→首声 1.2-1.9s
+- [x] 4.3 下行：类型嗅探 + base64 解码直入 PSRAM 播放缓冲；播放由独立 FreeRTOS
+      任务喂（卡顿连环坑与终解见 design.md 排障记录 1-4）；`response.done` 收轮。
+      2026-07-19 用户确认全程丝滑
+- [x] 4.4 每轮串口打印 usage/token 统计 + underrun 卡顿账单（`[meter]`/`[underrun]`
+      仪表保留，费用与音质双观察）
 
 ## 5. 状态机与联动
 
 - [ ] 5.1 会话状态机：SLEEP/CONNECTING/READY/LISTENING/THINKING/SPEAKING + 触摸唤醒、
       懒连接、空闲超时断开（默认 5 min）、轮数上限重建 session（默认 20）
-- [ ] 5.2 表情/动作映射接入状态机（打盹/倾听/忙碌/说话嘴型），SPEAKING 按播放活动驱动
-- [ ] 5.3 故障路径：占位符 key、WiFi 失败、WSS 断开的屏幕提示 + 串口日志 + 触摸重试
+- [x] 5.2 表情/动作映射接入状态机（打盹/倾听/忙碌/说话），随 FSM 真机验证
+- [x] 5.3 故障路径：占位符 key、WiFi 失败（附 status 码串口日志）、WSS 断开的屏幕
+      提示 + 触摸重试——WiFi 打错 SSID 与断链场景均真机踩过并按 spec 表现
 - [ ] 5.4 空闲超时与轮数上限接入 `settings.cpp` 可调项
 
 ## 6. 真机验收与收尾
