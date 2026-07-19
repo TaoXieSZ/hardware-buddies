@@ -222,6 +222,30 @@ If you skip any step, the gesture path stays dormant and **manual
 approval still works** — nothing breaks. The camera is gated to the
 prompt window only (privacy + bounds the I²C-bus side effect).
 
+### 语音助手固件（cores3-stackchan-voice）
+
+同一台 CoreS3 的**另一个独立产品**：刷这个 env 后 StackChan 变成直连阿里云百炼
+`qwen-audio-3.0-realtime-flash` 的中文语音桌宠（音色 longpaopao_v3.6，萌系人设
+"小抓"）。**不依赖 Mac / daemon / BLE**，只要 2.4G WiFi。
+
+交互：摸屏唤醒（懒连接，~1s 就绪）→ **按住屏幕说话，松开听回答**（松手→首声
+1.2-1.9s，字幕同步滚回复文本）→ 空闲 5 分钟自动断开打盹。
+
+```bash
+# 1. wifi_secrets.ini 填 ssid / pass / dashscope_key（百炼控制台创建 sk- key）
+#    然后 git update-index --skip-worktree wifi_secrets.ini 保住凭据
+# 2. 烧录（角色包没刷过的话先 uploadfs）
+pio run -e cores3-stackchan-voice -t uploadfs --upload-port /dev/cu.usbmodemXX
+pio run -e cores3-stackchan-voice -t upload   --upload-port /dev/cu.usbmodemXX
+```
+
+**费用护栏**（flash 档音频 ≈12.5 token/秒、多轮上下文逐轮累积计费）：人设硬限
+回答 ≤3 句；空闲断开即弃上下文；同一连接 20 轮强制重建 session。空闲秒数 /
+轮数上限存 NVS（键 `vidle`/`vturns`），每轮 usage 打串口可观察。
+
+设计与踩坑全记录：`openspec/changes/cores3-voice-assistant/`（design.md 含
+"音频卡顿排障记录"——喂喇叭为何必须独立 FreeRTOS 任务）。
+
 ## Pairing
 
 **Claude Desktop**: Help → Troubleshooting → Enable Developer Mode,

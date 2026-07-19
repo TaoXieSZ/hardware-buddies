@@ -24,6 +24,9 @@ bool    g_motion      = true;
 bool    g_idle_wiggle = true;
 uint8_t g_tilt        = 65;   // degrees, 0..90; servo Y baseline
 uint16_t g_sleep_after = 60;  // seconds after SLEEP entry to blank; 0=never
+// 语音助手固件专用（buddy 不读）：见 settings.h 注释。
+uint16_t g_voice_idle  = 300; // 懒连接空闲断开秒数
+uint8_t  g_voice_turns = 20;  // 单连接轮数上限
 
 }  // namespace
 
@@ -39,6 +42,8 @@ void settingsInit() {
   g_tilt       = g_nvs.getUChar("tilt",   g_tilt);
   if (g_tilt > 90) g_tilt = 90;
   g_sleep_after = g_nvs.getUShort("soff", g_sleep_after);
+  g_voice_idle  = g_nvs.getUShort("vidle", g_voice_idle);
+  g_voice_turns = g_nvs.getUChar ("vturns", g_voice_turns);
   String cn    = g_nvs.getString("char",  "");
   size_t cl    = cn.length();
   if (cl > 0) {
@@ -62,6 +67,24 @@ const char* settingsGetCharName()   { return g_char_name; }
 bool     settingsGetMotionEnabled() { return g_motion; }
 bool     settingsGetIdleWiggleEnabled() { return g_idle_wiggle; }
 uint8_t  settingsGetTilt()          { return g_tilt; }
+uint16_t settingsGetVoiceIdleSec()  { return g_voice_idle; }
+uint8_t  settingsGetVoiceTurnLimit(){ return g_voice_turns; }
+
+void settingsSetVoiceIdleSec(uint16_t sec) {
+  if (sec < 30) sec = 30;
+  if (sec > 3600) sec = 3600;
+  g_voice_idle = sec;
+  g_nvs.putUShort("vidle", sec);
+  Serial.printf("[set] vidle=%u\n", sec);
+}
+
+void settingsSetVoiceTurnLimit(uint8_t n) {
+  if (n < 1) n = 1;
+  if (n > 100) n = 100;
+  g_voice_turns = n;
+  g_nvs.putUChar("vturns", n);
+  Serial.printf("[set] vturns=%u\n", n);
+}
 
 void settingsSetVolume(uint8_t v) {
   g_volume = v;

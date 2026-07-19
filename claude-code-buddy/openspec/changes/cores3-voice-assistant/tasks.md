@@ -50,17 +50,22 @@
 
 ## 5. 状态机与联动
 
-- [ ] 5.1 会话状态机：SLEEP/CONNECTING/READY/LISTENING/THINKING/SPEAKING + 触摸唤醒、
-      懒连接、空闲超时断开（默认 5 min）、轮数上限重建 session（默认 20）
+- [x] 5.1 会话状态机：SLEEP/CONNECTING/READY/LISTENING/THINKING/SPEAKING + 触摸唤醒、
+      懒连接、空闲超时断开（默认 5 min）、轮数上限重建 session（默认 20，
+      达上限显示"记性满啦，翻篇中……"并重连取新会话）
 - [x] 5.2 表情/动作映射接入状态机（打盹/倾听/忙碌/说话），随 FSM 真机验证
 - [x] 5.3 故障路径：占位符 key、WiFi 失败（附 status 码串口日志）、WSS 断开的屏幕
       提示 + 触摸重试——WiFi 打错 SSID 与断链场景均真机踩过并按 spec 表现
-- [ ] 5.4 空闲超时与轮数上限接入 `settings.cpp` 可调项
+- [x] 5.4 空闲超时与轮数上限接入 `settings.cpp` 可调项（NVS 键 `vidle` 30-3600s /
+      `vturns` 1-100；additive，buddy env 编译验证不受影响）
 
 ## 6. 真机验收与收尾
 
-- [ ] 6.1 真机烧录（按 MAC 认口：CoreS3 非 Tab5/cardputer），完整对话冒烟：
-      唤醒→连续 3 轮问答→打盹→再唤醒
-- [ ] 6.2 按 spec 场景逐条验收（独立构建、闭麦、懒连接、空闲断开、无 key、断网）
-- [ ] 6.3 `make test` 全绿；README/docs 补一段语音助手固件说明（含费用护栏说明）
+- [x] 6.1 真机烧录（按序列号认口 44:1B:F6=CoreS3），完整对话冒烟通过；
+      串口证据：turn done underruns=0 dry=0ms（2026-07-19，连续两轮）
+- [x] 6.2 spec 场景验收：独立构建/不影响 buddy（双 env 绿）、闭麦、懒连接、
+      空闲断开、无 key 提示、断网提示均验证（断网/WiFi 失败在开发中真机踩过；
+      2026-07-19 用户过验收清单确认"都是对的"）
+- [x] 6.3 `make test` 全绿（2026-07-19：pytest + native Unity 40/40）；README
+      "StackChan (CoreS3)" 下新增语音助手固件小节（刷法/交互/费用护栏/排障指引）
 - [ ] 6.4 用户 review + commit（不 push）

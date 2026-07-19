@@ -41,3 +41,12 @@ void     settingsSetTilt(uint8_t deg);
 // restores settingsGetBrightness().
 uint16_t settingsGetSleepAfter();
 void     settingsSetSleepAfter(uint16_t sec);
+
+// --- 语音助手固件（cores3-stackchan-voice）专用；buddy 固件不读 ---
+// 懒连接空闲断开秒数（README/spec 默认 300s，范围 30..3600）。
+uint16_t settingsGetVoiceIdleSec();
+void     settingsSetVoiceIdleSec(uint16_t sec);
+// 同一连接内对话轮数上限，达到即重建 session 防上下文累积计费
+// （默认 20，范围 1..100）。
+uint8_t  settingsGetVoiceTurnLimit();
+void     settingsSetVoiceTurnLimit(uint8_t n);

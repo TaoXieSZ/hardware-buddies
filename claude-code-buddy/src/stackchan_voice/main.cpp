@@ -32,7 +32,7 @@ namespace {
 enum State : uint8_t { ST_SLEEP, ST_CONNECTING, ST_READY, ST_LISTENING, ST_THINKING, ST_SPEAKING };
 State s_state = ST_SLEEP;
 
-constexpr uint32_t IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // TODO(task 5.4): settings 可调
+// 空闲断开秒数与轮数上限走 settings（NVS 可调，键 vidle/vturns）。
 constexpr uint32_t CONNECT_TIMEOUT_MS = 15000;
 constexpr uint32_t THINK_TIMEOUT_MS = 20000;
 constexpr size_t   SEND_BLOCK = 3200;                // 100ms @16k（design 决策 5）
@@ -210,7 +210,7 @@ void loop() {
         } else {
           setFace(CHAR_DIZZY, "麦克风启动失败");
         }
-      } else if (millis() - s_t_activity > IDLE_TIMEOUT_MS) {
+      } else if (millis() - s_t_activity > settingsGetVoiceIdleSec() * 1000UL) {
         Serial.println("[fsm] idle timeout -> SLEEP（丢弃上下文）");
         goSleep("摸我唤醒");
       }
@@ -259,9 +259,23 @@ void loop() {
         voicePlayGetStats(&ur, &dry);
         Serial.printf("[fsm] turn %d done  underruns=%u dry=%ums (目标 0/0)\n",
                       s_turns, (unsigned)ur, (unsigned)dry);
-        // TODO(task 5.1): s_turns 达上限（默认 20）重建 session 防累积计费。
-        enterState(ST_READY, CHAR_IDLE, nullptr);       // 字幕留着最后一句
-        s_t_activity = millis();
+        if (s_turns >= (int)settingsGetVoiceTurnLimit()) {
+          // 上下文逐轮累积计费（design 实测定案）：达上限断开重连拿新 session。
+          Serial.printf("[fsm] turn limit %u -> rebuild session\n",
+                        settingsGetVoiceTurnLimit());
+          rtDisconnect();
+          s_turns = 0;
+          s_ev_ready = false;
+          if (rtBegin({onSessionReady, onAudio, onTranscript, onDone, onError},
+                      STACKCHAN_DASHSCOPE_KEY)) {
+            enterState(ST_CONNECTING, CHAR_BUSY, "记性满啦，翻篇中……");
+          } else {
+            goSleep("重连失败，摸我重试");
+          }
+        } else {
+          enterState(ST_READY, CHAR_IDLE, nullptr);     // 字幕留着最后一句
+          s_t_activity = millis();
+        }
       }
       break;
   }
