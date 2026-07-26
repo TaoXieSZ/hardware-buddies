@@ -1,0 +1,5 @@
+## ESP-IDF Component Registry dependencies
+## Note: PlatformIO's espidf framework doesn't use this directly.
+## For native idf.py builds, uncomment:
+# dependencies:
+#   m5stack/m5unified: ">=0.2.0"

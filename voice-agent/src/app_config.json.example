@@ -1,0 +1,48 @@
+{
+    "name": "stackchan",
+    "properties": {
+        "channel": "stackchan_dev",
+        "agent_rtc_uid": "1234",
+        "token": "",
+        "remote_rtc_uids": [
+            "5678"
+        ],
+        "enable_string_uid": false,
+        "idle_timeout": 120,
+        "advanced_features": {
+            "enable_aivad": false,
+            "enable_bhvs": true,
+            "enable_tools": true
+        },
+        "parameters": {
+            "output_audio_codec": "G722",
+            "agent_rtc_sdk_params": "{\"che.audio.acm_ptime\": 20}",
+            "enable_dump": true,
+            "data_channel": "datastream"
+        },
+        "llm": {
+            "url": "YOUR_AZURE_OPENAI_ENDPOINT",
+            "api_key": "0b2685a37b6543a597d2785b0dbbf376",
+            "input_modalities": ["text", "image"],
+            "predefined_tools": ["_publish_message"],
+            "system_messages": [
+                {
+                    "role": "system",
+                    "content": "你叫堆栈酱，是一个可爱的桌面语音助手。用简短口语回答问题。不超过三句话。"
+                }
+            ],
+            "greeting_message": "堆栈酱来了，今天有什么可以帮你的？",
+            "failure_message": "等一下，没听清...",
+            "params": {
+                "model": "gpt-4o-mini"
+            }
+        },
+        "tts": {
+            "vendor": "minimax",
+            "params": {
+                "model": "speech-02-turbo",
+                "voice_name": "female-chengshuxin"
+            }
+        }
+    }
+}
