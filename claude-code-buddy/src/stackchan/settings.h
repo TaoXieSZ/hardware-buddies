@@ -50,3 +50,15 @@ void     settingsSetVoiceIdleSec(uint16_t sec);
 // （默认 20，范围 1..100）。
 uint8_t  settingsGetVoiceTurnLimit();
 void     settingsSetVoiceTurnLimit(uint8_t n);
+
+// 音色与人设 instructions。空串 = 未设置，调用方回落到编译期出厂默认
+// （同 settingsGetCharName 的约定）。改动只在下次建立会话时带入
+// session.update —— 不重连当前会话，避免丢上下文并额外计费。
+const char* settingsGetVoiceName();
+void        settingsSetVoiceName(const char* name);
+const char* settingsGetVoicePersona();
+void        settingsSetVoicePersona(const char* text);
+
+// 说话时是否用更活泼的摆动跳舞（需摇头跳舞总开关 settingsGetMotionEnabled 同时为真）。
+bool     settingsGetVoiceDance();
+void     settingsSetVoiceDance(bool on);

@@ -1,0 +1,24 @@
+=== handoff-run 2026-07-02 11:43:51 ===
+executor: cursor   workdir: /Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy
+spec: /Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy/.handoff/tasks/001-cardputer-connecting-state.md
+=============================================
+All verification passed. The 5 in-scope files are the only ones I modified.
+
+## Summary
+
+Implemented the Cardputer "Connecting" state per spec `001-cardputer-connecting-state`.
+
+**Files changed (all 5 in-scope):**
+- `/Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy/src/agent_state.h` — added `Connecting` enum value before `Count`.
+- `/Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy/src/clawd_player.h` — declared `void setOnline(bool on);` next to `setSleeping`.
+- `/Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy/src/clawd_player.cpp` — added `online_` flag, `setOnline()` impl, `fileForState(Connecting)→"clawd-carrying.gif"`, and the `!online_` early branch in `drawSessionTag()` rendering persistent `Connecting...` (top-left, `0x8410` on BG, inside `(0,0,canvasW-66,13)`).
+- `/Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy/src/main.cpp` — `clawd::setOnline(online)` + `!online → AgentState::Connecting` arm ahead of the existing `n==0` branch (online path byte-for-byte unchanged); changed sleep line to `online && idle && ...` so offline no longer forces sleep.
+- `/Users/txie/OpenSourceProjects/hardware-buddies/cardputer-adv-buddy/README.md` — one-line update: offline → Connecting, only online+long-idle → sleep.
+
+**What was done:** offline (BLE not connected to `cc-bridge`) now shows the carrying GIF + persistent `Connecting...` top-bar text instead of being forced to sleep; once connected, all existing rendering (badge, session rotation, state-derived GIFs) returns unchanged. New comments in Chinese matching surrounding style; no unrelated code touched.
+
+**Verification results:**
+- `pio run -e cardputer-adv` → `[SUCCESS]` (7.40s; RAM 25.3%, Flash 43.9%).
+- `git status --porcelain` → only the 5 in-scope files are modified by this task. (The other entries — `manifest.json`, `clawd-carrying.gif`, `docs/`, `.claude/`, `openspec/`, etc. — were already present/modified in the pre-existing repo snapshot and per the spec were "already done, do not touch"; I did not edit them.)
+=============================================
+=== handoff-run finished rc=0 2026-07-02 11:47:00 ===

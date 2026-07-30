@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小咪 · 控制面板</title>
+<style>
+:root{--paper:#faf8f5;--panel:#fff;--ink:#26221f;--dim:#6e655d;--line:#e9e1d9;
+--accent:#dd5389;--soft:#fbe6ef;--mono:#14181d;--monoink:#cdd6de;
+--s-sleep:#8a8f9a;--s-ready:#3a9e77;--s-listen:#e0912f;--s-think:#4c7df0;--s-speak:#dd5389;
+--ok:#3a9e77;--off:#b04a4a}
+@media(prefers-color-scheme:dark){:root{--paper:#181513;--panel:#211d1a;--ink:#ede7e0;
+--dim:#a79e95;--line:#332e2a;--accent:#f06ca0;--soft:#3a2029;--mono:#0e1114}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--paper);color:var(--ink);line-height:1.5;
+font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:20px 18px 50px}
+.rounded{font-family:"Arial Rounded MT Bold","PingFang SC",system-ui,sans-serif}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.mark{width:42px;height:42px;border-radius:12px;background:var(--soft);border:1px solid var(--accent);
+display:grid;place-items:center;font-size:1.3rem}
+h1{font-size:1.4rem;margin:0}
+.tag{font-size:.76rem;color:var(--dim)}
+.sp{flex:1}
+.conn{display:flex;gap:12px;font-size:.8rem;color:var(--dim);flex-wrap:wrap}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;background:#999}
+.dot.on{background:var(--ok)}.dot.off{background:var(--off)}
+.grid{display:grid;grid-template-columns:290px 1fr;gap:16px;align-items:start}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:15px 16px}
+.card h2{font-size:.72rem;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);
+margin:0 0 12px;font-weight:700}
+.status{display:flex;flex-direction:column;gap:12px}
+.face{display:grid;place-items:center}.face svg{width:140px;height:auto}
+.pill{align-self:center;display:inline-flex;align-items:center;gap:7px;font-weight:700;
+padding:5px 14px;border-radius:999px;background:var(--soft)}
+.pill .sd{width:9px;height:9px;border-radius:50%;background:var(--s-sleep)}
+.kv{display:flex;justify-content:space-between;font-size:.84rem;padding:3px 0}
+.kv .k{color:var(--dim)}.kv .v{font-variant-numeric:tabular-nums}
+.sub{background:var(--mono);color:var(--monoink);border-radius:9px;padding:8px 11px;
+font-size:.8rem;min-height:38px;display:flex;align-items:center;word-break:break-all}
+.main{display:flex;flex-direction:column;gap:16px}
+.turn{display:flex;flex-direction:column;gap:3px;max-width:84%;margin-bottom:9px}
+.turn.you{align-self:flex-end;align-items:flex-end;margin-left:auto}
+.bub{padding:8px 12px;border-radius:13px;font-size:.9rem}
+.turn.you .bub{background:var(--soft);border:1px solid var(--accent)}
+.turn.mi .bub{background:var(--paper);border:1px solid var(--line)}
+.meta{font-size:.7rem;color:var(--dim);font-variant-numeric:tabular-nums}
+.row{padding:11px 0;border-top:1px solid var(--line)}
+.row:first-child{border-top:none;padding-top:2px}
+.lab{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}
+.name{font-weight:600;font-size:.9rem}
+.val{font-family:ui-monospace,Menlo,monospace;font-size:.88rem;color:var(--accent);font-weight:700}
+.desc{font-size:.75rem;color:var(--dim);margin-top:5px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;
+background:var(--line);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+background:var(--accent);cursor:pointer;border:2px solid var(--panel)}
+select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--paper);
+border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+textarea{resize:vertical;min-height:64px}
+.tog{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.sw{position:relative;width:46px;height:26px;flex:none}
+.sw input{opacity:0;width:0;height:0}
+.sw .tr{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:.2s;cursor:pointer}
+.sw .tr::before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;
+border-radius:50%;transition:.2s}
+.sw input:checked+.tr{background:var(--accent)}
+.sw input:checked+.tr::before{transform:translateX(20px)}
+.sub-c.off{opacity:.4;pointer-events:none}
+button{font:inherit;border-radius:9px;padding:8px 15px;cursor:pointer;border:1px solid var(--line);
+background:var(--panel);color:var(--ink)}
+button:hover{border-color:var(--accent)}
+button.pri{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+outline:3px solid var(--accent);outline-offset:2px}
+.acts{display:flex;gap:9px;margin-top:12px;flex-wrap:wrap}
+.mx{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media(max-width:520px){.mx{grid-template-columns:repeat(2,1fr)}}
+.m{text-align:center}
+.m .n{font-family:ui-monospace,Menlo,monospace;font-size:1.3rem;font-weight:700;font-variant-numeric:tabular-nums}
+.m .l{font-size:.7rem;color:var(--dim)}
+.note{font-size:.75rem;color:var(--dim);margin-top:10px}
+.warn{background:var(--soft);border:1px solid var(--accent);border-radius:9px;padding:7px 11px;
+font-size:.78rem;margin-top:8px;display:none}
+.warn.show{display:block}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);
+background:var(--ink);color:var(--paper);padding:9px 16px;border-radius:10px;font-size:.88rem;
+opacity:0;transition:.25s;pointer-events:none;z-index:9}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.offline{background:#b04a4a;color:#fff;text-align:center;padding:6px;font-size:.85rem;display:none}
+.offline.show{display:block}
+@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}}
+#face.dance>g{animation:shake .55s ease-in-out infinite;transform-origin:120px 176px}
+.eye-c{display:none}
+#face.sleep .eye-o,#face.blink .eye-o{display:none}
+#face.sleep .eye-c,#face.blink .eye-c{display:block}
+.eyes{transition:transform .2s;transform-box:fill-box;transform-origin:center}
+#face.listening .eyes{transform:scale(1.13)}
+#face.thinking .eyes{transform:translateY(-6px)}
+.mouth-o{display:none}
+#face.speaking .mouth-i{display:none}
+#face.speaking .mouth-o{display:block}
+</style>
+</head>
+<body>
+<div class="offline" id="offline">⚠ 连不上小咪——它可能重启了或掉线了</div>
+<div class="wrap">
+<header>
+  <div class="mark rounded" style="color:var(--accent)">🐱</div>
+  <div><h1 class="rounded">小咪 <span style="font-weight:400;font-size:.85rem;color:var(--dim)">控制面板</span></h1>
+  <div class="tag">CoreS3 语音桌宠 · qwen-audio-3.0-realtime-flash</div></div>
+  <div class="sp"></div>
+  <div class="conn">
+    <span><span class="dot" id="dWifi"></span>WiFi <span id="rssi"></span></span>
+    <span><span class="dot" id="dDs"></span>DashScope</span>
+  </div>
+</header>
+
+<div class="grid">
+  <aside class="card status">
+    <h2>实时状态</h2>
+    <div class="face">
+      <svg id="face" class="sleep" viewBox="0 0 240 196" aria-label="小咪当前表情"><g>
+        <path d="M54 68 Q30 18 36 12 Q42 7 92 42 Z" fill="#3E4148" stroke="#2B2E33" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M56 56 Q44 32 47 28 Q51 25 76 45 Z" fill="#EFB6C0"/>
+        <path d="M186 68 Q210 18 204 12 Q198 7 148 42 Z" fill="#FCFCF8" stroke="#D9D9D2" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M184 56 Q196 32 193 28 Q189 25 164 45 Z" fill="#EFB6C0"/>
+        <path d="M32 112 C32 60 62 40 120 40 C178 40 208 60 208 112 C208 154 170 180 120 180 C70 180 32 154 32 112 Z" fill="#FCFCF8" stroke="#D9D9D2" stroke-width="3"/>
+        <ellipse cx="118" cy="60" rx="30" ry="15" fill="#4A4E56" opacity=".9"/>
+        <ellipse cx="196" cy="96" rx="24" ry="19" fill="#4A4E56" opacity=".26"/>
+        <g stroke="#C9CDD2" stroke-width="2.2" stroke-linecap="round">
+          <line x1="18" y1="112" x2="48" y2="110"/><line x1="20" y1="126" x2="49" y2="120"/>
+          <line x1="222" y1="112" x2="192" y2="110"/><line x1="220" y1="126" x2="191" y2="120"/></g>
+        <ellipse cx="72" cy="130" rx="13" ry="7.5" fill="#F2A8B0" opacity=".8"/>
+        <ellipse cx="168" cy="130" rx="13" ry="7.5" fill="#F2A8B0" opacity=".8"/>
+        <g class="eyes">
+          <g class="eye-o">
+            <circle cx="90" cy="104" r="12" fill="#46281C"/><circle cx="86" cy="100" r="4" fill="#fff"/>
+            <circle cx="150" cy="104" r="12" fill="#46281C"/><circle cx="146" cy="100" r="4" fill="#fff"/></g>
+          <g class="eye-c" fill="none" stroke="#46281C" stroke-width="4.5" stroke-linecap="round">
+            <path d="M78 106 Q90 96 102 106"/><path d="M138 106 Q150 96 162 106"/></g></g>
+        <path class="mouth-i" d="M108 128 Q114 135 120 128 Q126 135 132 128" fill="none" stroke="#46281C" stroke-width="3.6" stroke-linecap="round"/>
+        <ellipse class="mouth-o" cx="120" cy="134" rx="9" ry="8" fill="#5B3226" stroke="#46281C" stroke-width="2.5"/>
+      </g></svg>
+    </div>
+    <div class="pill"><span class="sd" id="sd"></span><span id="stName">—</span></div>
+    <div>
+      <div class="kv"><span class="k">对话轮次</span><span class="v" id="kTurn">—</span></div>
+      <div class="kv"><span class="k">松手→首声</span><span class="v" id="kLat">—</span></div>
+      <div class="kv"><span class="k">上轮 token</span><span class="v" id="kTok">—</span></div>
+      <div class="kv"><span class="k">电量</span><span class="v" id="kBat">—</span></div>
+      <div class="kv"><span class="k">空闲倒计时</span><span class="v" id="kIdle">—</span></div>
+    </div>
+    <div class="sub" id="subtitle">—</div>
+    <div class="acts">
+      <button id="bDance">▶ 跳一下</button>
+      <button id="bDisc">断开回打盹</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <section class="card">
+      <h2>最近一轮</h2>
+      <div id="conv"><div class="meta">还没聊过</div></div>
+    </section>
+
+    <section class="card">
+      <h2>设置 · 写入小咪 NVS</h2>
+      <div class="row"><div class="lab"><span class="name">空闲断开</span><span class="val" id="vIdle">—</span></div>
+        <input type="range" id="rIdle" min="30" max="3600" step="30">
+        <div class="desc">无操作多久后断开云端连接回打盹（省钱）。NVS <code>vidle</code></div></div>
+      <div class="row"><div class="lab"><span class="name">轮数上限</span><span class="val" id="vTurn">—</span></div>
+        <input type="range" id="rTurn" min="1" max="100" step="1">
+        <div class="desc">聊满这么多轮就重开会话，防上下文累积计费。NVS <code>vturns</code></div></div>
+      <div class="row"><div class="lab"><span class="name">音量</span><span class="val" id="vVol">—</span></div>
+        <input type="range" id="rVol" min="96" max="255" step="1">
+        <div class="desc">下限 96，再低语音就听不清了</div></div>
+      <div class="row"><div class="lab"><span class="name">屏幕亮度</span><span class="val" id="vBri">—</span></div>
+        <input type="range" id="rBri" min="20" max="255" step="1"></div>
+      <div class="row"><div class="lab"><span class="name">音色</span><span class="desc" style="margin:0">下次唤醒生效</span></div>
+        <select id="selVoice">
+          <option value="longpaopao_v3.6">longpaopao_v3.6（萌系）</option>
+          <option value="longanqian">longanqian（官方默认女声）</option>
+          <option value="longanxiaoxin">longanxiaoxin</option>
+          <option value="longjielidou_v3.6">longjielidou_v3.6（童声）</option>
+          <option value="longanlingxi">longanlingxi</option>
+          <option value="longhuohuo_v3.6">longhuohuo_v3.6</option>
+          <option value="longanlingxin">longanlingxin</option>
+          <option value="longanlufeng">longanlufeng</option>
+        </select></div>
+      <div class="row"><div class="lab"><span class="name">人设 instructions</span><span class="desc" style="margin:0">下次唤醒生效</span></div>
+        <textarea id="taPersona" rows="4"></textarea>
+        <div class="desc">留空 = 用固件出厂人设。建议保留"回答不超过 3 句"这类硬性约束</div></div>
+      <div class="acts"><button class="pri" id="bSave">保存人设与音色</button>
+        <button id="bReload">重新读取</button></div>
+      <div class="warn" id="warnDefer">已保存，<b>下次唤醒</b>建立会话时生效（当前会话不重连，避免丢上下文）</div>
+    </section>
+
+    <section class="card">
+      <h2>动作 · 摇头跳舞</h2>
+      <div class="row tog"><div><div class="name">摇头跳舞总开关</div>
+        <div class="desc">开：说话摆头、思考点头。关：安静陪伴，舵机不动。NVS <code>motion</code></div></div>
+        <label class="sw"><input type="checkbox" id="tMotion"><span class="tr"></span></label></div>
+      <div class="sub-c" id="subMotion">
+        <div class="row tog"><div><div class="name">说话时来段舞</div>
+          <div class="desc">回答时用更起劲的摆动，而不只是轻轻摆头</div></div>
+          <label class="sw"><input type="checkbox" id="tDance"><span class="tr"></span></label></div>
+        <div class="row tog"><div><div class="name">待机东张西望</div>
+          <div class="desc">空闲时小幅张望。NVS <code>idlew</code></div></div>
+          <label class="sw"><input type="checkbox" id="tWig"><span class="tr"></span></label></div>
+        <div class="row"><div class="lab"><span class="name">抬头角度</span><span class="val" id="vTilt">—</span></div>
+          <input type="range" id="rTilt" min="0" max="90" step="1">
+          <div class="desc">0°=低头看桌面，90°=仰头看你。NVS <code>tilt</code></div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>网络 · 带着上下班</h2>
+      <div class="desc" style="margin:0 0 10px">存好的网络小咪会自动连（最多 5 个）。
+        出门前把目的地的网加上，到了就自动连，不用接电脑。</div>
+      <div id="netList"><div class="meta">读取中……</div></div>
+      <div class="row">
+        <div class="lab"><span class="name">添加网络</span>
+          <span class="val" id="netCount">—</span></div>
+        <select id="netScan"><option value="">点「扫描附近」后从这里选</option></select>
+        <input id="netSsid" placeholder="WiFi 名称（也可手动输入隐藏网络）"
+          style="width:100%;font:inherit;color:var(--ink);background:var(--paper);
+          border:1px solid var(--line);border-radius:8px;padding:7px 9px;margin-top:7px">
+        <input id="netPw" type="password" placeholder="密码（开放网络留空）"
+          style="width:100%;font:inherit;color:var(--ink);background:var(--paper);
+          border:1px solid var(--line);border-radius:8px;padding:7px 9px;margin-top:7px">
+        <div class="acts">
+          <button id="bScan">扫描附近</button>
+          <button class="pri" id="bAddNet">添加</button>
+        </div>
+        <div class="desc">出于安全，已存网络的密码<b>不会显示</b>；改密码就用同一个名称重新添加。</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>本轮质量</h2>
+      <div class="mx">
+        <div class="m"><div class="n" id="mTurn">—</div><div class="l">已聊轮数</div></div>
+        <div class="m"><div class="n" id="mTok">—</div><div class="l">上轮 token</div></div>
+        <div class="m"><div class="n" id="mLat">—</div><div class="l">首声延迟</div></div>
+        <div class="m"><div class="n" id="mUr">—</div><div class="l">卡顿 underrun</div></div>
+      </div>
+      <div class="note">flash 档音频 ≈ 12.5 token/秒，多轮上下文逐轮累积计费。精确费用见百炼控制台。</div>
+    </section>
+  </div>
+</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const face=$("face"),toast=$("toast");
+const ST={sleep:["打盹","--s-sleep"],connecting:["连接中","--s-listen"],ready:["待命","--s-ready"],
+listening:["倾听","--s-listen"],thinking:["思考","--s-think"],speaking:["说话","--s-speak"]};
+let loaded=false,failed=0;
+
+function ping(m){toast.textContent=m;toast.classList.add("show");
+  setTimeout(()=>toast.classList.remove("show"),1700);}
+
+async function api(path,opts){
+  const r=await fetch(path,Object.assign({headers:{"Content-Type":"application/json"}},opts||{}));
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+function post(path,body){return api(path,{method:"POST",body:JSON.stringify(body)});}
+
+// 防抖：滑块拖动时别每像素都发请求
+function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
+const save=debounce(body=>post("/api/settings",body).catch(e=>ping("保存失败: "+e.message)),350);
+
+const fmtIdle=s=>{const m=Math.floor(s/60),ss=s%60;return ss?`${m} 分 ${ss} 秒`:`${m} 分钟`;};
+
+// ---- 状态轮询 ----
+async function poll(){
+  try{
+    const s=await api("/api/state");
+    failed=0; $("offline").classList.remove("show");
+    const st=ST[s.state]||["—","--s-sleep"];
+    $("stName").textContent=st[0];
+    $("sd").style.background=`var(${st[1]})`;
+    face.className=s.state+(s.state==="speaking"&&$("tDance").checked&&$("tMotion").checked?" dance":"");
+    $("dWifi").className="dot "+(s.wifi?"on":"off");
+    $("dDs").className="dot "+(s.dashscope?"on":"off");
+    $("rssi").textContent=s.wifi?`${s.rssi} dBm`:"";
+    $("kTurn").textContent=`${s.turns} / ${s.turn_limit}`;
+    $("mTurn").textContent=s.turns;
+    $("kLat").textContent=s.last_latency_ms?(s.last_latency_ms/1000).toFixed(2)+"s":"—";
+    $("mLat").textContent=s.last_latency_ms?(s.last_latency_ms/1000).toFixed(2)+"s":"—";
+    $("kTok").textContent=s.last_tokens||"—";
+    $("mTok").textContent=s.last_tokens||"—";
+    $("mUr").textContent=s.underruns;
+    $("mUr").style.color=s.underruns?"var(--off)":"var(--ok)";
+    $("kBat").textContent=s.battery_pct>=0?s.battery_pct+"%":"—";
+    $("kIdle").textContent=s.idle_remain_sec?fmtIdle(s.idle_remain_sec):"—";
+    $("subtitle").textContent=s.subtitle||"—";
+    const c=$("conv");
+    if(s.last_user||s.last_reply){
+      c.innerHTML="";
+      if(s.last_user){const d=document.createElement("div");d.className="turn you";
+        d.innerHTML='<div class="bub"></div>';d.querySelector(".bub").textContent=s.last_user;c.appendChild(d);}
+      if(s.last_reply){const d=document.createElement("div");d.className="turn mi";
+        d.innerHTML='<div class="bub"></div><div class="meta"></div>';
+        d.querySelector(".bub").textContent=s.last_reply;
+        d.querySelector(".meta").textContent=
+          (s.last_latency_ms?`首声 ${(s.last_latency_ms/1000).toFixed(2)}s · `:"")+
+          (s.last_tokens?`${s.last_tokens} tok`:"");
+        c.appendChild(d);}
+    }
+  }catch(e){
+    if(++failed>2) $("offline").classList.add("show");
+  }
+}
+
+// ---- 设置加载 ----
+async function loadSettings(){
+  try{
+    const s=await api("/api/settings");
+    $("rIdle").value=s.idle_sec; $("vIdle").textContent=fmtIdle(s.idle_sec);
+    $("rTurn").value=s.turn_limit; $("vTurn").textContent=s.turn_limit+" 轮";
+    $("rVol").value=s.volume; $("vVol").textContent=s.volume;
+    $("rBri").value=s.brightness; $("vBri").textContent=s.brightness;
+    $("rTilt").value=s.tilt; $("vTilt").textContent=s.tilt+"°";
+    $("tMotion").checked=s.motion; $("tDance").checked=s.dance; $("tWig").checked=s.idle_wiggle;
+    $("subMotion").classList.toggle("off",!s.motion);
+    if(s.voice) $("selVoice").value=s.voice;
+    $("taPersona").value=s.persona||"";
+    $("taPersona").placeholder=s.persona?"":"（空 = 用固件出厂人设）";
+    loaded=true;
+  }catch(e){ ping("读取设置失败: "+e.message); }
+}
+
+// ---- 控件绑定 ----
+$("rIdle").addEventListener("input",e=>{$("vIdle").textContent=fmtIdle(+e.target.value);
+  save({idle_sec:+e.target.value});});
+$("rTurn").addEventListener("input",e=>{$("vTurn").textContent=e.target.value+" 轮";
+  save({turn_limit:+e.target.value});});
+$("rVol").addEventListener("input",e=>{$("vVol").textContent=e.target.value;
+  save({volume:+e.target.value});});
+$("rBri").addEventListener("input",e=>{$("vBri").textContent=e.target.value;
+  save({brightness:+e.target.value});});
+$("rTilt").addEventListener("input",e=>{$("vTilt").textContent=e.target.value+"°";
+  save({tilt:+e.target.value});});
+$("tMotion").addEventListener("change",e=>{$("subMotion").classList.toggle("off",!e.target.checked);
+  save({motion:e.target.checked});});
+$("tDance").addEventListener("change",e=>save({dance:e.target.checked}));
+$("tWig").addEventListener("change",e=>save({idle_wiggle:e.target.checked}));
+
+$("bSave").addEventListener("click",async()=>{
+  try{
+    await post("/api/settings",{voice:$("selVoice").value,persona:$("taPersona").value});
+    $("warnDefer").classList.add("show");
+    ping("已保存");
+  }catch(e){ ping("保存失败: "+e.message); }
+});
+$("bReload").addEventListener("click",()=>{loadSettings();ping("已重新读取");});
+$("bDance").addEventListener("click",async()=>{
+  try{const r=await post("/api/action",{do:"dance"});ping(r.note||"小咪跳了一下");}
+  catch(e){ping("失败: "+e.message);}
+});
+$("bDisc").addEventListener("click",async()=>{
+  try{await post("/api/action",{do:"disconnect"});ping("已断开，小咪回去打盹了");}
+  catch(e){ping("失败: "+e.message);}
+});
+
+// ---- 网络管理 ----
+async function loadNetworks(){
+  try{
+    const d=await api("/api/networks");
+    $("netCount").textContent=`${d.count} / ${d.max}`;
+    const box=$("netList");box.innerHTML="";
+    if(!d.networks.length){box.innerHTML='<div class="meta">还没存过网络</div>';return;}
+    d.networks.forEach(n=>{
+      const row=document.createElement("div");
+      row.className="row tog";row.style.paddingTop="9px";
+      const left=document.createElement("div");
+      left.innerHTML='<div class="name"></div>';
+      left.querySelector(".name").textContent=n.ssid+(n.current?" ✓ 当前":"");
+      const del=document.createElement("button");
+      del.textContent="删除";del.style.flex="none";
+      del.addEventListener("click",async()=>{
+        if(!confirm(`删除「${n.ssid}」？`))return;
+        try{await api("/api/networks",{method:"DELETE",body:JSON.stringify({ssid:n.ssid})});
+          ping("已删除");loadNetworks();}
+        catch(e){ping("删除失败: "+e.message);}
+      });
+      row.appendChild(left);row.appendChild(del);box.appendChild(row);
+    });
+  }catch(e){ $("netList").innerHTML='<div class="meta">读取失败</div>'; }
+}
+$("bScan").addEventListener("click",async()=>{
+  const s=$("netScan");s.innerHTML='<option value="">扫描中……</option>';
+  try{
+    const d=await api("/api/networks/scan");
+    s.innerHTML='<option value="">— 选一个 —</option>';
+    (d.found||[]).sort((a,b)=>b.rssi-a.rssi).forEach(n=>{
+      if(!n.ssid)return;const o=document.createElement("option");
+      o.value=n.ssid;o.textContent=`${n.ssid}  (${n.rssi}dBm${n.open?" 开放":""})`;
+      s.appendChild(o);});
+    ping("扫描完成");
+  }catch(e){ s.innerHTML='<option value="">扫描失败</option>'; ping("扫描失败"); }
+});
+$("netScan").addEventListener("change",e=>{if(e.target.value)$("netSsid").value=e.target.value;});
+$("bAddNet").addEventListener("click",async()=>{
+  const ssid=$("netSsid").value||$("netScan").value;
+  if(!ssid){ping("请先选择或输入 WiFi 名称");return;}
+  try{
+    const d=await post("/api/networks",{ssid:ssid,password:$("netPw").value});
+    ping(d.result==="updated"?"已更新密码":"已添加");
+    $("netSsid").value="";$("netPw").value="";
+    loadNetworks();
+  }catch(e){ ping(e.message.includes("存满")?"已存满 5 个，请先删一个":"添加失败"); }
+});
+
+// 眨眼
+setInterval(()=>{
+  if(/sleep|listening|thinking/.test(face.className))return;
+  face.classList.add("blink");setTimeout(()=>face.classList.remove("blink"),130);
+},3400);
+
+loadSettings();
+poll();
+setInterval(poll,1000);
+})();
+</script>
+</body>
+</html>

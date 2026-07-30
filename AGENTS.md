@@ -52,9 +52,12 @@ build** — always `cd <subdir>` first.
   2026-07-09 (openspec change `consolidate-standalone-buddy`). Each bridge
   has its own `install.sh` that writes the plist + venv. `opencode-bridge`
   also repoints `~/.config/opencode/opencode.json`'s plugin entry at its
-  `cardputer-permission.mjs`. `agentfarm-usb-bridge` auto-detects the Tab5
-  by USB serial prefix `80:F1:B2:` (distinguishing it from the Cardputer-ADV
-  which is also VID 303A but `50:78:7D:`).
+  `cardputer-permission.mjs`. `kimi-bridge` (5th agent, `com.kimi-bridge`)
+  follows the codex push-only pattern (`no_ble=True`, ext_sessions →
+  cc-bridge) but installs its hooks as `[[hooks]]` TOML blocks into
+  `~/.kimi-code/config.toml` (not JSON). `agentfarm-usb-bridge` auto-detects
+  the Tab5 by USB serial prefix `80:F1:B2:` (distinguishing it from the
+  Cardputer-ADV which is also VID 303A but `50:78:7D:`).
 - **m5-paper-buddy**: do not refactor. It's a `git subtree` snapshot of
   `op7418/m5-paper-buddy`. Only sync upstream via `git subtree pull`.
 - **Root `README.md` lists only 3 of the 5 subprojects** — trust the table

@@ -805,6 +805,89 @@ class CmuxClient:
             return None
         return None
 
+    def focus_by_kimi_cwd(self, cwd: str) -> Optional[str]:
+        """Focus the cmux surface running the Kimi session in directory `cwd`.
+
+        cmux's session file has no "kimi" agent kind, so unlike
+        focus_by_codex_cwd this matches GENERICALLY by working directory:
+        any pane whose workingDirectory == `cwd` (the device-sent sid: the cwd
+        or its last 39 chars per the firmware sid[40] cap → exact OR suffix
+        match) qualifies — EXCEPT panes tagged as another known agent
+        (claude/codex/opencode/cursor), which keeps a cwd shared with a Codex
+        pane from misfocusing. Falls back to a title-based surface.list scan
+        (skipping Claude/Cursor/Codex-titled panes) when the session file is
+        unreadable. Mirrors kimi-bridge's cwd-as-sid convention.
+
+        Returns the surface UUID, or None on no match / focus failure.
+        """
+        want = (cwd or "").strip()
+        if not want:
+            return None
+        surface = self._kimi_surface_for_cwd(want)
+        if not surface:
+            return None
+        rc, _out, _err = self.run(self._focus_argv(surface))
+        if rc != 0:
+            return None
+        self.activate_app()
+        return surface
+
+    def _kimi_surface_for_cwd(self, want: str) -> Optional[str]:
+        """surface_id of a non-other-agent pane whose workingDirectory == want
+        (or endswith it). cmux session file primary; title-based surface.list
+        scan fallback. Consistent with kimi-bridge `_build_kimi_sessions`
+        (sid IS the cwd)."""
+        # Primary: cmux session file — any pane NOT tagged as another agent.
+        try:
+            with open(CMUX_SESSION_JSON, encoding="utf-8") as f:
+                doc = json.load(f)
+            stack = [doc]
+            while stack:
+                o = stack.pop()
+                if isinstance(o, dict):
+                    term = o.get("terminal") or {}
+                    ag = term.get("agent") or {}
+                    if ag.get("kind") in ("claude", "codex", "opencode", "cursor"):
+                        stack.extend(o.values())
+                        continue
+                    wd = (ag.get("workingDirectory")
+                          or term.get("workingDirectory") or "")
+                    if wd and (wd == want or wd.endswith(want)) and o.get("id"):
+                        return o["id"]
+                    stack.extend(o.values())
+                elif isinstance(o, list):
+                    stack.extend(o)
+        except Exception:
+            pass
+        # Fallback: title-based surface.list scan (skip known other agents).
+        try:
+            wrc, wout, _ = self.run(self._rpc_argv("window.list", {}))
+            wins = ([w.get("id", "") for w in json.loads(wout).get("windows", [])
+                     if w.get("id")] if wrc == 0 else []) or [""]
+            for win in wins:
+                params = {"window_id": win} if win else {}
+                wsrc, wsout, _ = self.run(self._rpc_argv("workspace.list", params))
+                if wsrc != 0:
+                    continue
+                for ws in json.loads(wsout).get("workspaces", []):
+                    src, sout, _ = self.run(
+                        self._rpc_argv("surface.list", {"workspace_id": ws.get("id", "")}))
+                    if src != 0:
+                        continue
+                    for s in json.loads(sout).get("surfaces", []):
+                        rb = s.get("resume_binding") or {}
+                        title = (s.get("title") or "").lower()
+                        if rb.get("kind") == "claude" or "cursor-" in title:
+                            continue
+                        if "codex" in title or "opencode" in title:
+                            continue
+                        rwd = s.get("requested_working_directory") or ""
+                        if rwd == want or rwd.endswith(want):
+                            return s.get("id") or None
+        except Exception:
+            return None
+        return None
+
     def focus_by_opencode_sid(self, sid: str) -> Optional[str]:
         """Focus the cmux surface running the OpenCode session with agent.sessionId == sid.
 

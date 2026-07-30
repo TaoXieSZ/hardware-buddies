@@ -195,25 +195,24 @@ class BuddyState:
         # 合并外部 agent（cursor/codex/opencode bridge 推来的 ext_sessions）。
         # 本机会话默认 agent=claude（不带字段，固件视缺省为 claude）；ext 每条标自己的 agent。
         # 超过 EXT_STALE_SEC 没更新的快照丢弃（bridge 挂了不留幽灵）。
-        # ── 槽位分配：ext sessions 先占，剩余给本地 Claude ──
-        # 避免本地 16 slots 全被 Claude 占满 → ext 全被挤出（常见于多 agent 场景）。
+        # ── 槽位分配：见 _alloc_session_slots（waiting 优先 + 每 agent 保底）──
         if self.ext_sessions:
             now = time.monotonic()
-            # 先收集所有有效的 ext sessions
-            ext_rows = []
+            # 分组收集，顺序即优先级：ext 各 agent 在前，本地 Claude 殿后。
+            groups = []
             for _agent, _snap in self.ext_sessions.items():
                 if now - _snap.get("ts", 0) > self.EXT_STALE_SEC:
                     continue
+                rows = []
                 for _row in _snap.get("sessions", []):
                     r = dict(_row)
                     r["agent"] = _agent
-                    ext_rows.append(r)
-            # ext 先占槽（上限 16），剩余给本地
-            merged = ext_rows[:16]
-            room = 16 - len(merged)
-            if room > 0 and p.get("sessions"):
-                merged = merged + p["sessions"][:room]
-            p["sessions"] = merged
+                    rows.append(r)
+                if rows:
+                    groups.append(rows)
+            if p.get("sessions"):
+                groups.append(list(p["sessions"]))
+            p["sessions"] = _alloc_session_slots(groups)
         # 待应答的 AskUserQuestion（cardputer question 应答器）。字段紧凑 + 截断防固件
         # 行缓冲溢出；固件回送 option id，cc-bridge 再 id→label 调 feed.question.reply。
         if self.pending_question:
@@ -232,6 +231,49 @@ class BuddyState:
         # Newest first, capped — matches REFERENCE.md "newest first".
         self.entries.insert(0, line[:91])
         del self.entries[8:]
+
+
+# ─── session slot allocation ───────────────────────────────────────────
+def _alloc_session_slots(groups: list, cap: int = 16) -> list:
+    """Distribute ≤cap session rows among per-agent groups (rows in group order).
+
+    规则（2026-07 性能修复，多 bridge 并存场景）：
+    1. st=="waiting" 的会话永远最优先——用户在设备上等着应答，绝不能被挤掉；
+    2. 槽位够时每家有会话的 agent 保底 2 槽——以前 ext 先占满 16、排在后面的
+       agent（含本地 Claude）整家静默消失，5 家并存时互相抢槽；
+    3. 剩余槽位按组的传入顺序填满（调用方保持 ext 先、本地 Claude 最后的旧
+       优先级）；组太多保底不起时（groups*2 > cap）退回纯优先级填充。
+    """
+    picked = []
+    seen = set()
+
+    def _take(row):
+        picked.append(row)
+        seen.add(id(row))
+
+    # 1. waiting first
+    for rows in groups:
+        for r in rows:
+            if r.get("st") == "waiting" and len(picked) < cap:
+                _take(r)
+    # 2. per-agent floor of 2 (only when every group can actually get 2)
+    floor = 2 if len(groups) * 2 <= cap else 0
+    for rows in groups:
+        n = floor
+        for r in rows:
+            if n == 0 or len(picked) >= cap:
+                break
+            if id(r) not in seen:
+                _take(r)
+                n -= 1
+    # 3. fill the rest in group priority order
+    for rows in groups:
+        for r in rows:
+            if len(picked) >= cap:
+                return picked
+            if id(r) not in seen:
+                _take(r)
+    return picked
 
 
 # ─── permission echo plumbing ──────────────────────────────────────────
@@ -1225,11 +1267,20 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
             agent = str(head.get("agent") or "ext")[:16]
             sessions = head.get("sessions")
             if isinstance(sessions, list):
-                state.ext_sessions[agent] = {
-                    "sessions": sessions[:16],
-                    "ts": time.monotonic(),
-                }
-                dirty.set()   # push merged payload next heartbeat
+                sessions = sessions[:16]
+                prev = state.ext_sessions.get(agent)
+                # 快照去重（2026-07 性能修复）：每家 bridge 每 2s 心跳重推一次，
+                # 4-5 家并存时若不拦截，dirty 会让心跳循环每 0.4-0.5s 整帧重发
+                # BLE，占满 radio 并和审批回包竞争。内容没变就只刷新 ts（防
+                # EXT_STALE_SEC 误判失联），不触发重发。
+                if prev is not None and prev.get("sessions") == sessions:
+                    prev["ts"] = time.monotonic()
+                else:
+                    state.ext_sessions[agent] = {
+                        "sessions": sessions,
+                        "ts": time.monotonic(),
+                    }
+                    dirty.set()   # push merged payload next heartbeat
             return
 
         if isinstance(head, dict) and head.get("action") == "screenshot":
@@ -1390,14 +1441,48 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
 
 
 # ─── loops ─────────────────────────────────────────────────────────────
+def _has_urgent(state: BuddyState) -> bool:
+    """True when the device is showing something the user is about to answer —
+    permission prompt / AskUserQuestion / any session in `waiting`.
+
+    这类变化绕过心跳节流（用户在设备按键上等响应，延迟必须低）；常规状态
+    变化（token 数、running 翻转等）才走节流合并。"""
+    if state.waiting > 0 or state.prompt is not None or state.pending_question is not None:
+        return True
+    if any(s.get("st") == "waiting" for s in state._sessions.values()):
+        return True
+    # ext 快照里别家 agent 的 waiting 会话同样紧急（用户一样在等）
+    now = time.monotonic()
+    for snap in state.ext_sessions.values():
+        if now - snap.get("ts", 0) <= state.EXT_STALE_SEC:
+            if any(r.get("st") == "waiting" for r in snap.get("sessions", [])):
+                return True
+    return False
+
+
 async def heartbeat_loop(state: BuddyState, ble: BleWriter,
                          dirty: asyncio.Event, keepalive_s: float,
                          log: logging.Logger,
                          log_fmt: Callable[[dict], str] | None = None):
     """Emits on dirty event OR every keepalive_s, whichever comes first.
 
+    Dirty-triggered emits are throttled to at most one per
+    CC_BRIDGE_MIN_HEARTBEAT_S (default 1s); changes arriving inside the
+    window are coalesced into one deferred send. Urgent state (permission
+    prompt / question / waiting session) bypasses the throttle and sends
+    immediately.
+
     Logs at INFO only on real state changes — keepalive ticks are DEBUG
     so the log file doesn't grow 6 MB / few hours on an idle Mac."""
+    # 心跳节流（2026-07 性能修复）：多家 ext bridge 的心跳变化密集触发 dirty
+    # 时，整帧重发太密会占满 BLE radio 并和审批回包竞争（固件分块发送每块
+    # delay(4)）。常规变化距上次发送不足 min_s 就合并延后；waiting/prompt/
+    # question 这类用户等着按键的紧急事件立即发，不节流。
+    try:
+        min_s = float(os.environ.get("CC_BRIDGE_MIN_HEARTBEAT_S", "1.0"))
+    except ValueError:
+        min_s = 1.0
+    last_send = 0.0
     while True:
         try:
             keepalive = False
@@ -1405,6 +1490,18 @@ async def heartbeat_loop(state: BuddyState, ble: BleWriter,
                 await asyncio.wait_for(dirty.wait(), timeout=keepalive_s)
             except asyncio.TimeoutError:
                 keepalive = True
+            now = time.monotonic()
+            if (not keepalive and min_s > 0 and last_send
+                    and now - last_send < min_s and not _has_urgent(state)):
+                # 节流窗口内：清 dirty 后等到窗口结束再合并发出；期间来了新
+                # dirty（可能是紧急事件）就回循环头重新评估，紧急的立即发。
+                dirty.clear()
+                try:
+                    await asyncio.wait_for(dirty.wait(),
+                                           timeout=min_s - (now - last_send))
+                    continue
+                except asyncio.TimeoutError:
+                    pass   # 窗口到点：把这段期间合并的变化一次发出去
             dirty.clear()
             payload = state.to_payload()
             level = logging.DEBUG if keepalive else logging.INFO
@@ -1417,6 +1514,7 @@ async def heartbeat_loop(state: BuddyState, ble: BleWriter,
                         (payload.get("prompt", {}) or {}).get("id", "-"),
                         payload.get("msg", "")[:40])
             await ble.write(payload)
+            last_send = time.monotonic()
         except asyncio.CancelledError:
             raise
         except Exception as e:

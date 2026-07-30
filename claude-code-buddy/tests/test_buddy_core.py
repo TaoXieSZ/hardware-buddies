@@ -567,3 +567,187 @@ def test_wait_permission_claude_still_pins_session():
     assert "agent" not in cap["prompt"]                  # untagged for own agent
     # the claude sid WAS pinned while waiting (bucket created)
     assert "claude-sid-1" in cap["sessions_keys"]
+
+
+# ─── ext_sessions snapshot dedup (handle_client) ───────────────────────
+
+def _drive_ext_sessions(state, dirty, msg: dict):
+    """Feed one ext_sessions frame through handle_client with a null writer."""
+    import json as _json
+    import logging as _logging
+    from buddy_core.core import handle_client
+
+    class _W:
+        def write(self, b): pass
+        async def drain(self): pass
+        def close(self): pass
+        async def wait_closed(self): pass
+
+    async def _go():
+        # StreamReader must be built inside a running loop (py3.14).
+        r = asyncio.StreamReader()
+        r.feed_data(_json.dumps(msg).encode() + b"\n")
+        r.feed_eof()
+        await handle_client(r, _W(), state, None, dirty,
+                            lambda s, e: False, {}, _logging.getLogger("test"))
+
+    asyncio.run(_go())
+
+
+def test_ext_sessions_identical_snapshot_does_not_dirty():
+    # 2026-07 性能修复：每家 bridge 每 2s 心跳重推一次快照，内容没变就不得
+    # 触发 dirty（否则 4-5 家并存 = 每 0.4-0.5s 一次整帧 BLE 重发）。
+    # 但 ts 必须刷新，否则 30s 后被 EXT_STALE_SEC 当成失联快照丢弃。
+    from buddy_core.core import BuddyState
+    st, dirty = BuddyState(), asyncio.Event()
+    msg = {"action": "ext_sessions", "agent": "cursor",
+           "sessions": [{"sid": "c1", "running": True}]}
+    _drive_ext_sessions(st, dirty, msg)
+    assert dirty.is_set()                     # 首次快照是变化 → 正常触发
+    first_ts = st.ext_sessions["cursor"]["ts"]
+    dirty.clear()
+    _drive_ext_sessions(st, dirty, msg)       # 相同快照重推
+    assert not dirty.is_set()                 # → 不 dirty，不重发
+    assert st.ext_sessions["cursor"]["ts"] >= first_ts   # ts 已刷新
+
+
+def test_ext_sessions_changed_snapshot_still_sets_dirty():
+    from buddy_core.core import BuddyState
+    st, dirty = BuddyState(), asyncio.Event()
+    _drive_ext_sessions(st, dirty, {"action": "ext_sessions", "agent": "cursor",
+                                    "sessions": [{"sid": "c1"}]})
+    dirty.clear()
+    _drive_ext_sessions(st, dirty, {"action": "ext_sessions", "agent": "cursor",
+                                    "sessions": [{"sid": "c1"}, {"sid": "c2"}]})
+    assert dirty.is_set()                     # 真变化照常触发
+
+
+# ─── session slot quota (to_payload) ────────────────────────────────────
+
+def test_session_slots_quota_each_agent_gets_two():
+    # 5 家并存、各 4 会话（共 20 > 16）：每家保底 2 槽（2026-07 性能修复，
+    # 以前 ext 先占满 16，排后面的 agent 整家静默消失）。
+    import time
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    now = time.monotonic()
+    for agent in ("cursor", "codex", "opencode", "kimi"):
+        st.ext_sessions[agent] = {
+            "sessions": [{"sid": f"{agent}{i}", "running": True} for i in range(4)],
+            "ts": now,
+        }
+    for i in range(4):
+        st._sessions[f"claude{i}"] = {"running": True}
+    sess = st.to_payload()["sessions"]
+    assert len(sess) == 16
+    counts = {}
+    for s in sess:
+        key = s.get("agent", "claude")
+        counts[key] = counts.get(key, 0) + 1
+    assert set(counts) == {"cursor", "codex", "opencode", "kimi", "claude"}
+    assert all(n >= 2 for n in counts.values())
+
+
+def test_session_slots_waiting_first():
+    # waiting 会话永远排在 sessions[] 最前，与该 agent 的槽位优先级无关
+    # （本地 Claude 优先级最低，但它的 waiting 必须第一）。
+    import time
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    st.ext_sessions["cursor"] = {
+        "sessions": [{"sid": "c1", "running": True, "st": "tool"}],
+        "ts": time.monotonic(),
+    }
+    st._sessions["claudeA"] = {"running": True}
+    st.set_session_state("claudeA", "waiting")
+    sids = [s["sid"] for s in st.to_payload()["sessions"]]
+    assert sids[0] == "claudeA"
+
+
+def test_session_slots_waiting_beats_overflow():
+    # 槽位不够每家保底时（9 家 × 2 = 18 > 16，退化为纯优先级填充），waiting
+    # 会话仍然最优先入选——排最后的 agent 的 waiting 不能被挤出。
+    import time
+    from buddy_core.core import BuddyState
+    st = BuddyState()
+    now = time.monotonic()
+    for i in range(8):
+        st.ext_sessions[f"agent{i}"] = {
+            "sessions": [{"sid": f"a{i}s0", "running": True},
+                         {"sid": f"a{i}s1", "running": True}],
+            "ts": now,
+        }
+    st.ext_sessions["agent8"] = {
+        "sessions": [{"sid": "a8-wait", "running": True, "st": "waiting", "ws": 1},
+                     {"sid": "a8-idle", "running": True}],
+        "ts": now,
+    }
+    sids = [s["sid"] for s in st.to_payload()["sessions"]]
+    assert len(sids) == 16
+    assert sids[0] == "a8-wait"
+    assert "a8-idle" not in sids      # 没有保底 → 排最后的非 waiting 被挤出
+
+
+# ─── heartbeat throttle (heartbeat_loop) ────────────────────────────────
+
+class _RecordingBle:
+    def __init__(self):
+        self.writes = []
+
+    async def write(self, payload):
+        self.writes.append(payload)
+
+
+def _run_heartbeat(min_s, script):
+    """Run heartbeat_loop with `script(state, dirty, ble)` alongside; the
+    script cancels the loop when done."""
+    import logging
+    import os
+    from buddy_core.core import BuddyState, heartbeat_loop
+
+    os.environ["CC_BRIDGE_MIN_HEARTBEAT_S"] = str(min_s)
+    try:
+        async def _go():
+            st, dirty, ble = BuddyState(), asyncio.Event(), _RecordingBle()
+            task = asyncio.create_task(
+                heartbeat_loop(st, ble, dirty, 60.0, logging.getLogger("test")))
+            try:
+                await script(st, dirty, ble)
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            return ble
+
+        return asyncio.run(_go())
+    finally:
+        del os.environ["CC_BRIDGE_MIN_HEARTBEAT_S"]
+
+
+def test_heartbeat_throttle_merges_rapid_dirty():
+    # 常规 dirty 距上次发送不足 min_s 时被合并延后：窗口内两次 dirty 只发一次。
+    async def script(st, dirty, ble):
+        dirty.set()                       # t≈0 → 立即发
+        await asyncio.sleep(0.05)
+        assert len(ble.writes) == 1
+        dirty.set()                       # t≈0.05 → 节流窗口内
+        await asyncio.sleep(0.05)
+        dirty.set()                       # t≈0.10 → 与上一次合并
+        await asyncio.sleep(0.3)          # min_s=0.2 → 窗口到点合并发出
+        assert len(ble.writes) == 2
+    _run_heartbeat(0.2, script)
+
+
+def test_heartbeat_throttle_bypassed_when_waiting():
+    # waiting/question/prompt 是紧急事件：不节流，立即发（用户在设备按键上等）。
+    async def script(st, dirty, ble):
+        dirty.set()
+        await asyncio.sleep(0.05)
+        assert len(ble.writes) == 1
+        st.set_session_state("s1", "waiting")   # 紧急变化
+        dirty.set()
+        await asyncio.sleep(0.05)               # 远小于 min_s=0.2
+        assert len(ble.writes) == 2             # 立即发出，不等节流窗口
+    _run_heartbeat(0.2, script)

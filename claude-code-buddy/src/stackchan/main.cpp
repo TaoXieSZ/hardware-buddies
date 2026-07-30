@@ -465,7 +465,7 @@ void setup() {
   // Voice-agent mode (Path A2, no Claude Code): full-screen Clawd + a
   // scrolling subtitle ticker, ACNH cards hidden. IDLE so Clawd animates
   // from boot (SLEEP would just show the sleep pose).
-  characterSetVoiceMode(true);
+  characterSetVoiceMode(false);
   characterSetState(CHAR_IDLE);
   characterSetSubtitle("");
 

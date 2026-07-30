@@ -668,15 +668,18 @@ if __name__ == "__main__":
             # pane (no checkpoint, sid in title as cursor-<UUID>) so the device
             # can focus Cursor sessions too (openspec cardputer-cursor-sessions).
             # Claude pane (sid == checkpoint_id) → Cursor pane (sid in title as
-            # cursor-<UUID>) → Codex pane. A Codex pane has no cmux session-id;
-            # codex-bridge makes the sid BE the pane's cwd (or its last 39 chars),
-            # so focus_by_codex_cwd matches requested_working_directory == sid or
-            # endswith(sid). Stateless — the select callback can't see BuddyState.
+            # cursor-<UUID>) → OpenCode pane → Codex pane → Kimi pane. Codex and
+            # Kimi panes have no cmux session-id; both bridges make the sid BE
+            # the pane's cwd (or its last 39 chars). focus_by_codex_cwd only
+            # matches kind=="codex" panes, so Kimi needs its own generic
+            # cwd matcher (excludes panes tagged as other agents). Stateless —
+            # the select callback can't see BuddyState.
             # (openspec cardputer-codex-sessions)
             surface = (_cmux.focus_by_checkpoint(sid)
                        or _cmux.focus_by_cursor_sid(sid)
                        or _cmux.focus_by_opencode_sid(sid)
-                       or _cmux.focus_by_codex_cwd(sid))
+                       or _cmux.focus_by_codex_cwd(sid)
+                       or _cmux.focus_by_kimi_cwd(sid))
             if surface:
                 log.info("selectSession %s → focused surface %s", sid, surface)
             else:

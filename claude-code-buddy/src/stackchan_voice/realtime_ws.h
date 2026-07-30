@@ -15,7 +15,9 @@ struct RtCallbacks {
   void (*onSessionReady)();                            // session.updated 已确认
   void (*onAudio)(const uint8_t* pcm24k, size_t len);  // 解码后的回复音频
   void (*onTranscript)(const char* utf8, size_t len);  // 回复文本增量（字幕用）
-  void (*onDone)();                                    // response.done（usage 已打串口）
+  // 服务端对用户语音的 ASR 转写（完整一句）。面板"最近一轮"要显示用户说了什么。
+  void (*onUserTranscript)(const char* utf8, size_t len);
+  void (*onDone)(uint32_t total_tokens);               // response.done，带本轮 usage
   void (*onError)(const char* msg);                    // 服务端 error / WS 断开
 };
 

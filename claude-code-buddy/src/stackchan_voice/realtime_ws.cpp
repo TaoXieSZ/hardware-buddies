@@ -5,6 +5,7 @@
 #include <esp_heap_caps.h>
 #include <mbedtls/base64.h>
 
+#include "../stackchan/settings.h"
 #include "dashscope_ca.h"
 
 namespace {
@@ -13,10 +14,11 @@ constexpr const char* HOST = "dashscope.aliyuncs.com";
 constexpr const char* PATH =
     "/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash";
 
-// 人设定稿（音色 longpaopao_v3.6 用户 2026-07-18 拍板；2026-07-19 改名小咪）。
+// 出厂默认（音色 longpaopao_v3.6 用户 2026-07-18 拍板；2026-07-19 改名小咪）。
+// 运行时可经控制面板改写并存 NVS —— settings 返回空串时才用这里的默认值。
 // 与 tools/voice-prototype/talk_once.py 的 INSTRUCTIONS 保持一致。
-constexpr const char* VOICE = "longpaopao_v3.6";
-constexpr const char* INSTRUCTIONS =
+constexpr const char* DEFAULT_VOICE = "longpaopao_v3.6";
+constexpr const char* DEFAULT_INSTRUCTIONS =
     "你是小咪，一只住在主人桌面上的黑白美短小猫桌宠（StackChan 机器人）。"
     "性格活泼粘人，说话口语化、偶尔卖萌，中文回答。"
     "硬性要求：每次回答不超过 3 句话，不要列清单，不要长篇大论。";
@@ -52,7 +54,39 @@ bool typeIs(const char* payload, const char* type) {
   return strstr(payload, pat) != nullptr;
 }
 
+// 人设是用户自由文本（控制面板可改），必须转义后才能塞进 JSON 字符串，
+// 否则一个引号或换行就让整条 session.update 变成非法 JSON。
+size_t jsonEscape(const char* src, char* dst, size_t cap) {
+  size_t o = 0;
+  for (const unsigned char* p = (const unsigned char*)src; *p && o + 7 < cap; ++p) {
+    switch (*p) {
+      case '"':  dst[o++]='\\'; dst[o++]='"';  break;
+      case '\\': dst[o++]='\\'; dst[o++]='\\'; break;
+      case '\n': dst[o++]='\\'; dst[o++]='n';  break;
+      case '\r': dst[o++]='\\'; dst[o++]='r';  break;
+      case '\t': dst[o++]='\\'; dst[o++]='t';  break;
+      default:
+        if (*p < 0x20) {           // 其余控制字符走 \u00XX
+          o += snprintf(dst + o, cap - o, "\\u%04x", *p);
+        } else {
+          dst[o++] = (char)*p;     // UTF-8 字节原样透传
+        }
+    }
+  }
+  dst[o] = 0;
+  return o;
+}
+
 void sendSessionUpdate() {
+  // 运行时可调（控制面板写 NVS）；空串回落出厂默认。
+  const char* voice = settingsGetVoiceName();
+  if (!voice || !*voice) voice = DEFAULT_VOICE;
+  const char* persona = settingsGetVoicePersona();
+  if (!persona || !*persona) persona = DEFAULT_INSTRUCTIONS;
+
+  static char esc[1200];
+  jsonEscape(persona, esc, sizeof(esc));
+
   // Manual/PTT：turn_detection 必须显式 null（服务端默认 server_vad，实测）。
   int n = snprintf(s_tx, TX_CAP,
       "{\"type\":\"session.update\",\"session\":{"
@@ -61,8 +95,9 @@ void sendSessionUpdate() {
       "\"input_audio_format\":\"pcm\",\"output_audio_format\":\"pcm\","
       "\"instructions\":\"%s\","
       "\"turn_detection\":null}}",
-      VOICE, INSTRUCTIONS);
+      voice, esc);
   s_ws.sendTXT((uint8_t*)s_tx, n);
+  Serial.printf("[rt] session.update voice=%s persona=%u字节\n", voice, (unsigned)strlen(persona));
 }
 
 void handleText(uint8_t* payload, size_t length) {
@@ -83,6 +118,12 @@ void handleText(uint8_t* payload, size_t length) {
     }
     return;
   }
+  if (typeIs(p, "conversation.item.input_audio_transcription.completed")) {
+    size_t len = 0;
+    const char* t = findStr(p, "transcript", &len);
+    if (t && len && s_cb.onUserTranscript) s_cb.onUserTranscript(t, len);
+    return;
+  }
   if (typeIs(p, "response.audio_transcript.delta")) {
     size_t len = 0;
     const char* d = findStr(p, "delta", &len);
@@ -92,7 +133,11 @@ void handleText(uint8_t* payload, size_t length) {
   if (typeIs(p, "response.done")) {
     const char* usage = strstr(p, "\"usage\"");
     Serial.printf("[rt] done  %.200s\n", usage ? usage : "(no usage)");
-    if (s_cb.onDone) s_cb.onDone();
+    // 面板要显示本轮花了多少 token —— 从 usage 里挖出 total_tokens。
+    uint32_t total = 0;
+    const char* t = usage ? strstr(usage, "\"total_tokens\":") : nullptr;
+    if (t) total = (uint32_t)strtoul(t + 15, nullptr, 10);
+    if (s_cb.onDone) s_cb.onDone(total);
     return;
   }
   if (typeIs(p, "session.created")) {

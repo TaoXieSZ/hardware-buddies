@@ -27,3 +27,4 @@ venv/
 
 # Agent tool scratch dirs
 .omc/
+.gstack/

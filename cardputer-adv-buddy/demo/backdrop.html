@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clawd · 掌上 Claude Code 搭子</title>
+<style>
+  :root{
+    --bg:#070708; --panel:#0f0f12; --line:#1c1c22;
+    --coral:#D97757; --coral-soft:#f0a987; --coral-dim:#7a4636;
+    --cyan:#5fb6c9; --txt:#ededed; --muted:#7c7c86;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:
+      radial-gradient(1200px 700px at 50% 38%, #16110f 0%, var(--bg) 60%),
+      var(--bg);
+    color:var(--txt);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,
+      "Segoe UI",Roboto,sans-serif;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* faint tech grid */
+  body::before{
+    content:"";position:fixed;inset:0;z-index:0;opacity:.05;
+    background-image:linear-gradient(var(--coral) 1px,transparent 1px),
+      linear-gradient(90deg,var(--coral) 1px,transparent 1px);
+    background-size:44px 44px;
+    mask-image:radial-gradient(900px 600px at 50% 45%,#000 30%,transparent 75%);
+  }
+  .wrap{position:relative;z-index:1;height:100%;display:flex;flex-direction:column;
+    padding:3.2vh 3.4vw}
+
+  /* ---------- header ---------- */
+  header{text-align:center;flex:0 0 auto}
+  .badge{display:inline-block;font:600 12px/1 ui-monospace,monospace;letter-spacing:.18em;
+    color:var(--coral);border:1px solid var(--coral-dim);border-radius:999px;
+    padding:7px 14px;text-transform:uppercase;opacity:.9}
+  h1{font-size:clamp(28px,4.4vw,62px);font-weight:800;letter-spacing:.01em;margin:14px 0 6px}
+  h1 .c{color:var(--coral)}
+  .sub{color:var(--muted);font-size:clamp(13px,1.4vw,19px);font-weight:500}
+
+  /* ---------- architecture pipeline ---------- */
+  .arch{flex:0 0 auto;margin:3.2vh auto 0;display:flex;align-items:stretch;gap:0;
+    width:min(1180px,94vw)}
+  .node{flex:1;background:linear-gradient(180deg,#131318,#0d0d11);border:1px solid var(--line);
+    border-radius:16px;padding:16px 14px;text-align:center;position:relative}
+  .node .ico{font-size:26px}
+  .node .nm{font-weight:700;font-size:clamp(13px,1.3vw,17px);margin-top:6px}
+  .node .dt{color:var(--muted);font:500 11px/1.45 ui-monospace,monospace;margin-top:5px}
+  .node.hl{border-color:var(--coral-dim);box-shadow:0 0 0 1px var(--coral-dim),
+    0 0 30px -8px var(--coral)}
+  .link{flex:0 0 clamp(70px,9vw,130px);position:relative;align-self:center;height:46px}
+  .link .rail{position:absolute;left:0;right:0;top:50%;height:2px;
+    background:linear-gradient(90deg,transparent,var(--line) 18%,var(--line) 82%,transparent)}
+  .link .lbl{position:absolute;left:0;right:0;text-align:center;color:var(--muted);
+    font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.04em}
+  .link .lbl.up{top:-2px}.link .lbl.dn{bottom:-2px}
+  .dot{position:absolute;top:50%;width:7px;height:7px;border-radius:50%;margin-top:-3.5px;
+    filter:drop-shadow(0 0 6px currentColor)}
+  .dot.s{color:var(--coral);background:var(--coral);animation:flowR 2.6s linear infinite}
+  .dot.c{color:var(--cyan);background:var(--cyan);animation:flowL 2.9s linear infinite}
+  @keyframes flowR{from{left:-4%}to{left:104%}}
+  @keyframes flowL{from{left:104%}to{left:-4%}}
+
+  /* ---------- stage + side features ---------- */
+  .mid{flex:1 1 auto;display:grid;grid-template-columns:1fr 1.05fr 1fr;gap:2.4vw;
+    align-items:center;margin-top:2.2vh;min-height:0}
+  .col{display:flex;flex-direction:column;gap:14px}
+  .feat{background:linear-gradient(180deg,#121217,#0e0e12);border:1px solid var(--line);
+    border-radius:14px;padding:13px 15px;display:flex;gap:12px;align-items:flex-start;
+    transition:.3s}
+  .feat .fi{font-size:20px;line-height:1.2;flex:0 0 auto}
+  .feat .ft{font-weight:700;font-size:clamp(13px,1.25vw,16px)}
+  .feat .fd{color:var(--muted);font-size:clamp(10.5px,1.02vw,12.5px);margin-top:3px;line-height:1.4}
+  .feat:hover{border-color:var(--coral-dim)}
+
+  /* stage: where the real device sits */
+  .stage{position:relative;height:100%;min-height:38vh;display:flex;align-items:center;
+    justify-content:center}
+  .halo{position:absolute;width:min(360px,30vw);aspect-ratio:1;border-radius:50%;
+    background:radial-gradient(circle,rgba(217,119,87,.32),rgba(217,119,87,.06) 55%,transparent 72%);
+    animation:breathe 4s ease-in-out infinite}
+  .ring{position:absolute;width:min(300px,25vw);aspect-ratio:1;border-radius:50%;
+    border:1px dashed var(--coral-dim);opacity:.55;animation:spin 26s linear infinite}
+  .ring.r2{width:min(220px,18vw);border-style:solid;border-color:#2a1b16;animation-duration:18s;
+    animation-direction:reverse}
+  .stage .cap{position:absolute;bottom:2%;color:var(--coral);opacity:.8;
+    font:600 11px/1 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase}
+  @keyframes breathe{0%,100%{transform:scale(.92);opacity:.85}50%{transform:scale(1.06);opacity:1}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ---------- footer ---------- */
+  footer{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;
+    color:var(--muted);font:500 11.5px/1 ui-monospace,monospace;margin-top:1.6vh;
+    border-top:1px solid var(--line);padding-top:12px;letter-spacing:.03em}
+  footer .k{color:var(--coral)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="badge">ESP32-S3 · BLE · Claude Code</span>
+    <h1>Clawd<span class="c">·</span>掌上 <span class="c">Claude Code</span> 搭子</h1>
+    <div class="sub">AI 在想啥、干到哪、要问你 —— 全写在这块掌机的脸上;答题 · 语音 · 切会话,反向指挥 AI</div>
+  </header>
+
+  <!-- 架构主线 -->
+  <section class="arch">
+    <div class="node hl">
+      <div class="ico">🎮</div><div class="nm">Cardputer-ADV</div>
+      <div class="dt">ESP32-S3 · clawd GIF<br>键盘 · IMU · 扬声器</div>
+    </div>
+    <div class="link">
+      <div class="lbl up">▲ 指令上行</div>
+      <div class="rail"></div>
+      <span class="dot s" style="animation-delay:0s"></span>
+      <span class="dot c" style="animation-delay:.6s"></span>
+      <div class="lbl dn">BLE NUS</div>
+    </div>
+    <div class="node">
+      <div class="ico">🛰️</div><div class="nm">cc-bridge 守护进程</div>
+      <div class="dt">Python · BleakClient<br>状态↔指令 翻译</div>
+    </div>
+    <div class="link">
+      <div class="lbl up">▼ 状态下行</div>
+      <div class="rail"></div>
+      <span class="dot c" style="animation-delay:.2s"></span>
+      <span class="dot s" style="animation-delay:1.4s"></span>
+      <div class="lbl dn">socket · hooks</div>
+    </div>
+    <div class="node">
+      <div class="ico">🤖</div><div class="nm">Claude Code · cmux</div>
+      <div class="dt">hook 事件 · feed<br>AskUserQuestion</div>
+    </div>
+  </section>
+
+  <!-- 两侧功能 + 中间放真机 -->
+  <section class="mid">
+    <div class="col">
+      <div class="feat"><span class="fi">🎭</span><div><div class="ft">表情随状态</div>
+        <div class="fd">thinking / busy / celebrate / sleep —— 实时映射 AI 状态</div></div></div>
+      <div class="feat"><span class="fi">⌨️</span><div><div class="ft">掌上答题</div>
+        <div class="fd">AI 弹选择题,设备直接显示选项,按数字即答</div></div></div>
+      <div class="feat"><span class="fi">🎙️</span><div><div class="ft">按住说话</div>
+        <div class="fd">长按 'v' 语音指挥 AI,转写直接进终端</div></div></div>
+      <div class="feat"><span class="fi">🔀</span><div><div class="ft">会话切换</div>
+        <div class="fd">掌上选会话 → cmux 自动把对应窗口拉到最前</div></div></div>
+    </div>
+
+    <div class="stage">
+      <div class="halo"></div>
+      <div class="ring"></div>
+      <div class="ring r2"></div>
+      <div class="cap">live device</div>
+    </div>
+
+    <div class="col">
+      <div class="feat"><span class="fi">🀄</span><div><div class="ft">中文显示</div>
+        <div class="fd">内置 efontCN 字库,选项/会话名中文清晰</div></div></div>
+      <div class="feat"><span class="fi">🔁</span><div><div class="ft">断链自愈</div>
+        <div class="fd">BLE 半开自动重连,无需手动重启</div></div></div>
+      <div class="feat"><span class="fi">📳</span><div><div class="ft">摇一摇</div>
+        <div class="fd">IMU 体感:摇晃它会"晕",闲置自动打盹</div></div></div>
+      <div class="feat"><span class="fi">🔔</span><div><div class="ft">审批 / 提醒</div>
+        <div class="fd">权限请求 · 待你输入,掌上即时感知</div></div></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>🐾 <span class="k">clawd</span> on Cardputer-ADV</span>
+    <span><span class="k">stack</span> ESP32-S3 · PlatformIO · BLE NUS · Python daemon · cmux</span>
+    <span><span class="k">github</span> /hardware-buddies</span>
+  </footer>
+
+</div>
+</body>
+</html>

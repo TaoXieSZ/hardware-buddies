@@ -26,6 +26,10 @@ uint8_t g_tilt        = 65;   // degrees, 0..90; servo Y baseline
 uint16_t g_sleep_after = 60;  // seconds after SLEEP entry to blank; 0=never
 // 语音助手固件专用（buddy 不读）：见 settings.h 注释。
 uint16_t g_voice_idle  = 300; // 懒连接空闲断开秒数
+// 空串 = 未设置，调用方回落到编译期默认（同 g_char_name 约定）。
+char     g_voice_name[40] = "";
+char     g_voice_persona[512] = "";
+bool     g_voice_dance = false;
 uint8_t  g_voice_turns = 20;  // 单连接轮数上限
 
 }  // namespace
@@ -44,6 +48,18 @@ void settingsInit() {
   g_sleep_after = g_nvs.getUShort("soff", g_sleep_after);
   g_voice_idle  = g_nvs.getUShort("vidle", g_voice_idle);
   g_voice_turns = g_nvs.getUChar ("vturns", g_voice_turns);
+  g_voice_dance = g_nvs.getBool  ("vdance", g_voice_dance);
+  // 字符串项：NVS 无值时保持空串，调用方回落编译期默认。
+  auto loadStr = [](const char* key, char* dst, size_t cap) {
+    String v = g_nvs.getString(key, "");
+    size_t n = v.length();
+    if (n == 0) return;
+    if (n >= cap) n = cap - 1;
+    memcpy(dst, v.c_str(), n);
+    dst[n] = 0;
+  };
+  loadStr("vvoice", g_voice_name, sizeof(g_voice_name));
+  loadStr("vpersona", g_voice_persona, sizeof(g_voice_persona));
   String cn    = g_nvs.getString("char",  "");
   size_t cl    = cn.length();
   if (cl > 0) {
@@ -69,6 +85,32 @@ bool     settingsGetIdleWiggleEnabled() { return g_idle_wiggle; }
 uint8_t  settingsGetTilt()          { return g_tilt; }
 uint16_t settingsGetVoiceIdleSec()  { return g_voice_idle; }
 uint8_t  settingsGetVoiceTurnLimit(){ return g_voice_turns; }
+const char* settingsGetVoiceName()    { return g_voice_name; }
+const char* settingsGetVoicePersona() { return g_voice_persona; }
+bool     settingsGetVoiceDance()      { return g_voice_dance; }
+
+void settingsSetVoiceName(const char* name) {
+  if (!name) name = "";
+  strncpy(g_voice_name, name, sizeof(g_voice_name) - 1);
+  g_voice_name[sizeof(g_voice_name) - 1] = 0;
+  g_nvs.putString("vvoice", g_voice_name);
+  Serial.printf("[set] vvoice='%s'（下次会话生效）\n", g_voice_name);
+}
+
+void settingsSetVoicePersona(const char* text) {
+  if (!text) text = "";
+  strncpy(g_voice_persona, text, sizeof(g_voice_persona) - 1);
+  g_voice_persona[sizeof(g_voice_persona) - 1] = 0;
+  g_nvs.putString("vpersona", g_voice_persona);
+  Serial.printf("[set] vpersona=%u 字节（下次会话生效）\n",
+                (unsigned)strlen(g_voice_persona));
+}
+
+void settingsSetVoiceDance(bool on) {
+  g_voice_dance = on;
+  g_nvs.putBool("vdance", on);
+  Serial.printf("[set] vdance=%d\n", (int)on);
+}
 
 void settingsSetVoiceIdleSec(uint16_t sec) {
   if (sec < 30) sec = 30;

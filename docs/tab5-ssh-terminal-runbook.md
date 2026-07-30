@@ -139,6 +139,22 @@ claude                 # 启动已认证的 Claude Code
 合盖/断网后再 `ssh connect 0` → `tmux attach -t tab5`,会话还在。
 若 SSH 会话偶尔读不到 keychain 提示 login → 在该会话里 `claude setup-token` 配长效 token。
 
+### 7.1 省掉 tmux/claude 手敲:登录即自动进 Claude（推荐）
+
+在 Mac 的 `~/.zshrc` **末尾**(PATH 已配好处)加一段，交互式 SSH 登录就自动 attach tmux + 跑 claude，
+Tab5 上只剩 `ssh connect 0` 一行要敲：
+```zsh
+# 仅对【交互式 SSH 登录 + 有 TTY】生效；本地终端(cmux/Terminal，无 $SSH_CONNECTION)、
+# scp/rsync/`ssh host cmd`(非交互无 TTY) 全不触发；已在 tmux 内不递归。
+# 逃生:连前 `export NO_TAB5_TMUX=1` 或 `touch ~/.no-tab5-tmux`。
+if [[ -o interactive && -n "$SSH_CONNECTION" && -z "$TMUX" && -t 1 \
+      && -z "$NO_TAB5_TMUX" && ! -f "$HOME/.no-tab5-tmux" ]]; then
+  tmux new-session -A -s tab5 claude
+fi
+```
+放 `.zshrc` 末尾而非 `.zprofile`：`~/.local/bin`(claude 所在)是在 `.zshrc` 里才加进 PATH 的。
+校验:`zsh -n ~/.zshrc`。于是 Tab5 日常 = 只敲 `ssh connect 0` → 直接进 Claude Code。
+
 ---
 
 ## 排错速查

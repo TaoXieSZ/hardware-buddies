@@ -40,6 +40,7 @@ import buddy_core.core as _buddy_core_core  # noqa: E402
 _cc_bridge = _load("cc_bridge", _TOOLS / "cc-bridge" / "bridge.py")
 _cursor_bridge = _load("cursor_bridge", _TOOLS / "cursor-bridge" / "bridge.py")
 _codex_bridge = _load("codex_bridge", _TOOLS / "codex-bridge" / "bridge.py")
+_kimi_bridge = _load("kimi_bridge", _TOOLS / "kimi-bridge" / "bridge.py")
 _statusline_hud = _load("statusline_hud", _TOOLS / "cc-bridge" / "statusline_hud.py")
 
 
@@ -69,6 +70,12 @@ def cursor():
 def codex():
     """The codex-bridge module (`tools/codex-bridge/bridge.py`)."""
     return _codex_bridge
+
+
+@pytest.fixture
+def kimi():
+    """The kimi-bridge module (`tools/kimi-bridge/bridge.py`)."""
+    return _kimi_bridge
 
 
 @pytest.fixture
