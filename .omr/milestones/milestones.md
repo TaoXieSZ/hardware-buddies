@@ -29,3 +29,12 @@
 - **上下文**: 横屏 ESP-Claw 空闲显示小龙虾时，Tab5 USB-C 附近严重发热。
 - **内容**: 静态画面仅略降温，排除 PPA 为主因；旧 SSH 固件 `setBrightness(100)` 是 0–255 量程约 39%，而 ESP-Claw `default_percent:100` 是真实满 duty。改为 40% 后 duty 1023→409，三分钟同条件复测明显降温。
 - **收获**: 跨框架移植“亮度 100”必须先确认量程；M5GFX 的 100/255 与百分比 100% 完全不同。
+
+### [Progress] 换机前推送本地改动到远端
+
+- **时间**: 2026-07-31T11:37:00+08:00
+- **项目**: hardware-buddies
+- **上下文**: 用户要换台机器继续开发，需把本地状态上传到 GitHub
+- **内容**: 推送 main（ae07f94..cda2c5a，7 commits）；在 feat/tab5-esp-claw-agentfarm-integration 提交并推送 OpenSpec skills/commands + .snapshot handoff（6d4c689）。wifi_secrets.ini 保持 skip-worktree 不入仓。
+- **收获**: 换机前先核对「已跟踪代码是否已 push」与「未跟踪是否值得 commit」；本机密钥走侧传而非 git
+
