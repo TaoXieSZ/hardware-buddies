@@ -10,11 +10,9 @@
 |---|---|
 | 固件功能 | clawd 随真实状态 / 会话计数角标 / 会话列表 / 审批面板+回送 —— **全部真机验证通过** ✅ |
 | 内存(512KB 无 PSRAM) | 跑满时空闲 **142KB**,余量充裕 |
-| 固件(deny-fix) | **已编译,未烧录** ← 下一步烧录(`.pio/build/cardputer-adv/firmware.bin`) |
-| cc-bridge daemon | **被 kill 了**(为 BLE 直测释放链路),正常用要重启(见下) |
+| 固件 | **2026-08-02 已重刷**（含 deny-fix）：当天设备被误刷 16MB 配置固件 boot loop 黑屏（疑似其他 session 刷 StackChan 打错端口），按根 AGENTS.md postmortem 流程重建+四镜像重刷恢复 |
+| cc-bridge daemon | **launchd 常驻**（见下节），prefix 限定 `Claude-7AFD` |
 | OpenSpec change | `cardputer-claude-buddy` 21/21 任务完成 |
-
-**接手第一步**:把 deny-fix 版 app 烧进去(`.pio/build/cardputer-adv/firmware.bin` 已 build 好)。原因:修了快速点击 deny 键漏检 bug——原来同时要求 `isChange() && isPressed()`,快速点击时 release 帧 `isPressed()` 已为 false 导致整帧漏掉;改为只用 `isChange()`(release 帧 `ks.word` 为空,不会双触发)。
 
 ---
 
@@ -69,18 +67,20 @@ ESP32-S3 原生 USB-Serial-JTAG 在「跑着固件」时重进 bootloader 极不
 
 ## cc-bridge daemon（macOS 侧,驱动设备的那个）
 
-当前从 claude-desktop-buddy 的一个 worktree 跑（**注意不是本 monorepo**）：
+**2026-08-02 起：launchd 常驻，从 monorepo 跑**（旧 worktree 路径已退役）：
 
-- 路径：`/Users/txie/OpenSourceProjects/claude-desktop-buddy/.claude/worktrees/sticks3-buddy`
-- **重启 cc-bridge（Claude）**：
-  ```bash
-  cd /Users/txie/OpenSourceProjects/claude-desktop-buddy/.claude/worktrees/sticks3-buddy
-  CC_BRIDGE_DEVICE_PREFIX="Claude-" CC_BRIDGE_TAB5_SERIAL=/dev/cu.usbmodem21401 \
-  CC_BRIDGE_PTT_MODE=hold CC_BRIDGE_PTT_KEYCODE=61 PYTHONPATH=tools \
-  ~/.cc-bridge/venv/bin/python3 tools/cc-bridge/bridge.py
-  ```
-- cursor-bridge（Cursor）类似,`CURSOR_BRIDGE_DEVICE_PREFIX="Cursor-"` + `tools/cursor-bridge/bridge.py`（之前一直在跑,PID 不固定）。
-- socket：`/tmp/cc-bridge.sock`。
+- 安装：`claude-code-buddy/tools/cc-bridge/install.sh`（venv 在 `~/.cc-bridge/venv`，
+  plist `~/Library/LaunchAgents/com.cc-bridge.plist`，hooks 写进 `~/.claude/settings.json`）。
+- 本机 plist 里 `CC_BRIDGE_DEVICE_PREFIX=Claude-7AFD`（只连这块卡，不抢 StackChan）、
+  `CC_BRIDGE_FRAME_PORT=0`。改 env 必须 `launchctl bootout` + `bootstrap`（kickstart -k 不重读 env）。
+- 日志：`~/Library/Logs/cc-bridge.log`；socket `/tmp/cc-bridge.sock`；dashboard `http://127.0.0.1:18765`。
+- 重启 daemon：`launchctl kickstart -k gui/$(id -u)/com.cc-bridge`。
+  注意重启后**无 cmux 标签的会话（Kimi）要等下次 hook 活动才回设备列表**（Claude 会话靠
+  cmux 标签即时恢复）。
+- **session control 依赖 cmux ≥0.64.6 + Settings→Automation→Socket Control Mode=Automation**
+  （详见根 AGENTS.md）。
+- cursor-bridge / codex-bridge 同构（各自 install.sh + plist；codex-bridge 无 BLE，
+  推 ext_sessions 到 cc-bridge）。
 - **坑**：`CC_BRIDGE_TAB5_SERIAL` 指向的 usbmodem 口会被 daemon 常开+自动重连抢占,挡住该口烧录。本设备走 BLE 不受影响,但若那个口正好是 Cardputer 的 bootloader 口,烧录前先停 daemon。
 
 ### 审批为什么有时不弹（hook 配置）

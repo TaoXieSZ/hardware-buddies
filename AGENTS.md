@@ -56,6 +56,24 @@ build** — always `cd <subdir>` first.
   `cardputer-permission.mjs`. `agentfarm-usb-bridge` auto-detects the Tab5
   by USB serial prefix `80:F1:B2:` (distinguishing it from the Cardputer-ADV
   which is also VID 303A but `50:78:7D:`).
+- **cc-bridge 的 session control 需要 cmux ≥ 0.64.6 + Automation socket 模式。**
+  `cmux_label_loop` / `selectSession` / question responder 全部走
+  `cmux rpc` 子命令；0.62.x 没有 `rpc`，0.64.6+ 默认 `cmuxOnly` 策略会拒绝
+  launchd 起的外部进程（`Access denied - only processes started inside cmux
+  can connect`）。必须在 cmux Settings → Automation → Socket Control Mode
+  选 `Automation` 并**完全重启 app**（改了不重启不生效，cmux#7984）。
+- **Kimi Code 已接入 cc-bridge**（2026-08-02）：`~/.kimi-code/config.toml`
+  末尾的 `cc-bridge Kimi Code hooks` 块把 13 个事件转发给
+  `tools/cc-bridge/hook.py`（Kimi hook 事件名/stdin JSON 与 Claude Code
+  同构）。特性与边界：Kimi 会话无 cmux 标签、无 `agent` 标记（设备上显示
+  `cc` 前缀 + sid），`selectSession` 不可聚焦；daemon 重启后 Kimi 会话要等
+  下次活动（UserPromptSubmit 等）才重新出现在设备列表。修复标记/聚焦是
+  预留的后续 change。
+- **这台机器（taoxie）的 platformio penv 是 2026-08-02 重建的**：
+  `~/.platformio/penv`（python3 venv + `pip install platformio`），
+  pio 不在 PATH，用 `~/.platformio/penv/bin/pio`。pytest 装在
+  `~/.cc-bridge/venv`（`make test-py` 若报 No module named pytest 就跑
+  `~/.cc-bridge/venv/bin/pip install pytest`）。
 - **m5-paper-buddy**: do not refactor. It's a `git subtree` snapshot of
   `op7418/m5-paper-buddy`. Only sync upstream via `git subtree pull`.
 - **stackchan-firmware** (`TaoXieSZ/stackchan-firmware`, subtree from
