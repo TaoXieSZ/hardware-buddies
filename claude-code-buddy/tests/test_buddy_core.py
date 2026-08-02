@@ -117,6 +117,48 @@ def test_to_payload_sessions_from_cmux_snapshot(fresh_state):
     assert fresh_state.pending_play is None
 
 
+def test_to_payload_unlabeled_sessions_appended_after_labels(fresh_state):
+    # cardputer-unlabeled-sessions: hook-tracked sessions WITHOUT a cmux label
+    # (Kimi Code sessions, Claude sessions outside cmux) must not be dropped —
+    # they follow the labeled rows, carry no `label` key (firmware falls back
+    # to sid prefix).
+    fresh_state.session_labels = {"sid-claude": "feat-x"}
+    fresh_state._sessions = {
+        "sid-claude": {"running": True},
+        "session_kimi-1": {"running": True},
+        "session_kimi-2": {"running": False},
+    }
+    assert fresh_state.to_payload()["sessions"] == [
+        {"sid": "sid-claude", "running": True, "label": "feat-x"},
+        {"sid": "session_kimi-1", "running": True},
+        {"sid": "session_kimi-2", "running": False},
+    ]
+
+
+def test_to_payload_unlabeled_dropped_when_labels_fill_slots(fresh_state):
+    # Labeled sessions take slots first; 16 labels → no room for unlabeled.
+    fresh_state.session_labels = {f"sid-{i}": f"label-{i}" for i in range(16)}
+    fresh_state._sessions = {
+        **{f"sid-{i}": {"running": False} for i in range(16)},
+        "session_kimi": {"running": True},
+    }
+    sess = fresh_state.to_payload()["sessions"]
+    assert len(sess) == 16
+    assert all("label" in row for row in sess)
+
+
+def test_to_payload_unlabeled_truncated_to_remaining_slots(fresh_state):
+    # 14 labels + 5 unlabeled → 16 total, only the first 2 unlabeled survive.
+    fresh_state.session_labels = {f"sid-{i}": f"label-{i}" for i in range(14)}
+    fresh_state._sessions = {
+        **{f"sid-{i}": {"running": False} for i in range(14)},
+        **{f"session_kimi-{i}": {"running": False} for i in range(5)},
+    }
+    sess = fresh_state.to_payload()["sessions"]
+    assert len(sess) == 16
+    assert [row["sid"] for row in sess[14:]] == ["session_kimi-0", "session_kimi-1"]
+
+
 # ─── BuddyState.add_entry ──────────────────────────────────────────────
 
 def test_add_entry_newest_first(fresh_state):

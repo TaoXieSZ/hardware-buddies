@@ -179,6 +179,21 @@ class BuddyState:
                 sess.append(row)
                 if len(sess) >= 16:
                     break
+            # cardputer-unlabeled-sessions: hook 跟踪到但没有 cmux 标签的会话
+            #（Kimi Code、不在 cmux 里的 Claude）不能被丢——追加在标签会话之后，
+            # 不带 `label` 键，固件回退显示 sid 前缀；标签会话优先占位。
+            if len(sess) < 16:
+                for _sid, _s in self._sessions.items():
+                    if _sid in self.session_labels:
+                        continue
+                    row = {"sid": _sid, "running": bool(_s.get("running"))}
+                    if _s.get("st"):
+                        row["st"] = _s["st"]
+                    if _s.get("ws"):
+                        row["ws"] = _s["ws"]
+                    sess.append(row)
+                    if len(sess) >= 16:
+                        break
             p["sessions"] = sess
         elif self._sessions:
             sess = []
