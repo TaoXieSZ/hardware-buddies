@@ -331,6 +331,10 @@ def apply_event(state: BuddyState, ev: dict) -> bool:
     # See openspec change 0004-cc-bridge-session-reaper.
     if sid in state._sessions:
         state._sessions[sid]["last_seen"] = time.monotonic()
+        # kimi-session-identity: hook.py --agent 注入的来源标记（"kimi"）。
+        # 事件未携带时不动已有值（Claude 调用无此字段，保持未知=claude）。
+        if ev.get("agent"):
+            state._sessions[sid]["agent"] = ev["agent"]
         # `q_done` advances ONLY on PostToolUse / Stop — a tool COMPLETED or the
         # turn ENDED. An AskUserQuestion blocks the turn while pending, so no
         # PostToolUse/Stop fires for that session until it's answered (verified:
@@ -673,10 +677,13 @@ if __name__ == "__main__":
             # so focus_by_codex_cwd matches requested_working_directory == sid or
             # endswith(sid). Stateless — the select callback can't see BuddyState.
             # (openspec cardputer-codex-sessions)
+            # → Kimi pane: sid → cwd basename（Kimi 会话目录）→ pane cwd 匹配。
+            # (openspec kimi-session-identity)
             surface = (_cmux.focus_by_checkpoint(sid)
                        or _cmux.focus_by_cursor_sid(sid)
                        or _cmux.focus_by_opencode_sid(sid)
-                       or _cmux.focus_by_codex_cwd(sid))
+                       or _cmux.focus_by_codex_cwd(sid)
+                       or _cmux.focus_by_kimi_sid(sid))
             if surface:
                 log.info("selectSession %s → focused surface %s", sid, surface)
             else:

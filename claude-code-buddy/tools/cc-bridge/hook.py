@@ -21,6 +21,31 @@ import sys
 SOCKET_PATH = os.environ.get("CC_BRIDGE_SOCKET", "/tmp/cc-bridge.sock")
 TIMEOUT_S = 0.5  # don't slow Claude Code down for any reason
 
+# Event source tag (kimi-session-identity): hook.py --agent kimi (or
+# CC_BRIDGE_AGENT env) injects "agent" into the forwarded JSON so the daemon
+# can tell Kimi sessions from Claude ones on the shared socket. Empty = no
+# injection (Claude's settings.json invocation stays byte-identical).
+AGENT = os.environ.get("CC_BRIDGE_AGENT", "")
+if "--agent" in sys.argv:
+    i = sys.argv.index("--agent")
+    if i + 1 < len(sys.argv):
+        AGENT = sys.argv[i + 1]
+
+
+def _inject_agent(raw: bytes, agent: str) -> bytes:
+    """Return raw with "agent" injected (compact separators). Unparseable
+    input is returned verbatim — never break forwarding for a side tag."""
+    if not agent:
+        return raw
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return raw
+    if isinstance(obj, dict):
+        obj["agent"] = agent
+        return json.dumps(obj, separators=(",", ":")).encode()
+    return raw
+
 
 def main():
     # Read until EOF — read(N) sometimes returns early when Claude Code
@@ -39,6 +64,8 @@ def main():
         json.loads(raw)
     except Exception:
         pass
+
+    raw = _inject_agent(raw, AGENT)
 
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

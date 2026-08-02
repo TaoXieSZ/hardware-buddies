@@ -408,6 +408,127 @@ def test_focus_by_cursor_sid_no_match_returns_none():
     m = _CursorRunner()
     c = CmuxClient(binary="CMUX", runner=m)
     assert c.focus_by_cursor_sid("CKPT-S1") is None         # a claude id, not in title
+
+
+# ─── focus a Kimi pane (kimi-session-identity) ─────────────────────────
+
+class _KimiRunner:
+    """Fleet: one Claude pane (checkpoint) in /p, two plain terminals in /proj."""
+    def __init__(self, extra_pane=True):
+        self.calls = []
+        self.extra_pane = extra_pane
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        method = argv[2] if len(argv) > 2 and argv[1] == "rpc" else ""
+        if method == "window.list":
+            return 0, json.dumps({"windows": [{"id": "W1"}]}), ""
+        if method == "workspace.list":
+            return 0, json.dumps({"workspaces": [
+                {"id": "WA", "ref": "workspace:1", "index": 0, "selected": True,
+                 "current_directory": "/p"},
+                {"id": "WB", "ref": "workspace:2", "index": 1, "selected": False,
+                 "current_directory": "/proj"}]}), ""
+        if method == "surface.list":
+            ws = json.loads(argv[3]).get("workspace_id")
+            if ws == "WA":
+                return 0, json.dumps({"surfaces": [
+                    {"id": "CL1", "ref": "surface:1", "index": 0, "type": "terminal",
+                     "title": "claude · abc", "focused": False,
+                     "resume_binding": {"kind": "claude", "checkpoint_id": "CK"}}]}), ""
+            if ws == "WB":
+                panes = [
+                    {"id": "K1", "ref": "surface:2", "index": 0, "type": "terminal",
+                     "title": "修好这个hook", "focused": False},
+                ]
+                if self.extra_pane:
+                    panes.append(
+                        {"id": "K2", "ref": "surface:3", "index": 1, "type": "terminal",
+                         "title": "另一个kimi", "focused": False})
+                return 0, json.dumps({"surfaces": panes}), ""
+            return 0, json.dumps({"surfaces": []}), ""
+        return 0, "", ""
+
+
+def _kimi_store(tmp_path, monkeypatch, wd_name="wd_proj_0123456789ab",
+                sid="session_k1", title="修好这个hook", cwd="/proj"):
+    """Create a fake Kimi session store (with state.json) and point the module at it."""
+    d = tmp_path / wd_name / sid
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(json.dumps({"title": title, "cwd": cwd}))
+    monkeypatch.setattr(cc, "KIMI_SESSIONS_DIR", tmp_path)
+    return tmp_path
+
+
+def test_kimi_cwd_basename_resolves(tmp_path, monkeypatch):
+    _kimi_store(tmp_path, monkeypatch)
+    assert cc.kimi_cwd_basename("session_k1") == "proj"
+
+
+def test_kimi_cwd_basename_keeps_underscore_basename(tmp_path, monkeypatch):
+    # hash suffix stripped only when 12-hex; "my_proj_xyz" survives intact.
+    _kimi_store(tmp_path, monkeypatch, wd_name="wd_my_proj_xyz")
+    assert cc.kimi_cwd_basename("session_k1") == "my_proj_xyz"
+
+
+def test_kimi_cwd_basename_unknown_sid_returns_none(tmp_path, monkeypatch):
+    _kimi_store(tmp_path, monkeypatch)
+    assert cc.kimi_cwd_basename("session_nope") is None
+    assert cc.kimi_cwd_basename("") is None
+
+
+def test_focus_by_kimi_sid_title_match_focuses(tmp_path, monkeypatch):
+    # Title = pane title (Kimi sets it from the first user message) — exact
+    # match wins even when another plain pane shares the session's cwd.
+    _kimi_store(tmp_path, monkeypatch)
+    m = _KimiRunner(extra_pane=True)    # K1 (title match) + K2, both in /proj
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_kimi_sid("session_k1") == "K1"
+    assert _method_call(m.calls, "surface.focus") == \
+        ["CMUX", "rpc", "surface.focus", json.dumps({"surface_id": "K1"})]
+
+
+def test_focus_by_kimi_sid_cwd_fallback_unique(tmp_path, monkeypatch):
+    # No title in state.json → cwd basename fallback, unique candidate.
+    _kimi_store(tmp_path, monkeypatch, title="", cwd="/proj")
+    m = _KimiRunner(extra_pane=False)
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_kimi_sid("session_k1") == "K1"
+
+
+def test_focus_by_kimi_sid_ambiguous_returns_none(tmp_path, monkeypatch):
+    # No title + two panes sharing the cwd basename → no-op.
+    _kimi_store(tmp_path, monkeypatch, title="", cwd="/proj")
+    m = _KimiRunner(extra_pane=True)
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_kimi_sid("session_k1") is None
+    assert all(not (len(call) > 2 and call[2] == "surface.focus") for call in m.calls)
+
+
+def test_focus_by_kimi_sid_no_store_entry_returns_none(tmp_path, monkeypatch):
+    _kimi_store(tmp_path, monkeypatch)
+    m = _KimiRunner(extra_pane=False)
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_kimi_sid("session_unknown") is None
+    assert all(not (len(call) > 2 and call[2] == "surface.focus") for call in m.calls)
+
+
+def test_focus_by_kimi_sid_renamed_pane_screen_fallback(tmp_path, monkeypatch):
+    # 用户改了 pane 标题（≠ state.json title）→ 屏幕内容包含标题即命中。
+    _kimi_store(tmp_path, monkeypatch, title="修好这个hook", cwd="/elsewhere")
+
+    class Renamed(_KimiRunner):
+        def __call__(self, argv):
+            method = argv[2] if len(argv) > 2 and argv[1] == "rpc" else ""
+            if method == "surface.read_text":
+                sid = json.loads(argv[3]).get("surface_id")
+                text = "之前 output\nuser: 修好这个hook\n..." if sid == "K1" else "别的内容"
+                return 0, json.dumps({"text": text}), ""
+            return super().__call__(argv)
+
+    m = Renamed(extra_pane=True)   # K1+K2 同 cwd 但 state cwd 是 /elsewhere → 只能靠屏幕
+    c = CmuxClient(binary="CMUX", runner=m)
+    assert c.focus_by_kimi_sid("session_k1") == "K1"
     assert c.focus_by_cursor_sid("") is None                # short-circuits
 
 

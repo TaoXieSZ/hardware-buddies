@@ -71,6 +71,77 @@ def registered_board_surfaces() -> set[str]:
         return set()
 
 
+# ─── Kimi session store ────────────────────────────────────────────────
+# Kimi Code keeps sessions under ~/.kimi-code/sessions/wd_<basename>_<hash12>/
+# <session_id>/ — the wd_ dir name encodes the session's working-directory
+# BASENAME (verified 2026-08-02: wd_taoxie_<hash> ↔ /Users/taoxie). We resolve
+# a Kimi sid → cwd basename here, then match it against cmux panes' cwd.
+# Override with KIMI_SESSIONS_DIR for tests / non-default installs.
+KIMI_SESSIONS_DIR = _Path(
+    _os.environ.get("KIMI_SESSIONS_DIR")
+    or (_Path.home() / ".kimi-code" / "sessions")
+)
+
+
+def kimi_cwd_basename(sid: str, sessions_dir=None) -> Optional[str]:
+    """Resolve a Kimi session id → working-dir basename via the session store.
+
+    Pure (filesystem only, no cmux). Returns None when the sid has no store
+    entry or the wd_ dir name doesn't parse. The hash suffix is stripped only
+    when it looks like the 12-hex id Kimi appends, so a basename containing
+    '_' survives intact.
+    """
+    sid = (sid or "").strip()
+    if not sid:
+        return None
+    base = _Path(sessions_dir) if sessions_dir else KIMI_SESSIONS_DIR
+    try:
+        for wd in base.iterdir():
+            if not wd.is_dir() or not wd.name.startswith("wd_"):
+                continue
+            if not (wd / sid).exists():
+                continue
+            name = wd.name[3:]
+            stem, sep, suffix = name.rpartition("_")
+            if (sep and len(suffix) == 12
+                    and all(c in "0123456789abcdef" for c in suffix)):
+                return stem
+            return name
+    except OSError:
+        return None
+    return None
+
+
+def kimi_session_meta(sid: str, sessions_dir=None) -> dict:
+    """Read a Kimi session's state.json → {"title": ..., "cwd": ...}.
+
+    The pane-join keys live here, not in the wd_ dir name: `title` is what
+    Kimi sets the terminal pane title to (first user message), and `cwd` is
+    the FULL working directory (the dir name only has the basename).
+    {} on any miss — callers treat it as "not a Kimi session".
+    """
+    sid = (sid or "").strip()
+    if not sid:
+        return {}
+    base = _Path(sessions_dir) if sessions_dir else KIMI_SESSIONS_DIR
+    try:
+        for wd in base.iterdir():
+            st = wd / sid / "state.json"
+            if not st.is_file():
+                continue
+            try:
+                d = json.loads(st.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+            if not isinstance(d, dict):
+                return {}
+            return {"title": d.get("title") or "", "cwd": d.get("cwd") or "",
+                    "lastPrompt": d.get("lastPrompt") or ""}
+    except OSError:
+        pass
+    return {}
+
+
 # ─── nickname registry ────────────────────────────────────────────────
 #
 # The user addresses ships by NATO phonetic nickname (alpha, bravo, …), NOT
@@ -720,6 +791,67 @@ class CmuxClient:
             return ("cursor-" + cid) in title or ("cursor-" + short) in title
 
         match = next((s for s in self.list_sessions() if _is_match(s)), None)
+        if match is None:
+            return None
+        rc, _out, _err = self.run(self._focus_argv(match.surface))
+        if rc != 0:
+            return None
+        self.activate_app()
+        return match.surface
+
+    def focus_by_kimi_sid(self, sid: str) -> Optional[str]:
+        """Focus the cmux surface running the Kimi Code session `sid`.
+
+        cmux's session file has no agent.kind for Kimi panes (verified on
+        0.64.20), and neither the workspace cwd nor the surface's
+        requested_working_directory tracks the session's real cwd (verified
+        2026-08-02: pane opened at home, session cwd elsewhere). The reliable
+        join key is the pane TITLE — Kimi sets it to the session's first
+        user message, which state.json records verbatim (see
+        kimi_session_meta). Title exact-match first; fall back to cwd
+        basename (unique-only). Claude (checkpoint_id) and Cursor-titled
+        panes are excluded. No match / ambiguity → None (caller logs a
+        no-op). (openspec kimi-session-identity)
+        """
+        csid = (sid or "").strip()
+        if not csid:
+            return None
+        meta = kimi_session_meta(csid)
+        title = meta.get("title") or ""
+        cwd = meta.get("cwd") or ""
+        if not title and not cwd and not meta.get("lastPrompt"):
+            return None
+        pool = [
+            s for s in self.list_sessions()
+            if not s.checkpoint_id                    # not a Claude pane
+            and "cursor-" not in (s.title or "")      # not a Cursor pane
+        ]
+        match = None
+        if title:
+            match = next((s for s in pool if (s.title or "") == title), None)
+        if match is None and cwd:
+            base = _Path(cwd).name
+            cands = [s for s in pool if _Path(s.cwd or "/").name == base]
+            if len(cands) == 1:
+                match = cands[0]
+        needles = [n for n in (meta.get("lastPrompt") or "", title) if n]
+        if match is None and needles:
+            # 用户重命名过 pane（标题不再是首条消息）→ 读候选 pane 屏幕内容。
+            # lastPrompt（最近一条用户消息，多半还在当前屏）优先，title 兜底
+            # （首条消息可能已滚出可见屏）。只在点选时发生，候选很少。
+            hits = []
+            for s in pool:
+                rrc, rout, _ = self.run(self._read_argv(s.surface))
+                if rrc != 0:
+                    continue
+                try:
+                    text = json.loads(rout).get("text", "")
+                except Exception:
+                    continue
+                if any(n in text for n in needles):
+                    hits.append(s)
+            if len(hits) == 1:
+                match = hits[0]
         if match is None:
             return None
         rc, _out, _err = self.run(self._focus_argv(match.surface))

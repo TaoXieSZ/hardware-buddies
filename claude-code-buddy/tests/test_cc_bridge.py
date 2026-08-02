@@ -31,6 +31,24 @@ def test_user_prompt_without_session_start_is_implicit_start(cc, fresh_state):
     assert fresh_state.running == 1
 
 
+# ─── agent source tagging (kimi-session-identity) ─────────────────────
+
+def test_agent_tag_stored_on_session(cc, fresh_state):
+    cc.apply_event(fresh_state, ev("SessionStart", agent="kimi"))
+    assert fresh_state._sessions["s1"]["agent"] == "kimi"
+
+
+def test_agent_tag_absent_event_keeps_existing(cc, fresh_state):
+    cc.apply_event(fresh_state, ev("SessionStart", agent="kimi"))
+    cc.apply_event(fresh_state, ev("UserPromptSubmit"))  # no agent field
+    assert fresh_state._sessions["s1"]["agent"] == "kimi"
+
+
+def test_no_agent_tag_stays_unknown(cc, fresh_state):
+    cc.apply_event(fresh_state, ev("SessionStart"))
+    assert "agent" not in fresh_state._sessions["s1"]
+
+
 # ─── running counter ──────────────────────────────────────────────────
 
 def test_user_prompt_submit_sets_running_and_msg(cc, fresh_state):

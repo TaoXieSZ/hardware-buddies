@@ -159,6 +159,59 @@ def test_to_payload_unlabeled_truncated_to_remaining_slots(fresh_state):
     assert [row["sid"] for row in sess[14:]] == ["session_kimi-0", "session_kimi-1"]
 
 
+def test_to_payload_unlabeled_carries_agent_when_known(fresh_state):
+    # kimi-session-identity: hook.py --agent 注入的来源随条目透出，固件渲染 ki 标。
+    fresh_state.session_labels = {"sid-claude": "feat-x"}
+    fresh_state._sessions = {
+        "sid-claude": {"running": False},
+        "session_kimi": {"running": True, "agent": "kimi"},
+    }
+    rows = fresh_state.to_payload()["sessions"]
+    assert rows[1] == {"sid": "session_kimi", "running": True, "agent": "kimi"}
+
+
+def test_to_payload_unlabeled_omits_agent_when_unknown(fresh_state):
+    # 未知来源省略 agent 键（固件缺省 = claude/cc 标）。
+    fresh_state.session_labels = {"sid-claude": "feat-x"}
+    fresh_state._sessions = {
+        "sid-claude": {"running": False},
+        "sid-x": {"running": False},
+    }
+    rows = fresh_state.to_payload()["sessions"]
+    assert "agent" not in rows[1]
+
+
+def test_to_payload_fallback_branch_carries_agent(fresh_state):
+    # 无 cmux 标签源时的回退分支同样透出 agent。
+    fresh_state._sessions = {"session_kimi": {"running": True, "agent": "kimi"}}
+    rows = fresh_state.to_payload()["sessions"]
+    assert rows[0]["agent"] == "kimi"
+
+
+def test_to_payload_kimi_session_uses_store_title_as_label(fresh_state, monkeypatch):
+    # kimi-session-identity: Kimi 会话用 state.json title 当 label（sid8 回退
+    # 对所有 Kimi 会话都只显示 "session_"，无法区分）。
+    from control_plane import cmux_control
+    monkeypatch.setattr(cmux_control, "kimi_session_meta",
+                        lambda sid: {"title": "修好这个hook", "cwd": "/proj"})
+    fresh_state.session_labels = {"sid-claude": "feat-x"}
+    fresh_state._sessions = {
+        "sid-claude": {"running": False},
+        "session_kimi-1": {"running": True, "agent": "kimi"},
+    }
+    rows = fresh_state.to_payload()["sessions"]
+    assert rows[1] == {"sid": "session_kimi-1", "running": True,
+                       "agent": "kimi", "label": "修好这个hook"}
+
+
+def test_to_payload_kimi_title_missing_falls_back_to_sid(fresh_state, monkeypatch):
+    from control_plane import cmux_control
+    monkeypatch.setattr(cmux_control, "kimi_session_meta", lambda sid: {})
+    fresh_state._sessions = {"session_kimi": {"running": False, "agent": "kimi"}}
+    rows = fresh_state.to_payload()["sessions"]
+    assert "label" not in rows[0]
+
+
 # ─── BuddyState.add_entry ──────────────────────────────────────────────
 
 def test_add_entry_newest_first(fresh_state):

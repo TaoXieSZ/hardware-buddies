@@ -125,6 +125,21 @@ class BuddyState:
         else:
             s["ws"] = 0                  # leaving waiting clears FIFO seq
 
+    @staticmethod
+    def _kimi_title(sid: str) -> "str | None":
+        """Kimi 会话的可读名：state.json 的 title（首条用户消息）。
+
+        设备列表的 sid8 回退对 Kimi sid 只显示 "session_" 前缀（所有会话
+        一样，无法区分），所以无 cmux 标签的 Kimi 会话用会话存储的 title
+        当 label。Lazy import + 吞异常：control_plane 缺失或文件不可读时
+        回退 sid 前缀，绝不影响 payload。
+        """
+        try:
+            from control_plane.cmux_control import kimi_session_meta
+            return kimi_session_meta(sid).get("title") or None
+        except Exception:
+            return None
+
     def to_payload(self) -> dict:
         p = {
             "total": self.total,
@@ -182,11 +197,21 @@ class BuddyState:
             # cardputer-unlabeled-sessions: hook 跟踪到但没有 cmux 标签的会话
             #（Kimi Code、不在 cmux 里的 Claude）不能被丢——追加在标签会话之后，
             # 不带 `label` 键，固件回退显示 sid 前缀；标签会话优先占位。
+            # kimi-session-identity：来源非 Claude 的会话带 `agent` 键（hook.py
+            # --agent 注入），固件按此渲染 ki/cx 等标记；未知来源省略 = claude。
             if len(sess) < 16:
                 for _sid, _s in self._sessions.items():
                     if _sid in self.session_labels:
                         continue
                     row = {"sid": _sid, "running": bool(_s.get("running"))}
+                    if _s.get("agent"):
+                        row["agent"] = _s["agent"]
+                    if _s.get("agent") == "kimi":
+                        # sid8 回退对 Kimi 只显示 "session_"，用 state.json
+                        # 的 title 当 label（kimi-session-identity）。
+                        _t = self._kimi_title(_sid)
+                        if _t:
+                            row["label"] = _t
                     if _s.get("st"):
                         row["st"] = _s["st"]
                     if _s.get("ws"):
@@ -199,6 +224,12 @@ class BuddyState:
             sess = []
             for _sid, _s in self._sessions.items():
                 row = {"sid": _sid, "running": bool(_s.get("running"))}
+                if _s.get("agent"):
+                    row["agent"] = _s["agent"]
+                if _s.get("agent") == "kimi":
+                    _t = self._kimi_title(_sid)
+                    if _t:
+                        row["label"] = _t
                 if _s.get("st"):
                     row["st"] = _s["st"]
                 if _s.get("ws"):
