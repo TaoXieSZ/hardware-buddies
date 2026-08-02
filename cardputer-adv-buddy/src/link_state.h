@@ -20,7 +20,9 @@ inline void utf8lcpy(char* dst, const char* src, size_t dstSize) {
 
 // payload sessions[] 的一条：可选中会话切换器用。
 struct SessionInfo {
-    char sid[40] = {0};   // Claude session_id（= cmux resume_binding.checkpoint_id），UUID 36 字符
+    char sid[48] = {0};   // session_id。Claude = UUID 36；Kimi = "session_"+UUID = 44。
+                          // ⚠️ 至少 45（含 \0）：sid[40] 时 Kimi sid 被截成 39 字符，
+                          // selectSession 回送残 sid → daemon 会话目录查无此 sid、聚焦失败。
     bool running = false; // 该会话是否在生成
     char label[40] = {0}; // cmux auto-name/prompt（可读名）；空 = 列表 fallback 到 sid 前缀
     // per-session 状态（payload `st`）与等待 FIFO 序号（payload `ws`，0=不等待）。
