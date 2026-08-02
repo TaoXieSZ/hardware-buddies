@@ -86,8 +86,8 @@ build** — always `cd <subdir>` first.
   `voice-agent/include/config.h` (`WIFI1_SSID`…`WIFI4_*` multi-net), Agora
   creds in `*/include/agora_credentials.h` — copy from the `.example`
   files.
-- **Root `README.md` lists only 3 of the 6 subprojects** — trust the table
-  above and `CLAUDE.md`, not the root README, for the current subproject set.
+- **根 `README.md` 是面向访客的产品总览**（含 `docs/assets/collage.png`
+  拼图）；子项目状态/构建的权威表以本文件和 `CLAUDE.md` 为准，三者应保持一致。
 
 ## Flashing discipline — postmortem 2026-07-08 (black-screen bricking)
 
