@@ -18,6 +18,7 @@ build** — always `cd <subdir>` first.
 | `cardputer-adv-buddy/` | Active (ESP32-S3) | `pio run -e cardputer-adv` | `README.md` + `HANDOFF.md` |
 | `tab5-agentfarm-buddy/` | Active (ESP32-P4) | `pio run -e tab5-agentfarm` | `README.md` |
 | `m5-paper-buddy/` | **Frozen fork** (third-party) | `pio run -e m5paper` | `README.md` |
+| `stackchan-firmware/` | Active (CoreS3 StackChan) | `pio run` (main) / ESP-IDF `voice-agent/` | `CANVAS.md` + `docs/` |
 
 ## Gotchas that aren't obvious
 
@@ -57,7 +58,17 @@ build** — always `cd <subdir>` first.
   which is also VID 303A but `50:78:7D:`).
 - **m5-paper-buddy**: do not refactor. It's a `git subtree` snapshot of
   `op7418/m5-paper-buddy`. Only sync upstream via `git subtree pull`.
-- **Root `README.md` lists only 3 of the 5 subprojects** — trust the table
+- **stackchan-firmware** (`TaoXieSZ/stackchan-firmware`, subtree from
+  `master`): two build targets — main PlatformIO firmware (`pio run`) and
+  the ESP-IDF `voice-agent/` subproject. `voice-agent/components/M5GFX` +
+  `M5Unified` are git submodules, registered in the **monorepo root
+  `.gitmodules`** (subtree paths don't carry submodule config) — run
+  `git submodule update --init` from the root after a fresh clone. Secrets
+  are gitignored: WiFi in `include/config.h` (main) and
+  `voice-agent/include/config.h` (`WIFI1_SSID`…`WIFI4_*` multi-net), Agora
+  creds in `*/include/agora_credentials.h` — copy from the `.example`
+  files.
+- **Root `README.md` lists only 3 of the 6 subprojects** — trust the table
   above and `CLAUDE.md`, not the root README, for the current subproject set.
 
 ## Flashing discipline — postmortem 2026-07-08 (black-screen bricking)
