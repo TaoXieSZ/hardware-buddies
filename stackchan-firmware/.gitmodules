@@ -1,0 +1,6 @@
+[submodule "voice-agent/components/M5GFX"]
+	path = voice-agent/components/M5GFX
+	url = https://github.com/m5stack/M5GFX.git
+[submodule "voice-agent/components/M5Unified"]
+	path = voice-agent/components/M5Unified
+	url = https://github.com/m5stack/M5Unified.git

@@ -1,0 +1,14 @@
+.pio/
+include/config.h
+.handoff/
+.omc/
+.DS_Store
+include/agora_credentials.h
+main/app_config.json
+components/m5unified/
+components/agora_iot_sdk/
+managed_components/
+voice-agent/components/*.tar
+voice-agent/include/agora_credentials.h
+voice-agent/include/config.h
+voice-agent/src/app_config.json
