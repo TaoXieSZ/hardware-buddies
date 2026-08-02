@@ -16,6 +16,11 @@
 - **WHEN** 无标签会话的事件未携带 `agent` 字段
 - **THEN** 其条目不含 `agent` 键，固件回退显示 `cc` 标
 
+#### Scenario: Kimi 会话以 state.json 标题为 label
+
+- **WHEN** 无标签会话 `agent == "kimi"` 且其 state.json 有 `title`
+- **THEN** 条目携带 `label` = 该标题（固件 sid8 回退对 Kimi sid 只显示 `session_` 前缀，无法区分会话）；title 缺失时仍省略 `label`
+
 #### Scenario: 无 cmux 标签源时的回退
 
 - **WHEN** `session_labels` 为空（cmux 未安装或无标签会话）

@@ -18,14 +18,14 @@ daemon 收到固件 `{"cmd":"selectSession","sid":...}` 时 SHALL 按以下顺�
 
 ### Requirement: Kimi 聚焦回退
 
-对未命中前四路规则的 sid，daemon SHALL 在 `~/.kimi-code/sessions/` 下查找目录名包含该 sid 的会话目录，从其 `wd_<dir>_<hash>` 前缀解析工作目录，聚焦 `requested_working_directory` 等于该目录的 cmux pane。多个 pane 同目录时聚焦最近活动的 Kimi pane（标题不匹配 Claude/Codex 已知名模式者）；目录解析失败或无匹配 pane 时按未命中处理。
+对未命中前四路规则的 sid，daemon SHALL 在 `~/.kimi-code/sessions/` 下查找该 sid 的 `state.json`，以其 `title` 字段（Kimi 会把 pane 标题设为会话首条用户消息）精确匹配 cmux pane 标题并聚焦；`title` 缺失或未匹配时退化为 `cwd` basename 唯一匹配（候选唯一才聚焦）。Claude pane（有 checkpoint_id）和 Cursor pane（标题含 `cursor-`）MUST 排除在候选之外。目录/文件读取失败或无匹配时按未命中处理。
 
-#### Scenario: 单 Kimi pane 命中
+#### Scenario: 标题精确命中
 
-- **WHEN** sid 对应 `~/.kimi-code/sessions/wd_hardware-buddies_<hash>/session_<sid>/`，且 cmux 中有 `requested_working_directory` 为 `/Users/taoxie/hardware-buddies` 的 pane
-- **THEN** 该 pane 被聚焦
+- **WHEN** sid 的 state.json `title` 为「修好这个hook」，cmux 中存在同标题的非 Claude/Cursor pane
+- **THEN** 该 pane 被聚焦（即使同 cwd 下还有其他 pane）
 
-#### Scenario: 同目录多 pane
+#### Scenario: 无标题时的 cwd 回退
 
-- **WHEN** 解析出的工作目录下有多个候选 pane
-- **THEN** 聚焦标题不符合 Claude/Codex 模式的最近一个；无法判定时按未命中处理并记日志
+- **WHEN** state.json 无 `title`，`cwd` basename 在候选 pane 中唯一
+- **THEN** 该 pane 被聚焦；候选不唯一时按未命中处理并记日志

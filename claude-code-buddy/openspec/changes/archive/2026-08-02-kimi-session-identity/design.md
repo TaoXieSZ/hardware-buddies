@@ -22,8 +22,8 @@
 **D1：来源标记走 hook.py 参数注入，而不是 daemon 侧猜测。**
 `hook.py --agent kimi` 把 `agent` 注入事件 JSON。备选"daemon 按 sid 形状猜"（Kimi sid 带 `session_` 前缀）被否：sid 格式是两个产品的内部细节，硬编码脆弱；显式参数把知识留在配置侧（`~/.kimi-code/config.toml`），Claude 调用零改动。
 
-**D2：Kimi 聚焦走会话目录解析，而不是 cmux agent.kind。**
-cmux session 文件当前不标 Kimi pane（真机验证只有 claude/codex kind）。`~/.kimi-code/sessions/wd_<dir>_<hash>/` 是稳定的磁盘事实，sid→cwd 解析零竞态。同目录歧义接受为已知限制：用标题模式排除 Claude/Codex pane 后取最近活动者，失败则 logged no-op——与现有未命中语义一致。若未来 cmux 给 Kimi pane 标 kind，可平滑替换为 kind 匹配（规则顺序不变）。
+**D2：Kimi 聚焦走 state.json 标题匹配，而不是 cmux agent.kind 或 cwd。**
+真机排除了这些候选：cmux session 文件不标 Kimi pane（0.64.20 只有 claude/codex kind）；pane 的 workspace cwd 和 `requested_working_directory` 都是 pane 创建时的快照，不跟踪会话真实 cwd（pane 在家目录打开、session 跑在项目目录，实测两者不符）。可靠键是 `state.json` 的 `title`——Kimi 把 pane 标题设为首条用户消息且逐字记录。标题缺失时退化 `cwd` basename 唯一匹配。若未来 cmux 给 Kimi pane 标 kind，可平滑替换（规则顺序不变）。
 
 **D3：固件 `ki` 标复用现有映射表，颜色选青色系。**
 `clawd_player.cpp:325` 的 if-else 链加一行；`agent[16]` 足够。青色（如 0x067F）与现有黄/灰蓝/绿/青蓝区分开。旧固件收到 `agent:"kimi"` 时 strcmp 全不命中 → 回退 `cc`，向后兼容。
