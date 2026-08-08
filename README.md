@@ -22,6 +22,7 @@
 | [`cardputer-adv-buddy/`](./cardputer-adv-buddy) | Cardputer-ADV 上的 Claude Code 伴侣，实体键盘审批 | Cardputer-ADV (ESP32-S3) | ESP32-S3 (PlatformIO) | 活跃 |
 | [`tab5-agentfarm-buddy/`](./tab5-agentfarm-buddy) | Agent Farm 桌宠，**USB 串口**供数（P4 无射频） | M5 Tab5 (ESP32-P4) | ESP32-P4 (PlatformIO) + Python bridge | 活跃 |
 | [`stackchan-firmware/`](./stackchan-firmware) | StackChan 固件 + ESP-IDF 语音助手（Agora） | CoreS3 StackChan | PlatformIO + ESP-IDF | 活跃 |
+| [`stopwatch-walkie/`](./stopwatch-walkie) | 按住说话、通过 Mac bridge 转写的腕上对讲机原型 | M5 StopWatch (ESP32-S3) | ESP32-S3 (PlatformIO) + Python bridge | 开发中 |
 | [`ahakey/`](./ahakey) | AhaKey-X1 键盘伴侣：OLED + LED 灯条反映 IDE 状态，拨杆审批 | AhaKey BLE 键盘 | Swift + SwiftUI (macOS) | 活跃 |
 | [`m5-paper-buddy/`](./m5-paper-buddy) | 墨水屏桌面伴侣（第三方上游 `op7418/m5-paper-buddy` 的快照） | M5Paper | ESP32 (PlatformIO) | **冻结**（只同步上游，不重构） |
 
@@ -36,6 +37,7 @@ cd claude-code-buddy    && pio run -e <board-env>     # 旗舰，env 见 platfor
 cd cardputer-adv-buddy  && pio run -e cardputer-adv
 cd tab5-agentfarm-buddy && pio run -e tab5-agentfarm  # uploadfs / upload 分两条命令
 cd stackchan-firmware   && pio run                    # voice-agent/ 是独立 ESP-IDF 工程
+cd stopwatch-walkie     && pio run -e m5stack-stopwatch
 cd m5-paper-buddy       && pio run -e m5paper
 cd ahakey/platforms/macos && swift build              # 不是根 Makefile（已过时）
 ```

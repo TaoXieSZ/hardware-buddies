@@ -1,0 +1,43 @@
+{
+  "reference": "assets/device/*.png (approved browser-rendered 466x466 frames)",
+  "target": "assets/rgb565/*.png (firmware canvas color-depth simulation)",
+  "score": 99.26,
+  "category_match": true,
+  "differences": [
+    "RGB565 color quantization only; geometry, type rasterization, spacing, and icons are unchanged."
+  ],
+  "suggestions": [],
+  "state_metrics": [
+    {
+      "state": "connecting",
+      "normalized_rmse": 0.00726026,
+      "visual_score": 99.27
+    },
+    {
+      "state": "error",
+      "normalized_rmse": 0.00739994,
+      "visual_score": 99.26
+    },
+    {
+      "state": "ready",
+      "normalized_rmse": 0.00770104,
+      "visual_score": 99.23
+    },
+    {
+      "state": "recording",
+      "normalized_rmse": 0.00714199,
+      "visual_score": 99.29
+    },
+    {
+      "state": "result",
+      "normalized_rmse": 0.00751523,
+      "visual_score": 99.25
+    },
+    {
+      "state": "transcribing",
+      "normalized_rmse": 0.00760285,
+      "visual_score": 99.24
+    }
+  ],
+  "reasoning": "The demo firmware decodes the approved PNG bytes at 1:1 scale into a 466x466 RGB565 PSRAM canvas."
+}

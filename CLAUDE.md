@@ -22,6 +22,7 @@ toggle switch, keyboard) that gate tool approvals.
 | `claude-code-buddy/` | The flagship buddy: StickC Plus2 / CoreS3 StackChan / Tab5 / StickS3 / RoverC firmware + Mac daemons | ESP32 (PlatformIO) + Python daemons | PlatformIO + `make` | **Yes** — read `claude-code-buddy/CLAUDE.md` (and `docs/tab5-buddy-dev.md` for Tab5) |
 | `cardputer-adv-buddy/` | Claude Code buddy on Cardputer-ADV | ESP32-S3 (PlatformIO) | PlatformIO | No — see its `README.md` + `PROJECT_STATUS.md` / `HANDOFF.md` |
 | `tab5-agentfarm-buddy/` | Agent Farm (`trigger-cursor`) desk pet on Tab5, fed over **USB-serial** | ESP32-P4 (PlatformIO) + Python bridge | PlatformIO | No — see its `README.md` |
+| `stopwatch-walkie/` | Push-to-talk agent walkie-talkie: StopWatch audio terminal + Mac ASR bridge | ESP32-S3 (PlatformIO) + Python bridge | PlatformIO + Python | No — see its `README.md` |
 | `m5-paper-buddy/` | M5Paper e-ink companion (**third-party upstream fork** of `op7418/m5-paper-buddy`) | ESP32 (PlatformIO) | PlatformIO | No — see its `README.md` |
 
 **`ahakey/` and `claude-code-buddy/` carry the most context in their own CLAUDE.md files. Always
@@ -66,6 +67,10 @@ pio run -e cardputer-adv -t buildfs        # clawd LittleFS image
 cd tab5-agentfarm-buddy
 pio run -e tab5-agentfarm -t uploadfs --upload-port /dev/cu.usbmodemNN
 pio run -e tab5-agentfarm -t upload   --upload-port /dev/cu.usbmodemNN
+
+# stopwatch-walkie
+cd stopwatch-walkie
+pio run -e m5stack-stopwatch
 
 # m5-paper-buddy
 cd m5-paper-buddy
