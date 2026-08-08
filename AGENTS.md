@@ -17,6 +17,7 @@ build** — always `cd <subdir>` first.
 | `claude-code-buddy/` | Active (ESP32 + Python) | `pio run -e <env>` | `claude-code-buddy/CLAUDE.md` |
 | `cardputer-adv-buddy/` | Active (ESP32-S3) | `pio run -e cardputer-adv` | `README.md` + `HANDOFF.md` |
 | `tab5-agentfarm-buddy/` | Active (ESP32-P4) | `pio run -e tab5-agentfarm` | `README.md` |
+| `stopwatch-walkie/` | In development (ESP32-S3 + Python) | `pio run -e m5stack-stopwatch` | `README.md` |
 | `m5-paper-buddy/` | **Frozen fork** (third-party) | `pio run -e m5paper` | `README.md` |
 | `stackchan-firmware/` | Active (CoreS3 StackChan) | `pio run` (main) / ESP-IDF `voice-agent/` | `CANVAS.md` + `docs/` |
 
