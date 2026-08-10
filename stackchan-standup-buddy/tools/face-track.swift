@@ -45,6 +45,16 @@ func sendTime() {
     send("TIME \((c.hour ?? 0) * 60 + (c.minute ?? 0))\n")
 }
 
+// Same windows as the firmware (src/main.cpp WORK_*). Outside work hours the
+// camera is stopped entirely (saves power, camera LED off); TIME keeps flowing
+// so the firmware still knows the time.
+let workWindows = [(8 * 60, 12 * 60), (14 * 60, 17 * 60 + 30)]
+func inWorkWindow() -> Bool {
+    let c = Calendar.current.dateComponents([.hour, .minute], from: Date())
+    let m = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+    return workWindows.contains { m >= $0.0 && m < $0.1 }
+}
+
 // ---- camera selection --------------------------------------------------------
 let discovery = AVCaptureDevice.DiscoverySession(
     deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external],
@@ -108,10 +118,26 @@ let tracker = Tracker()
 output.setSampleBufferDelegate(tracker, queue: DispatchQueue(label: "face-track"))
 guard session.canAddOutput(output) else { exit(1) }
 session.addOutput(output)
-session.startRunning()
+if (inWorkWindow()) { session.startRunning() }
 
 sendTime()
-Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in sendTime() }
+// Every 30s: resend TIME when due and pause/resume the camera with the
+// work-hours windows (camera fully off outside them).
+var lastTimeSent = Date.distantPast
+Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+    if Date().timeIntervalSince(lastTimeSent) >= 55 {
+        lastTimeSent = Date()
+        sendTime()
+    }
+    let want = inWorkWindow()
+    if want && !session.isRunning {
+        session.startRunning()
+        log("work window: camera on")
+    } else if !want && session.isRunning {
+        session.stopRunning()
+        log("off hours: camera off")
+    }
+}
 
 print("face-track: \(cam.localizedName) -> \(portPath)  (Ctrl-C to quit)")
 RunLoop.main.run()

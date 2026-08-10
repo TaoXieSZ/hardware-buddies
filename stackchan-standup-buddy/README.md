@@ -58,10 +58,11 @@ swiftc -O tools/face-track.swift -o tools/face-track   # 首次编译
 
 协议:每秒 ~10 行 `TRACK <cx_pm> <cy_pm> <conf_pm>`(cx/cy 为画面横/纵向
 -1000..1000 千分比)或 `TRACK LOST`;每分钟一行 `TIME <当天分钟数>`。
-固件侧:P 控制 + 低通(0.25)+ 2° 死区;3 秒收不到新数据自动释放,
-IDLE 步进表 1 分钟内把头停回中位。方向反了就翻转 `src/main.cpp`
-里的 `TRACK_SIGN` / `TRACK_PITCH_SIGN` 重烧。仅 IDLE 状态生效,
-提醒摇头和睡觉时不干扰。
+**非工作时段 helper 会完全停掉摄像头采集**(摄像头指示灯熄灭、省功耗),
+只保留 TIME 对时;回到工作时段自动恢复。固件侧:P 控制 + 低通(0.25)
++ 2° 死区;3 秒收不到新数据自动释放,IDLE 步进表 1 分钟内把头停回中位。
+方向反了就翻转 `src/main.cpp` 里的 `TRACK_SIGN` / `TRACK_PITCH_SIGN` 重烧。
+仅 IDLE 状态生效,提醒摇头和睡觉时不干扰。
 
 ## 调参(`src/main.cpp`)
 
