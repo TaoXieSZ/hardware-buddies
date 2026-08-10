@@ -9,12 +9,13 @@
 
 namespace {
 
-const char* STATE_FILES[5] = {
+const char* STATE_FILES[6] = {
     "/characters/cat/cat_idle.gif",      // STATE_IDLE
     "/characters/cat/cat_thinking.gif",  // STATE_THINKING
     "/characters/cat/cat_talking.gif",   // STATE_REPLYING
     "/characters/cat/cat_error.gif",     // STATE_ERROR
     "/characters/cat/cat_talking.gif",   // STATE_REMINDER (reuse talking face)
+    "/characters/cat/cat_sleep.gif",     // STATE_SLEEP
 };
 
 AnimatedGIF g_gif;

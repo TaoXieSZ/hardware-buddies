@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import CanvasKitInit from 'canvaskit-wasm/bin/full/canvaskit.js';
 
 const OUT_FPS = 10;
-const SCENES = ['scene-1', 'scene-2', 'scene-3', 'scene-4'];
-const NAMES = { 'scene-1': 'cat_idle', 'scene-2': 'cat_thinking', 'scene-3': 'cat_talking', 'scene-4': 'cat_error' };
+const SCENES = ['scene-1', 'scene-2', 'scene-3', 'scene-4', 'scene-5'];
+const NAMES = { 'scene-1': 'cat_idle', 'scene-2': 'cat_thinking', 'scene-3': 'cat_talking', 'scene-4': 'cat_error', 'scene-5': 'cat_sleep' };
 
 const ck = await CanvasKitInit({
   locateFile: (f) => `/tmp/stackchan-lottie/node_modules/canvaskit-wasm/bin/full/${f}`,

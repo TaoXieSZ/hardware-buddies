@@ -8,13 +8,13 @@ import glob
 from PIL import Image
 
 SRC = "/tmp/stackchan-lottie/gif-frames"
-DST = "/Users/txie/OpenSourceProjects/agent-farm/stackchan-firmware/data/characters/cat"
+DST = "/Users/txie/OpenSourceProjects/hardware-buddies/stackchan-standup-buddy/data/characters/cat"
 BG = (232, 242, 250)  # matches scene bg (0.91,0.95,0.98)
 DURATION_MS = 100     # 10fps
 
 os.makedirs(DST, exist_ok=True)
 
-for name in ["cat_idle", "cat_thinking", "cat_talking", "cat_error"]:
+for name in ["cat_idle", "cat_thinking", "cat_talking", "cat_error", "cat_sleep"]:
     files = sorted(glob.glob(f"{SRC}/{name}/f*.png"))
     if not files:
         raise SystemExit(f"no frames for {name}")

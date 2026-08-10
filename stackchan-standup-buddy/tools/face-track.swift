@@ -38,6 +38,13 @@ func send(_ s: String) {
     s.withCString { _ = write(fd, $0, strlen($0)) }
 }
 
+// Wall clock for the firmware's work-hours gating: "TIME <minutes since
+// midnight>" on startup and once a minute (the firmware interpolates between).
+func sendTime() {
+    let c = Calendar.current.dateComponents([.hour, .minute], from: Date())
+    send("TIME \((c.hour ?? 0) * 60 + (c.minute ?? 0))\n")
+}
+
 // ---- camera selection --------------------------------------------------------
 let discovery = AVCaptureDevice.DiscoverySession(
     deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external],
@@ -102,6 +109,9 @@ output.setSampleBufferDelegate(tracker, queue: DispatchQueue(label: "face-track"
 guard session.canAddOutput(output) else { exit(1) }
 session.addOutput(output)
 session.startRunning()
+
+sendTime()
+Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in sendTime() }
 
 print("face-track: \(cam.localizedName) -> \(portPath)  (Ctrl-C to quit)")
 RunLoop.main.run()

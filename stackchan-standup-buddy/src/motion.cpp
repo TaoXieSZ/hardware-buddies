@@ -77,7 +77,7 @@ const ServoStep PAT_REMINDER[] = {
     {    0,   0, 250, 600, false },    // settle at centre
     { 0, 0, 0, 0, false }
 };
-const ServoStep* const PATTERNS[] = { PAT_IDLE, PAT_THINKING, PAT_REPLYING, PAT_ERROR, PAT_REMINDER };
+const ServoStep* const PATTERNS[] = { PAT_IDLE, PAT_THINKING, PAT_REPLYING, PAT_ERROR, PAT_REMINDER, PAT_IDLE /* SLEEP: park */ };
 
 // ---- Runtime globals --------------------------------------------------------
 
@@ -206,6 +206,8 @@ void ledTick(AgentState st) {
         M5StackChan.showRgbColor(0, g_ledFlashOn ? 80 : 10, 0);
         break;
     }
+    case STATE_SLEEP:
+        break;   // LEDs turned off once in motionSetState
     }
 }
 
@@ -233,6 +235,7 @@ void motionSetState(AgentState next) {
     g_ledPos        = 0;
     g_lastLedMs     = 0;
     g_ledFlashOn    = false;
+    if (next == STATE_SLEEP) M5StackChan.showRgbColor(0, 0, 0);
 }
 
 void motionSetTracking(bool on) {

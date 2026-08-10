@@ -342,6 +342,59 @@ function sceneError() {
 // noseMouthWhiskers('none') → skip mouth
 // (small patch: mode 'none' handled by returning without mouth)
 
+// ---------- scene 5: SLEEP (closed eyes + floating Z's + slow breathing) ----------
+function sceneSleep() {
+  const OP = 90;
+  const breathS = {
+    a: 1,
+    k: [
+      { t: 0, s: [100, 100], o: { x: [0.42], y: [0] }, i: { x: [0.58], y: [1] } },
+      { t: 45, s: [102.5, 102.5], o: { x: [0.42], y: [0] }, i: { x: [0.58], y: [1] } },
+      { t: 90, s: [100, 100] },
+    ],
+  };
+  // closed eyes: content ∩ arcs at the usual eye positions
+  const closedEye = (x, nm) => group(nm, [
+    path([[x - 14, -10], [x, -24], [x + 14, -10]],
+         [[0, 0], [-8, 0], [0, 0]], [[0, 0], [8, 0], [0, 0]], false),
+    stroke(EYE_DARK, 5),
+  ]);
+  // one "Z" glyph, staggered rise + fade via per-layer keyframes
+  const zLayer = (i) => {
+    const t0 = i * 30, t1 = t0 + 30;
+    const px = 78 + i * 10;
+    return layer(`z${i}`, [group('z', [
+      path([[0, 0], [16, 0], [0, -15], [16, -15]],
+           [[0, 0], [0, 0], [0, 0], [0, 0]], [[0, 0], [0, 0], [0, 0], [0, 0]], false),
+      stroke(EYE_DARK, 4),
+    ])], OP, {
+      p: { a: 1, k: [
+        { t: t0, s: [CX + px, CY - 56], o: { x: [0.5], y: [0] }, i: { x: [0.5], y: [1] } },
+        { t: t1, s: [CX + px + 14, CY - 108] },
+      ]},
+      o: { a: 1, k: [
+        { t: t0, s: [0] },
+        { t: t0 + 8, s: [100] },
+        { t: t1 - 8, s: [100] },
+        { t: t1, s: [0] },
+      ]},
+      s: { a: 1, k: [
+        { t: t0, s: [70, 70] },
+        { t: t1, s: [110, 110] },
+      ]},
+    });
+  };
+  const face = layer('face', [
+    closedEye(-44, 'eye-l'),
+    closedEye(44, 'eye-r'),
+    ...noseMouthWhiskers('smile'),
+    ...blushShapes(),
+    ...headShapes(),
+    ...earShapes(4),
+  ], OP, { s: breathS });
+  return doc('cat-sleep', OP, [zLayer(0), zLayer(1), zLayer(2), face, bgLayer(OP)]);
+}
+
 // ---------- write ----------
 const base = '/tmp/stackchan-lottie/public/projects/stackchan-cat';
 const scenes = [
@@ -349,6 +402,7 @@ const scenes = [
   ['scene-2', sceneThinking()],
   ['scene-3', sceneTalking()],
   ['scene-4', sceneError()],
+  ['scene-5', sceneSleep()],
 ];
 for (const [slug, d] of scenes) {
   fs.mkdirSync(`${base}/${slug}`, { recursive: true });

@@ -32,6 +32,17 @@ pio run -t uploadfs --upload-port /dev/cu.usb*   # 文件系统(猫脸 GIF,首�
 
 `uploadfs` 和 `upload` 分开跑;烧完设备自动复位。
 
+## 工作时段
+
+助手每分钟下发 `TIME <当天分钟数>`,固件据此门控提醒并切换状态
+(常量 `WORK_AM_START` 等在 `src/main.cpp` 顶部):
+
+- **08:00–12:00、14:00–17:30**:正常倒计时 + 提醒。
+- **其他时段(且助手在线)**:不提醒(每 5 分钟重查,进入时段立即补一次),
+  猫切换为**睡觉表情**(`cat_sleep.gif`)、LED 全灭、头静止、跟踪不生效;
+  面板显示灰色当前时间 + 状态(还没上班 / 午休中 / 已下班)。
+- **助手不在线**:无时钟,退化为无条件 30 分钟提醒,不睡觉。
+
 ## 人脸跟踪(可选)
 
 Mac 端跑 `tools/face-track`(AVFoundation + Vision,零依赖),通过 USB 串口
@@ -43,10 +54,12 @@ swiftc -O tools/face-track.swift -o tools/face-track   # 首次编译
 ./tools/face-track /dev/cu.usbmodem2101 "iPhone"       # 多个摄像头时按名字选
 ```
 
-协议:每秒 ~10 行 `TRACK <cx_pm> <conf_pm>`(cx 为画面横向 -1000..1000 千分比)
-或 `TRACK LOST`。固件侧:P 控制 + 低通(0.25)+ 2° 死区;3 秒收不到新数据
-自动释放,IDLE 步进表 1 分钟内把头停回中位。方向反了就翻转 `src/main.cpp`
-里的 `TRACK_SIGN` 重烧。仅 IDLE 状态生效,提醒摇头时不干扰。
+协议:每秒 ~10 行 `TRACK <cx_pm> <cy_pm> <conf_pm>`(cx/cy 为画面横/纵向
+-1000..1000 千分比)或 `TRACK LOST`;每分钟一行 `TIME <当天分钟数>`。
+固件侧:P 控制 + 低通(0.25)+ 2° 死区;3 秒收不到新数据自动释放,
+IDLE 步进表 1 分钟内把头停回中位。方向反了就翻转 `src/main.cpp`
+里的 `TRACK_SIGN` / `TRACK_PITCH_SIGN` 重烧。仅 IDLE 状态生效,
+提醒摇头和睡觉时不干扰。
 
 ## 调参(`src/main.cpp`)
 
