@@ -67,6 +67,74 @@ static void melodyTick() {
     }
 }
 
+// ---- Face tracking (Mac helper -> "TRACK <cx_pm> <cy_pm> <conf_pm>" over USB serial) --
+// cx_pm/cy_pm: face centre, -1000..1000 per-mille of frame width/height (0 = centre;
+// cy positive = face in the upper half). "TRACK LOST" (or 3s of silence)
+// releases the head back to the IDLE pattern.
+static constexpr int      TRACK_SIGN         = 1;      // flip if the head turns the wrong way
+static constexpr int      TRACK_PITCH_SIGN   = 1;      // flip if the head tilts the wrong way
+static constexpr int16_t  TRACK_MAX_YAW      = 1000;   // ±100° hard clamp (yaw range is ±128°)
+static constexpr float    TRACK_DEG_AT_EDGE  = 45.0f;  // yaw degrees when the face is at the frame edge
+static constexpr float    TRACK_PITCH_AT_EDGE = 20.0f; // pitch degrees when the face is at the top/bottom edge
+static constexpr int16_t  PITCH_BASELINE_MAIN = 600;   // keep in sync with motion.cpp PITCH_BASELINE
+static constexpr int16_t  TRACK_PITCH_MIN    = 400;    // clamp: 40°..80° (0..900 = 0..90°)
+static constexpr int16_t  TRACK_PITCH_MAX    = 800;
+static constexpr float    TRACK_SMOOTH       = 0.25f;  // low-pass factor per 100ms step
+static constexpr uint32_t TRACK_STALE_MS     = 3000;
+
+static int      g_trackCxPm     = 0;
+static int      g_trackCyPm     = 0;
+static uint32_t g_lastTrackMs   = 0;
+static float    g_yawFiltered   = 0.0f;
+static float    g_pitchFiltered = PITCH_BASELINE_MAIN;
+static bool     g_trackOn       = false;
+
+static void parseTrackLine(const char* line) {
+    if (strncmp(line, "TRACK LOST", 10) == 0) return;  // staleness timeout handles it
+    int cx = 0, cy = 0, conf = 0;
+    if (sscanf(line, "TRACK %d %d %d", &cx, &cy, &conf) == 3) {
+        g_trackCxPm   = constrain(cx, -1000, 1000);
+        g_trackCyPm   = constrain(cy, -1000, 1000);
+        g_lastTrackMs = millis();
+    }
+}
+
+static void pollSerial() {
+    static char buf[48];
+    static uint8_t len = 0;
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\n') {
+            buf[len] = 0;
+            parseTrackLine(buf);
+            len = 0;
+        } else if (c != '\r') {
+            if (len < sizeof(buf) - 1) buf[len++] = c;
+            else len = 0;   // overflow: drop the line
+        }
+    }
+}
+
+// P-control toward the face: per-mille cx/cy -> target yaw/pitch, low-passed.
+// The motion layer applies the 2° deadzone when issuing to the servo.
+static void trackingTick() {
+    bool fresh = (millis() - g_lastTrackMs) < TRACK_STALE_MS;
+    if (fresh && !g_trackOn) { g_trackOn = true;  motionSetTracking(true); }
+    if (!fresh && g_trackOn) { g_trackOn = false; motionSetTracking(false); }
+    if (!g_trackOn) return;
+
+    float targetYaw = TRACK_SIGN * (g_trackCxPm / 1000.0f) * TRACK_DEG_AT_EDGE * 10.0f;
+    targetYaw = constrain(targetYaw, -(float)TRACK_MAX_YAW, (float)TRACK_MAX_YAW);
+    g_yawFiltered += TRACK_SMOOTH * (targetYaw - g_yawFiltered);
+
+    float targetPitch = PITCH_BASELINE_MAIN +
+        TRACK_PITCH_SIGN * (g_trackCyPm / 1000.0f) * TRACK_PITCH_AT_EDGE * 10.0f;
+    targetPitch = constrain(targetPitch, (float)TRACK_PITCH_MIN, (float)TRACK_PITCH_MAX);
+    g_pitchFiltered += TRACK_SMOOTH * (targetPitch - g_pitchFiltered);
+
+    motionTrackTarget((int16_t)g_yawFiltered, (int16_t)g_pitchFiltered);
+}
+
 // ---- Colours / Layout ---------------------------------------------------------
 static constexpr uint16_t TEXT_BG   = 0x0000;  // bottom panel: black
 static constexpr int SCREEN_W       = 320;
@@ -283,6 +351,8 @@ void loop() {
         g_nextReminderMs = millis() + REMINDER_INTERVAL_MS;
     }
 
+    pollSerial();
+    trackingTick();
     animateAll(g_agentState);
 
     delay(10);

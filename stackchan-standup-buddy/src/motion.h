@@ -12,3 +12,8 @@ enum AgentState : uint8_t {
 void motionInit();
 void motionTick(AgentState state);
 void motionSetState(AgentState state);
+
+// Face-tracking override: while active (and in STATE_IDLE), servoTick ignores
+// the pattern table and drives yaw toward the target set by motionTrackTarget().
+void motionSetTracking(bool on);
+void motionTrackTarget(int16_t yaw, int16_t pitch);

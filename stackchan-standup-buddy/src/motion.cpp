@@ -91,6 +91,14 @@ uint32_t g_lastLedMs     = 0;
 uint8_t  g_ledPos        = 0;
 bool     g_ledFlashOn    = false;
 
+// Face-tracking override (drives yaw directly while IDLE; patterns resume
+// the moment tracking goes stale or another state takes over).
+bool    g_tracking      = false;
+int16_t g_trackYaw      = 0;
+int16_t g_trackPitch    = PITCH_BASELINE;
+int16_t g_trackIssuedY  = 0x7FFF;   // last yaw/pitch sent to the servo (sentinel: none)
+int16_t g_trackIssuedP  = 0x7FFF;
+
 // ---- Helpers ----------------------------------------------------------------
 
 int16_t clampedPitch(int16_t base, int16_t delta) {
@@ -103,6 +111,22 @@ int16_t clampedPitch(int16_t base, int16_t delta) {
 // ---- Servo ticker -----------------------------------------------------------
 
 void servoTick(AgentState st) {
+    // Face tracking owns the servos while IDLE: re-issue at ~10Hz, but
+    // only when the target actually moved (>=2 deg) to keep the bus quiet.
+    if (g_tracking && st == STATE_IDLE) {
+        uint32_t now = millis();
+        if (now - g_lastServoMs < 100) return;
+        bool moved = (g_trackIssuedY == 0x7FFF) ||
+                     abs(g_trackYaw - g_trackIssuedY) >= 20 ||
+                     abs(g_trackPitch - g_trackIssuedP) >= 20;
+        if (!moved) return;
+        M5StackChan.Motion.move(g_trackYaw, g_trackPitch, 200);
+        g_trackIssuedY = g_trackYaw;
+        g_trackIssuedP = g_trackPitch;
+        g_lastServoMs = now;
+        return;
+    }
+
     const ServoStep* pat = PATTERNS[(int)st];
     if (!pat) return;
 
@@ -209,6 +233,20 @@ void motionSetState(AgentState next) {
     g_ledPos        = 0;
     g_lastLedMs     = 0;
     g_ledFlashOn    = false;
+}
+
+void motionSetTracking(bool on) {
+    if (g_tracking == on) return;
+    g_tracking     = on;
+    g_trackIssuedY = 0x7FFF;
+    g_trackIssuedP = 0x7FFF;
+    g_servoStep    = 0;
+    g_lastServoMs  = 0;
+}
+
+void motionTrackTarget(int16_t yaw, int16_t pitch) {
+    g_trackYaw   = yaw;
+    g_trackPitch = pitch;
 }
 
 void motionTick(AgentState state) {

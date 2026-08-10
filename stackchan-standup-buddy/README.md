@@ -32,6 +32,22 @@ pio run -t uploadfs --upload-port /dev/cu.usb*   # 文件系统(猫脸 GIF,首�
 
 `uploadfs` 和 `upload` 分开跑;烧完设备自动复位。
 
+## 人脸跟踪(可选)
+
+Mac 端跑 `tools/face-track`(AVFoundation + Vision,零依赖),通过 USB 串口
+把人脸位置发给固件,头会一直转向你,屏幕(倒计时)始终可见。
+
+```sh
+swiftc -O tools/face-track.swift -o tools/face-track   # 首次编译
+./tools/face-track /dev/cu.usbmodem2101                # 常驻;首次会弹摄像头授权
+./tools/face-track /dev/cu.usbmodem2101 "iPhone"       # 多个摄像头时按名字选
+```
+
+协议:每秒 ~10 行 `TRACK <cx_pm> <conf_pm>`(cx 为画面横向 -1000..1000 千分比)
+或 `TRACK LOST`。固件侧:P 控制 + 低通(0.25)+ 2° 死区;3 秒收不到新数据
+自动释放,IDLE 步进表 1 分钟内把头停回中位。方向反了就翻转 `src/main.cpp`
+里的 `TRACK_SIGN` 重烧。仅 IDLE 状态生效,提醒摇头时不干扰。
+
 ## 调参(`src/main.cpp`)
 
 | 常量 | 默认 | 说明 |
