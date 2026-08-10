@@ -20,6 +20,7 @@ build** — always `cd <subdir>` first.
 | `stopwatch-walkie/` | In development (ESP32-S3 + Python) | `pio run -e m5stack-stopwatch` | `README.md` |
 | `m5-paper-buddy/` | **Frozen fork** (third-party) | `pio run -e m5paper` | `README.md` |
 | `stackchan-firmware/` | Active (CoreS3 StackChan) | `pio run` (main) / ESP-IDF `voice-agent/` | `CANVAS.md` + `docs/` |
+| `stackchan-standup-buddy/` | Active (CoreS3 StackChan 站立提醒器) | `pio run -e cores3-standup` | `README.md` |
 
 ## Gotchas that aren't obvious
 
