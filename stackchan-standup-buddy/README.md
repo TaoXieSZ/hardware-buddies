@@ -1,7 +1,7 @@
 # stackchan-standup-buddy
 
 CoreS3 StackChan 站立提醒器。每 30 分钟摇头、唱歌(《两只老虎》)、LED 绿闪,
-提醒你站起来看看窗外。
+提醒你站起来看看窗外。屏幕头像使用原尺寸 Clawd 小螃蟹像素动画。
 
 从 `stackchan-firmware` 的 Arduino 主固件衍生,去掉了 USB 串口问答功能,
 只保留提醒器用途。待机时头完全不动(每分钟静默校正一次位置)。
@@ -11,7 +11,7 @@ CoreS3 StackChan 站立提醒器。每 30 分钟摇头、唱歌(《两只老虎�
 
 ## 界面与交互
 
-- **待机**:猫脸(上移 30px,眼睛在面板上方)+ 底部 92px 面板 ——
+- **待机**:Clawd 小螃蟹在面板上方原尺寸居中显示 + 底部 92px 面板 ——
   Font7 数码管大倒计时 +「后提醒站立 · 看窗外」。
 - **提醒**(8 秒):左右摇头 + 点头、喇叭唱《两只老虎》、机身 LED 绿闪,
   屏幕显示「该起来活动一下啦 / 站起来看窗外 · 摸头确认」。
@@ -30,7 +30,7 @@ CoreS3 StackChan 站立提醒器。每 30 分钟摇头、唱歌(《两只老虎�
 ```sh
 pio run                                          # 构建
 pio run -t upload   --upload-port /dev/cu.usb*   # 固件
-pio run -t uploadfs --upload-port /dev/cu.usb*   # 文件系统(猫脸 GIF,首次或 data/ 变更时)
+pio run -t uploadfs --upload-port /dev/cu.usb*   # 文件系统(Clawd GIF,首次或 data/ 变更时)
 ```
 
 `uploadfs` 和 `upload` 分开跑;烧完设备自动复位。
@@ -50,7 +50,7 @@ Mac 跟踪在线时自动让位;睡觉态不启用。常量见 `src/main.cpp`
 
 - **08:00–12:00、14:00–17:30**:正常倒计时 + 提醒。
 - **其他时段(且时钟已知)**:不提醒(每 5 分钟重查,进入时段立即补一次),
-  猫切换为**睡觉表情**(`cat_sleep.gif`)、LED 全灭、头静止、跟踪不生效;
+  Clawd 固定切换为**睡觉动画**(`sleep.gif`)、LED 全灭、头静止、跟踪不生效;
   面板显示灰色当前时间 + 状态(还没上班 / 午休中 / 已下班)。
 - **Mac 带走**:TIME 同时写进了设备 RTC(BM8563,电池保持),设备按 RTC
   继续门控 —— 到点睡、到点醒,整夜安静。
@@ -84,13 +84,15 @@ swiftc -O tools/face-track.swift -o tools/face-track   # 首次编译
 | `REMINDER_MELODY` | 两只老虎 | 音符表 `{频率Hz, 时长ms}`,可换曲 |
 | `headPatted()` 里的 `0.8f` | 0.8g | 摸头灵敏度:误触发调大,太钝调小 |
 
-猫脸 GIF 用 `tools/lottie-src/` 生成:`gen-cat-styles.mjs`(参数化风格,
-当前为 `b-tabby` 银虎斑,`node gen-cat-styles.mjs b-tabby --full`)→
-`export-gifs.mjs` → `assemble-gifs.py`,产出进 `data/characters/cat/` 后
-`uploadfs`。风格预览画廊:`docs/face-styles/index.html`。
+Clawd GIF 复用自 `../cardputer-adv-buddy/data/characters/clawd/`，放在
+`data/characters/clawd/`。睡眠固定使用 `sleep.gif`，提醒固定使用
+`clawd-notification.gif`；其他四个状态每次真正进入时从 13 个小尺寸
+GIF 中随机选择一次，同一状态循环期间保持不变，且不会连续抽中同一资产。
+播放器不放大素材，而是按底部面板起点水平、垂直居中。详细设计见
+`docs/plans/2026-08-11-clawd-random-avatar-design.md`。
 
 ## 代码结构
 
 - `src/main.cpp` —— 提醒调度、倒计时面板、旋律播放器、三路确认(摸头/点屏/摸机身)
 - `src/motion.cpp` —— 舵机步进表(IDLE 静止、REMINDER 摇头点头)+ LED
-- `src/gif_face.cpp` —— LittleFS GIF 脸播放(支持垂直偏移 + 底部面板裁剪)
+- `src/gif_face.cpp` —— LittleFS Clawd 播放(状态随机、原尺寸居中、底部面板裁剪)

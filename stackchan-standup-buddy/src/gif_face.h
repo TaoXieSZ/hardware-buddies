@@ -1,6 +1,6 @@
-// GIF face player — fullscreen cat expressions from LittleFS.
-// Replaces the old M5GFX-primitive robot face. One GIF per AgentState,
-// generated from Lottie scenes (320x240 @10fps, see repo docs).
+// GIF face player — native-size Clawd animations from LittleFS.
+// Sleep/reminder have fixed assets; other states choose one random asset on
+// state entry and keep it for every loop until the next state transition.
 #pragma once
 #include "motion.h"   // AgentState
 
@@ -12,7 +12,5 @@ void gifFaceTick();                      // call every loop(); paces frames itse
 // are skipped so text and animation don't fight. Pass 0 to disable clipping.
 void gifFaceSetTextBand(int bandY);
 
-// Vertical shift applied to all GIF rows (negative = move face up, e.g. when
-// a taller bottom panel crops the face and you want the eyes centred in the
-// remaining space). Rows that land off-screen are dropped.
+// Optional centred-layout vertical nudge. Values outside +/-8px are ignored.
 void gifFaceSetYOffset(int dy);

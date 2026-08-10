@@ -5,11 +5,10 @@
 // patting the head (IMU jolt), tapping the screen, or touching a body zone;
 // otherwise the show ends by itself after REMINDER_DURATION_MS.
 //
-// IDLE screen: cropped cat face + a big countdown to the next reminder.
+// IDLE screen: centred Clawd animation + a big countdown to the next reminder.
 //
-// Animations: face expressions (fullscreen cat GIFs from LittleFS, authored as
-// Lottie scenes and pre-rendered to 320x240 GIF — see gif_face.cpp), servo head
-// movements, and 12 RGB LED ring patterns — all non-blocking, millis()-driven.
+// Animations: native-size Clawd GIFs from LittleFS, servo head movements, and
+// 12 RGB LED ring patterns — all non-blocking and millis()-driven.
 //
 // Servo hardware (StackChan BSP):
 //   Yaw servo (ID 1): 360-degree continuous-rotation, -1280..+1280 position
@@ -284,8 +283,7 @@ static constexpr uint16_t TEXT_BG   = 0x0000;  // bottom panel: black
 static constexpr int SCREEN_W       = 320;
 static constexpr int TEXT_AREA_Y    = 148;    // bottom panel starts here
 static constexpr int TEXT_AREA_H    = 92;
-static constexpr int FACE_YOFFSET   = -30;    // shift GIF face up so the eyes
-                                              // sit centred above the 92px panel
+static constexpr int FACE_YOFFSET   = 0;      // centre native-size Clawd above the panel
 
 // ---- Animation Timing Globals -----------------------------------------------
 static uint32_t g_stateEntryMs = 0;
@@ -529,7 +527,7 @@ void setup() {
 
     gifFaceInit();
     gifFaceSetTextBand(TEXT_AREA_Y);   // GIF keeps out of the bottom panel
-    gifFaceSetYOffset(FACE_YOFFSET);   // face shifted up, eyes above the panel
+    gifFaceSetYOffset(FACE_YOFFSET);   // Clawd stays centred above the panel
     gifFaceSetState(STATE_IDLE);       // g_agentState already IDLE; open GIF directly
 
     // Pokemon pixel digits for the countdown (LittleFS mounted by gifFaceInit)
