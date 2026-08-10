@@ -20,6 +20,7 @@
 #include <M5StackChan.h>
 #include "motion.h"
 #include "gif_face.h"
+#include "camera_height.h"
 
 static AgentState g_agentState = STATE_IDLE;
 
@@ -191,6 +192,37 @@ static void trackingTick() {
     g_pitchFiltered += TRACK_SMOOTH * (targetPitch - g_pitchFiltered);
 
     motionTrackTarget((int16_t)g_yawFiltered, (int16_t)g_pitchFiltered);
+}
+
+// ---- Camera height adjust (intermittent GC0308 probe, see camera_height.cpp) --
+// Only while IDLE-awake AND the Mac tracker is offline: borrow the I2C bus for
+// a ~0.7s window every CAM_PROBE_MS, frame-diff for motion, nudge pitch toward
+// the motion centroid. Yaw stays centred in this mode (Mac owns yaw when here).
+static constexpr uint32_t CAM_PROBE_MS       = 30000;
+static constexpr float    CAM_CY_TARGET      = 0.40f;  // want motion at 40% from top
+static constexpr float    CAM_PITCH_GAIN     = 500.0f; // pitch units (10/deg) per full cy
+static constexpr int16_t  CAM_PITCH_STEP_MAX = 50;     // ≤5° per probe
+static int16_t  g_camPitch  = PITCH_BASELINE_MAIN;
+static uint32_t g_nextCamMs = 20000;   // first probe 20s after boot
+
+static void cameraHeightTick() {
+    if (g_agentState != STATE_IDLE || g_trackOn) return;
+
+    if ((int32_t)(millis() - g_nextCamMs) >= 0) {
+        g_nextCamMs = millis() + CAM_PROBE_MS;
+        CamProbe p = cameraProbeOnce();
+        if (p.ok && p.motion) {
+            // motion below the target row -> tilt down (pitch value decreases)
+            int delta = (int)((CAM_CY_TARGET - p.cy) * CAM_PITCH_GAIN);
+            delta = constrain(delta, -CAM_PITCH_STEP_MAX, CAM_PITCH_STEP_MAX);
+            g_camPitch = constrain(g_camPitch + delta, TRACK_PITCH_MIN, TRACK_PITCH_MAX);
+        }
+        if (p.ok) Serial.printf("[cam] motion=%d cy=%.2f pitch=%d\n",
+                                p.motion, p.cy, g_camPitch);
+    }
+    // Camera mode owns the head (yaw centred, pitch camera-derived).
+    motionSetTracking(true);
+    motionTrackTarget(0, g_camPitch);
 }
 
 // ---- Colours / Layout ---------------------------------------------------------
@@ -454,6 +486,7 @@ void loop() {
 
     pollSerial();
     trackingTick();
+    cameraHeightTick();
 
     // -- Sleep outside work hours, wake inside (only when in a home state) --
     if (g_agentState == STATE_IDLE || g_agentState == STATE_SLEEP) {

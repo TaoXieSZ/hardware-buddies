@@ -32,6 +32,14 @@ pio run -t uploadfs --upload-port /dev/cu.usb*   # 文件系统(猫脸 GIF,首�
 
 `uploadfs` 和 `upload` 分开跑;烧完设备自动复位。
 
+## 摄像头高度自调(可选,片上)
+
+Mac 跟踪离线时,设备每 30 秒借用一次自带 GC0308 摄像头(~0.7 秒窗口:
+让渡 I2C 总线 → 抓两帧 → 帧差移动检测 → 归还总线),检测到移动就把
+俯仰角分小步(≤5°)调向移动质心,直到移动目标落在画面 40% 高度。
+Mac 跟踪在线时自动让位;睡觉态不启用。常量见 `src/main.cpp`
+`CAM_*` 与 `src/camera_height.cpp`(DIFF_TH / MOTION_RATIO)。
+
 ## 工作时段
 
 助手每分钟下发 `TIME <当天分钟数>`,固件据此门控提醒并切换状态
