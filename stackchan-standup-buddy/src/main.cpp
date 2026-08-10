@@ -68,8 +68,9 @@ static void melodyTick() {
 }
 
 // ---- Work-hours gating (Mac helper -> "TIME <minutes_since_midnight>") -------
-// Reminders only fire inside the work windows. When the helper isn't running
-// the wall clock is unknown and reminders fire unconditionally.
+// Reminders only fire inside the work windows. The TIME message is also
+// written to the battery-backed RTC, so gating keeps working after the Mac
+// leaves. Only with neither helper nor RTC do reminders fire unconditionally.
 static constexpr int WORK_AM_START = 8 * 60;          // 08:00
 static constexpr int WORK_AM_END   = 12 * 60;         // 12:00
 static constexpr int WORK_PM_START = 14 * 60;         // 14:00
@@ -79,10 +80,35 @@ static constexpr uint32_t RECHECK_MS = 5UL * 60 * 1000;  // outside hours: poll 
 static bool     g_timeKnown   = false;
 static int      g_timeBaseMin = 0;
 static uint32_t g_timeBaseMs  = 0;
+static uint32_t g_lastTimeMs  = 0;   // last TIME from the helper
 
-static int currentMinutes() {   // -1 = wall clock unknown (helper not running)
-    if (!g_timeKnown) return -1;
-    return g_timeBaseMin + (int)((millis() - g_timeBaseMs) / 60000);
+// Write the helper's clock into the BM8563 RTC so the wall clock keeps
+// ticking (and gating correctly) after the Mac leaves.
+static void syncRtc(int mins) {
+    m5::rtc_datetime_t dt;
+    M5.Rtc.getDateTime(&dt);
+    if (dt.date.year < 2024) dt.date = m5::rtc_date_t(2026, 1, 1, 4);  // valid placeholder date
+    dt.time = m5::rtc_time_t(mins / 60, mins % 60, 0);
+    M5.Rtc.setDateTime(&dt);
+}
+
+static int currentMinutes() {   // -1 = wall clock unknown (helper never seen, RTC unset)
+    uint32_t now = millis();
+    // Helper path: corrected every minute while the Mac is here.
+    if (g_timeKnown && now - g_lastTimeMs < 90000)
+        return (g_timeBaseMin + (int)((now - g_timeBaseMs) / 60000)) % 1440;
+    // RTC path: Mac is gone, the battery-backed RTC keeps the time.
+    static uint32_t lastRtcReadMs = 0;
+    static int rtcMins = -1;
+    if (now - lastRtcReadMs >= 1000) {   // don't hammer the shared I2C bus
+        lastRtcReadMs = now;
+        m5::rtc_datetime_t dt;
+        rtcMins = (M5.Rtc.getDateTime(&dt) && dt.date.year >= 2024)
+                ? (dt.time.hours * 60 + dt.time.minutes) : -1;
+    }
+    if (rtcMins >= 0) return rtcMins;
+    if (g_timeKnown) return (g_timeBaseMin + (int)((now - g_timeBaseMs) / 60000)) % 1440;
+    return -1;
 }
 
 static bool inWorkWindow(int m) {
@@ -117,7 +143,9 @@ static void parseTrackLine(const char* line) {
     if (sscanf(line, "TIME %d", &t) == 1) {
         g_timeBaseMin = constrain(t, 0, 1439);
         g_timeBaseMs  = millis();
+        g_lastTimeMs  = g_timeBaseMs;
         g_timeKnown   = true;
+        syncRtc(g_timeBaseMin);
         return;
     }
     if (strncmp(line, "TRACK LOST", 10) == 0) return;  // staleness timeout handles it
