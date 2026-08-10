@@ -84,8 +84,10 @@ swiftc -O tools/face-track.swift -o tools/face-track   # 首次编译
 | `REMINDER_MELODY` | 两只老虎 | 音符表 `{频率Hz, 时长ms}`,可换曲 |
 | `headPatted()` 里的 `0.8f` | 0.8g | 摸头灵敏度:误触发调大,太钝调小 |
 
-猫脸 GIF 用 `tools/lottie-src/` 重新生成(见该目录脚本),放进
-`data/characters/cat/` 后 `uploadfs`。
+猫脸 GIF 用 `tools/lottie-src/` 生成:`gen-cat-styles.mjs`(参数化风格,
+当前为 `b-tabby` 银虎斑,`node gen-cat-styles.mjs b-tabby --full`)→
+`export-gifs.mjs` → `assemble-gifs.py`,产出进 `data/characters/cat/` 后
+`uploadfs`。风格预览画廊:`docs/face-styles/index.html`。
 
 ## 代码结构
 

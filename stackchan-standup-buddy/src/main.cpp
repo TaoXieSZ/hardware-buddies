@@ -266,18 +266,18 @@ static void drawPausedPanel(int mins) {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%02d:%02d", (mins / 60) % 24, mins % 60);
-    M5.Display.setFont(&fonts::Font7);      // 7-seg digits, ~48px tall
+    M5.Display.setFont(&fonts::Font6);      // smooth digits, ~48px tall
     M5.Display.setTextDatum(TC_DATUM);
     M5.Display.setTextColor(TFT_DARKGREY);
-    M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 12);
+    M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
 
     const char* status;
     if (mins < WORK_AM_START)      status = "还没上班 · 08:00 开始";
     else if (mins < WORK_PM_START) status = "午休中 · 14:00 继续";
     else                           status = "已下班 · 明早见";
-    M5.Display.setFont(&fonts::efontCN_16);
+    M5.Display.setFont(&fonts::efontCN_24);
     M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.drawString(status, SCREEN_W / 2, TEXT_AREA_Y + 64);
+    M5.Display.drawString(status, SCREEN_W / 2, TEXT_AREA_Y + 62);
 
     M5.Display.setTextDatum(TL_DATUM);
 }
@@ -297,14 +297,14 @@ static void drawCountdownPanel() {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
-    M5.Display.setFont(&fonts::Font7);      // 7-seg digits, ~48px tall
+    M5.Display.setFont(&fonts::Font6);      // smooth digits, ~48px tall
     M5.Display.setTextDatum(TC_DATUM);
     M5.Display.setTextColor(TFT_GREEN);
-    M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 12);
+    M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
 
-    M5.Display.setFont(&fonts::efontCN_16);
+    M5.Display.setFont(&fonts::efontCN_24);
     M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.drawString("后提醒站立 · 看窗外", SCREEN_W / 2, TEXT_AREA_Y + 64);
+    M5.Display.drawString("后提醒站立 · 看窗外", SCREEN_W / 2, TEXT_AREA_Y + 62);
 
     M5.Display.setTextDatum(TL_DATUM);
 }
@@ -337,12 +337,15 @@ static void animateAll(AgentState state) {
         lastL2   = g_overlayLine2;
         lastCol2 = g_overlayColor2;
         clearTextArea();
-        M5.Display.setFont(&fonts::efontCN_16);
-        M5.Display.setCursor(0, TEXT_AREA_Y + 2);
-        M5.Display.setTextColor(TFT_WHITE);
+        M5.Display.setCursor(0, TEXT_AREA_Y + 8);
         M5.Display.setTextWrap(true);
-        if (!g_overlayLine1.isEmpty()) M5.Display.println(g_overlayLine1);
+        if (!g_overlayLine1.isEmpty()) {
+            M5.Display.setFont(&fonts::efontCN_24);
+            M5.Display.setTextColor(TFT_WHITE);
+            M5.Display.println(g_overlayLine1);
+        }
         if (!g_overlayLine2.isEmpty()) {
+            M5.Display.setFont(&fonts::efontCN_16);
             M5.Display.setTextColor(g_overlayColor2);
             M5.Display.println(g_overlayLine2);
             M5.Display.setTextColor(TFT_WHITE);

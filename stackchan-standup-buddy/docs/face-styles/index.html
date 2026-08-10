@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>StackChan 猫脸风格选型</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a1e; color: #ddd;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+    padding: 32px; display: flex; flex-direction: column; align-items: center; gap: 28px;
+  }
+  h1 { font-size: 20px; font-weight: 600; }
+  .note { color: #888; font-size: 13px; }
+  .row { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
+  .card {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    background: #232327; border-radius: 12px; padding: 16px;
+    border: 2px solid transparent;
+  }
+  .card img { width: 320px; height: 240px; border-radius: 6px; display: block; }
+  .card h2 { font-size: 15px; color: #eee; font-weight: 600; }
+  .card p { font-size: 12px; color: #999; max-width: 320px; text-align: center; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <h1>猫脸风格选型 — 5 个方向</h1>
+  <p class="note">均为 idle 态动画(呼吸 + 眨眼),320×240 真机尺寸。选定后按该风格生成全套状态(idle / talking / sleep / error / thinking)。</p>
+  <div class="row">
+    <div class="card">
+      <h2>A · 奶油橘(改良)</h2>
+      <img src="a-cream.gif" alt="A 奶油橘">
+      <p>现行款精修:暖橘被毛、粉色耳内、圆润大眼。和现在的脸几乎一致,作为对照基线。</p>
+    </div>
+    <div class="card">
+      <h2>B · 银虎斑美短</h2>
+      <img src="b-tabby.gif" alt="B 银虎斑美短">
+      <p>银灰被毛 + 额头 M 纹 + 脸颊条纹,琥珀色眼睛。就是美短的样子。</p>
+    </div>
+    <div class="card">
+      <h2>C · 暹罗重点色</h2>
+      <img src="c-siamese.gif" alt="C 暹罗">
+      <p>奶油身体 + 深棕面罩和耳内,蓝眼睛。对比最强,老远就认得出。</p>
+    </div>
+    <div class="card">
+      <h2>D · 黑白奶牛猫</h2>
+      <img src="d-cow.gif" alt="D 奶牛猫">
+      <p>白底 + 黑色左眼罩斑块 + 黑右耳,粉鼻子。最有性格的一只。</p>
+    </div>
+    <div class="card">
+      <h2>E · 极简线稿</h2>
+      <img src="e-line.gif" alt="E 极简线稿">
+      <p>不上色,粗描边 + 豆豆眼。配白底最干净,但表情表现力最弱。</p>
+    </div>
+  </div>
+</body>
+</html>
