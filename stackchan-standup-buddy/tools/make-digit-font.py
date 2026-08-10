@@ -12,33 +12,27 @@ from PIL import Image, ImageDraw, ImageFont
 
 GLYPHS = "0123456789:"
 W = H = 64
-RENDER = 56          # Pokemon Classic is an 8px-grid font; 56 = 7x, crisp pixels
-TTF = "data/fonts/PokemonClassic.ttf"
+RENDER = 54          # Geist Mono SemiBold,平滑抗锯齿
+TTF = "data/fonts/GeistMono.ttf"
+WEIGHT = 600         # variable font 字重
 OUT = "data/fonts/poke-digits.bin"
 
 font = ImageFont.truetype(TTF, RENDER)
+try:
+    font.set_variation_by_axes([WEIGHT])
+except Exception:
+    pass
 masks = []
 preview = Image.new("L", (W * len(GLYPHS), H), 0)
-
-# 数字基准像素尺寸:用 '8' 的字形高度推一个"像素点"边长,手工拼像素风冒号
-_0x, _0y, _1x, _1y = font.getbbox("8")
-dot = max(5, round((_1y - _0y) / 6))   # 数字约 6 点高
 
 for i, ch in enumerate(GLYPHS):
     img = Image.new("L", (W, H), 0)
     d = ImageDraw.Draw(img)
-    if ch == ":":
-        # 两个像素方块,与数字同点阵风格
-        cx = W // 2
-        cy = H - 8 - (_1y - _0y) // 2
-        d.rectangle([cx - dot // 2, cy - dot * 2, cx + dot // 2, cy - dot], fill=255)
-        d.rectangle([cx - dot // 2, cy + dot // 2, cx + dot // 2, cy + dot * 1.5], fill=255)
-    else:
-        x0, y0, x1, y1 = font.getbbox(ch)
-        # 水平居中,底部对齐(数字无降部)
-        dx = (W - (x1 - x0)) // 2 - x0
-        dy = H - 8 - y1
-        d.text((dx, dy), ch, font=font, fill=255)
+    x0, y0, x1, y1 = font.getbbox(ch)
+    # 水平居中,底部对齐(数字无降部;Geist Mono 自带标准冒号)
+    dx = (W - (x1 - x0)) // 2 - x0
+    dy = H - 6 - y1
+    d.text((dx, dy), ch, font=font, fill=255)
     masks.append(img.tobytes())
     preview.paste(img, (i * W, 0))
 
