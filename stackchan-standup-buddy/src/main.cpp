@@ -229,21 +229,25 @@ static void cameraHeightTick() {
 // ---- Countdown digits: pixel-font alpha masks from LittleFS, Font6 fallback --
 // M5GFX in this build has no TTF support, so tools/make-digit-font.py renders
 // "0123456789:" from PokemonClassic.ttf into 64x64 alpha masks (poke-digits.bin).
-constexpr int PG_W = 64, PG_H = 64, PG_N = 11;
-static uint8_t* g_pokeGlyphs = nullptr;   // PG_N * PG_W * PG_H, row-major alpha
+constexpr int PG_MAX = 64;   // 字形 cell 上限;实际尺寸读 bin 头
+static uint8_t* g_pokeGlyphs = nullptr;
 static bool     g_pokeOk = false;
+static int      g_pgN = 0, g_pgW = 0, g_pgH = 0;
 
 static void loadPokeDigits() {
     File f = LittleFS.open("/fonts/poke-digits.bin", "r");
-    if (f && f.size() == 7 + PG_N * PG_W * PG_H) {
+    if (f) {
         uint8_t hdr[7];
-        if (f.read(hdr, 7) == 7 && memcmp(hdr, "PDGF", 4) == 0) {
-            g_pokeGlyphs = (uint8_t*)ps_malloc(PG_N * PG_W * PG_H);   // 常驻,不 free
-            if (g_pokeGlyphs && f.read(g_pokeGlyphs, PG_N * PG_W * PG_H) == PG_N * PG_W * PG_H)
+        if (f.read(hdr, 7) == 7 && memcmp(hdr, "PDGF", 4) == 0 &&
+            hdr[5] <= PG_MAX && hdr[6] <= PG_MAX &&
+            f.size() == 7 + hdr[4] * hdr[5] * hdr[6]) {
+            g_pgN = hdr[4]; g_pgW = hdr[5]; g_pgH = hdr[6];
+            g_pokeGlyphs = (uint8_t*)ps_malloc(g_pgN * g_pgW * g_pgH);   // 常驻,不 free
+            if (g_pokeGlyphs && f.read(g_pokeGlyphs, g_pgN * g_pgW * g_pgH) == g_pgN * g_pgW * g_pgH)
                 g_pokeOk = true;
         }
+        f.close();
     }
-    if (f) f.close();
     Serial.println(g_pokeOk ? "[font] poke digits loaded"
                             : "[font] poke digits missing, fallback Font6");
 }
@@ -251,26 +255,27 @@ static void loadPokeDigits() {
 // Blend masks onto the (black) panel. Data is pushed big-endian — same byte
 // order the GIF player uses on this panel.
 static void drawPokeDigits(const char* s, int cx, int y, uint16_t color) {
+    const int digitStride = g_pgW * 3 / 4, colonStride = g_pgW * 3 / 8;
     int w = 0;
-    for (const char* p = s; *p; p++) w += (*p == ':') ? 24 : 48;
+    for (const char* p = s; *p; p++) w += (*p == ':') ? colonStride : digitStride;
     int x = cx - w / 2;
     uint8_t cr = (color >> 11) & 31, cg = (color >> 5) & 63, cb = color & 31;
-    static uint16_t line[PG_W];
+    static uint16_t line[PG_MAX];
     for (const char* p = s; *p; p++) {
         int gi = (*p == ':') ? 10 : (*p - '0');
-        const uint8_t* g = g_pokeGlyphs + gi * PG_W * PG_H;
-        for (int row = 0; row < PG_H; row++) {
-            const uint8_t* grow = g + row * PG_W;
-            for (int col = 0; col < PG_W; col++) {
+        const uint8_t* g = g_pokeGlyphs + gi * g_pgW * g_pgH;
+        for (int row = 0; row < g_pgH; row++) {
+            const uint8_t* grow = g + row * g_pgW;
+            for (int col = 0; col < g_pgW; col++) {
                 uint8_t a = grow[col];
                 uint16_t v = (uint16_t)(((cr * a + 127) / 255) << 11 |
                                         ((cg * a + 127) / 255) << 5  |
                                         ((cb * a + 127) / 255));
                 line[col] = __builtin_bswap16(v);
             }
-            M5.Display.pushImage(x, y + row, PG_W, 1, line);
+            M5.Display.pushImage(x, y + row, g_pgW, 1, line);
         }
-        x += (*p == ':') ? 24 : 48;
+        x += (*p == ':') ? colonStride : digitStride;
     }
 }
 
@@ -316,10 +321,9 @@ static void drawPausedPanel(int mins) {
     char buf[8];
     snprintf(buf, sizeof(buf), "%02d:%02d", (mins / 60) % 24, mins % 60);
     if (g_pokeOk) {
-        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 2, TFT_DARKGREY);
+        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 4, TFT_DARKGREY);
     } else {
         M5.Display.setFont(&fonts::Font6);
-        M5.Display.setTextDatum(TC_DATUM);
         M5.Display.setTextColor(TFT_DARKGREY);
         M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
     }
@@ -328,7 +332,8 @@ static void drawPausedPanel(int mins) {
     if (mins < WORK_AM_START)      status = "还没上班 · 08:00 开始";
     else if (mins < WORK_PM_START) status = "午休中 · 14:00 继续";
     else                           status = "已下班 · 明早见";
-    M5.Display.setFont(&fonts::efontCN_24);
+    M5.Display.setTextDatum(TC_DATUM);   // poke 分支不设锚点,这里统一恢复居中
+    M5.Display.setFont(&fonts::efontCN_16);
     M5.Display.setTextColor(TFT_WHITE);
     M5.Display.drawString(status, SCREEN_W / 2, TEXT_AREA_Y + 66);
 
@@ -351,15 +356,15 @@ static void drawCountdownPanel() {
     char buf[8];
     snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
     if (g_pokeOk) {
-        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 2, TFT_GREEN);
+        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 4, TFT_GREEN);
     } else {
         M5.Display.setFont(&fonts::Font6);
-        M5.Display.setTextDatum(TC_DATUM);
         M5.Display.setTextColor(TFT_GREEN);
         M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
     }
 
-    M5.Display.setFont(&fonts::efontCN_24);
+    M5.Display.setTextDatum(TC_DATUM);   // poke 分支不设锚点,这里统一恢复居中
+    M5.Display.setFont(&fonts::efontCN_16);
     M5.Display.setTextColor(TFT_WHITE);
     M5.Display.drawString("后提醒站立 · 看窗外", SCREEN_W / 2, TEXT_AREA_Y + 66);
 

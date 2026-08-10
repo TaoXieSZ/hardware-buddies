@@ -11,8 +11,8 @@ import struct
 from PIL import Image, ImageDraw, ImageFont
 
 GLYPHS = "0123456789:"
-W = H = 64
-RENDER = 54          # Geist Mono SemiBold,平滑抗锯齿
+W = H = 48
+RENDER = 40          # Geist Mono SemiBold,平滑抗锯齿
 TTF = "data/fonts/GeistMono.ttf"
 WEIGHT = 600         # variable font 字重
 OUT = "data/fonts/poke-digits.bin"
@@ -31,7 +31,7 @@ for i, ch in enumerate(GLYPHS):
     x0, y0, x1, y1 = font.getbbox(ch)
     # 水平居中,底部对齐(数字无降部;Geist Mono 自带标准冒号)
     dx = (W - (x1 - x0)) // 2 - x0
-    dy = H - 6 - y1
+    dy = H - 4 - y1
     d.text((dx, dy), ch, font=font, fill=255)
     masks.append(img.tobytes())
     preview.paste(img, (i * W, 0))
