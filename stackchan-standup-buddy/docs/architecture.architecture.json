@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "StackChan 站立提醒器 — 系统架构",
+    "subtitle": "stackchan-standup-buddy · Mac 人脸跟踪 + 片上摄像头间歇探测 + 工作时段门控",
+    "output": "architecture.html"
+  },
+  "components": [
+    { "id": "user",      "type": "external",   "label": "用户",            "sublabel": "工位前",                        "pos": [40, 290],  "size": [110, 60] },
+    { "id": "webcam",    "type": "external",   "label": "Mac 摄像头",      "sublabel": "FaceTime HD",                   "pos": [220, 290], "size": [130, 60] },
+    { "id": "facetrack", "type": "backend",    "label": "face-track",      "sublabel": "Swift · Vision 人脸检测",        "pos": [400, 288], "size": [150, 64] },
+    { "id": "serial",    "type": "messagebus", "label": "USB 串口",        "sublabel": "TRACK / TIME 行文本",            "pos": [620, 290], "size": [150, 60] },
+    { "id": "mainloop",  "type": "backend",    "label": "固件主循环",      "sublabel": "main.cpp · millis 非阻塞",       "pos": [830, 288], "size": [150, 64], "tag": "CoreS3" },
+    { "id": "servos",    "type": "cloud",      "label": "舵机 ×2",         "sublabel": "UART1 · yaw / pitch",           "pos": [1040, 290], "size": [140, 60] },
+    { "id": "display",   "type": "frontend",   "label": "屏幕 320×240",    "sublabel": "GIF 猫脸 + 倒计时面板",          "pos": [830, 140], "size": [150, 60] },
+    { "id": "speaker",   "type": "frontend",   "label": "喇叭",            "sublabel": "《两只老虎》旋律",               "pos": [1040, 140], "size": [140, 60] },
+    { "id": "camheight", "type": "backend",    "label": "camera_height",   "sublabel": "帧差移动检测 · 每 30s 借用",     "pos": [560, 460], "size": [160, 64] },
+    { "id": "i2cbus",    "type": "messagebus", "label": "内部 I2C 总线",   "sublabel": "G11/G12 · 触摸 LED IMU RTC",    "pos": [830, 460], "size": [170, 60] },
+    { "id": "gc0308",    "type": "external",   "label": "GC0308 摄像头",   "sublabel": "SCCB 共用 G11/G12",             "pos": [340, 460], "size": [150, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Mac(助手进程)", "wraps": ["webcam", "facetrack"] },
+    { "kind": "region", "label": "StackChan(CoreS3,USB 供电)", "wraps": ["mainloop", "servos", "display", "speaker", "camheight", "i2cbus", "gc0308"] }
+  ],
+  "connections": [
+    { "from": "user", "to": "webcam" },
+    { "from": "webcam", "to": "facetrack", "variant": "emphasis" },
+    { "from": "facetrack", "to": "serial", "label": "~10Hz + 每分钟对时", "variant": "emphasis", "labelDy": 56 },
+    { "from": "serial", "to": "mainloop" },
+    { "from": "mainloop", "to": "servos", "label": "move(yaw, pitch)", "variant": "emphasis", "labelDy": 54 },
+    { "from": "mainloop", "to": "display", "fromSide": "top", "toSide": "bottom" },
+    { "from": "mainloop", "to": "speaker", "label": "tone()", "fromSide": "top", "toSide": "left" },
+    { "from": "mainloop", "to": "i2cbus", "fromSide": "bottom", "toSide": "top" },
+    { "from": "mainloop", "to": "camheight", "label": "30s 探测", "fromSide": "bottom", "toSide": "top", "route": "auto" },
+    { "from": "gc0308", "to": "camheight", "label": "RGB565 双帧" },
+    { "from": "camheight", "to": "i2cbus", "label": "让渡 / 归还", "variant": "security", "fromSide": "right", "toSide": "left" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "工作时段", "items": ["08:00–12:00 / 14:00–17:30 才提醒", "TIME 写入 RTC,Mac 带走仍按时段睡/醒", "非工作时段:睡觉表情 · LED 灭 · 摄像头停采"] },
+    { "dot": "cyan", "title": "提醒与确认", "items": ["每 30 分钟摇头 + 唱歌 + LED 绿闪", "摸头(IMU jerk)/ 点屏 / 摸机身 三路确认", "8 秒未确认自动停"] },
+    { "dot": "rose", "title": "总线约束", "items": ["GC0308 SCCB 与触摸/LED/IMU 共用 G11/G12", "摄像头只用 ~0.7s 间歇窗口,用完归还", "片上检测退化为帧差,不用人脸模型"] }
+  ]
+}

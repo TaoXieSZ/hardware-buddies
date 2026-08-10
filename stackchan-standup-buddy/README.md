@@ -6,6 +6,9 @@ CoreS3 StackChan 站立提醒器。每 30 分钟摇头、唱歌(《两只老虎�
 从 `stackchan-firmware` 的 Arduino 主固件衍生,去掉了 USB 串口问答功能,
 只保留提醒器用途。待机时头完全不动(每分钟静默校正一次位置)。
 
+系统架构图:[`docs/architecture.html`](./docs/architecture.html)(浏览器打开,
+支持明暗主题和 PNG/SVG 导出;源文件 `architecture.architecture.json`)。
+
 ## 界面与交互
 
 - **待机**:猫脸(上移 30px,眼睛在面板上方)+ 底部 92px 面板 ——
