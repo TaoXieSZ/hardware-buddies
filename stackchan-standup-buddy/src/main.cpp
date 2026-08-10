@@ -18,6 +18,7 @@
 
 #include <M5Unified.h>
 #include <M5StackChan.h>
+#include <LittleFS.h>
 #include "motion.h"
 #include "gif_face.h"
 #include "camera_height.h"
@@ -225,6 +226,54 @@ static void cameraHeightTick() {
     motionTrackTarget(0, g_camPitch);
 }
 
+// ---- Countdown digits: pixel-font alpha masks from LittleFS, Font6 fallback --
+// M5GFX in this build has no TTF support, so tools/make-digit-font.py renders
+// "0123456789:" from PokemonClassic.ttf into 64x64 alpha masks (poke-digits.bin).
+constexpr int PG_W = 64, PG_H = 64, PG_N = 11;
+static uint8_t* g_pokeGlyphs = nullptr;   // PG_N * PG_W * PG_H, row-major alpha
+static bool     g_pokeOk = false;
+
+static void loadPokeDigits() {
+    File f = LittleFS.open("/fonts/poke-digits.bin", "r");
+    if (f && f.size() == 7 + PG_N * PG_W * PG_H) {
+        uint8_t hdr[7];
+        if (f.read(hdr, 7) == 7 && memcmp(hdr, "PDGF", 4) == 0) {
+            g_pokeGlyphs = (uint8_t*)ps_malloc(PG_N * PG_W * PG_H);   // 常驻,不 free
+            if (g_pokeGlyphs && f.read(g_pokeGlyphs, PG_N * PG_W * PG_H) == PG_N * PG_W * PG_H)
+                g_pokeOk = true;
+        }
+    }
+    if (f) f.close();
+    Serial.println(g_pokeOk ? "[font] poke digits loaded"
+                            : "[font] poke digits missing, fallback Font6");
+}
+
+// Blend masks onto the (black) panel. Data is pushed big-endian — same byte
+// order the GIF player uses on this panel.
+static void drawPokeDigits(const char* s, int cx, int y, uint16_t color) {
+    int w = 0;
+    for (const char* p = s; *p; p++) w += (*p == ':') ? 24 : 48;
+    int x = cx - w / 2;
+    uint8_t cr = (color >> 11) & 31, cg = (color >> 5) & 63, cb = color & 31;
+    static uint16_t line[PG_W];
+    for (const char* p = s; *p; p++) {
+        int gi = (*p == ':') ? 10 : (*p - '0');
+        const uint8_t* g = g_pokeGlyphs + gi * PG_W * PG_H;
+        for (int row = 0; row < PG_H; row++) {
+            const uint8_t* grow = g + row * PG_W;
+            for (int col = 0; col < PG_W; col++) {
+                uint8_t a = grow[col];
+                uint16_t v = (uint16_t)(((cr * a + 127) / 255) << 11 |
+                                        ((cg * a + 127) / 255) << 5  |
+                                        ((cb * a + 127) / 255));
+                line[col] = __builtin_bswap16(v);
+            }
+            M5.Display.pushImage(x, y + row, PG_W, 1, line);
+        }
+        x += (*p == ':') ? 24 : 48;
+    }
+}
+
 // ---- Colours / Layout ---------------------------------------------------------
 static constexpr uint16_t TEXT_BG   = 0x0000;  // bottom panel: black
 static constexpr int SCREEN_W       = 320;
@@ -266,10 +315,14 @@ static void drawPausedPanel(int mins) {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%02d:%02d", (mins / 60) % 24, mins % 60);
-    M5.Display.setFont(&fonts::Font6);      // smooth digits, ~48px tall
-    M5.Display.setTextDatum(TC_DATUM);
-    M5.Display.setTextColor(TFT_DARKGREY);
-    M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
+    if (g_pokeOk) {
+        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 2, TFT_DARKGREY);
+    } else {
+        M5.Display.setFont(&fonts::Font6);
+        M5.Display.setTextDatum(TC_DATUM);
+        M5.Display.setTextColor(TFT_DARKGREY);
+        M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
+    }
 
     const char* status;
     if (mins < WORK_AM_START)      status = "还没上班 · 08:00 开始";
@@ -277,7 +330,7 @@ static void drawPausedPanel(int mins) {
     else                           status = "已下班 · 明早见";
     M5.Display.setFont(&fonts::efontCN_24);
     M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.drawString(status, SCREEN_W / 2, TEXT_AREA_Y + 62);
+    M5.Display.drawString(status, SCREEN_W / 2, TEXT_AREA_Y + 66);
 
     M5.Display.setTextDatum(TL_DATUM);
 }
@@ -297,14 +350,18 @@ static void drawCountdownPanel() {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
-    M5.Display.setFont(&fonts::Font6);      // smooth digits, ~48px tall
-    M5.Display.setTextDatum(TC_DATUM);
-    M5.Display.setTextColor(TFT_GREEN);
-    M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
+    if (g_pokeOk) {
+        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 2, TFT_GREEN);
+    } else {
+        M5.Display.setFont(&fonts::Font6);
+        M5.Display.setTextDatum(TC_DATUM);
+        M5.Display.setTextColor(TFT_GREEN);
+        M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
+    }
 
     M5.Display.setFont(&fonts::efontCN_24);
     M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.drawString("后提醒站立 · 看窗外", SCREEN_W / 2, TEXT_AREA_Y + 62);
+    M5.Display.drawString("后提醒站立 · 看窗外", SCREEN_W / 2, TEXT_AREA_Y + 66);
 
     M5.Display.setTextDatum(TL_DATUM);
 }
@@ -340,7 +397,8 @@ static void animateAll(AgentState state) {
         M5.Display.setCursor(0, TEXT_AREA_Y + 8);
         M5.Display.setTextWrap(true);
         if (!g_overlayLine1.isEmpty()) {
-            M5.Display.setFont(&fonts::efontCN_24);
+            M5.Display.setTextSize(1);
+    M5.Display.setFont(&fonts::efontCN_24);
             M5.Display.setTextColor(TFT_WHITE);
             M5.Display.println(g_overlayLine1);
         }
@@ -468,6 +526,10 @@ void setup() {
     gifFaceSetTextBand(TEXT_AREA_Y);   // GIF keeps out of the bottom panel
     gifFaceSetYOffset(FACE_YOFFSET);   // face shifted up, eyes above the panel
     gifFaceSetState(STATE_IDLE);       // g_agentState already IDLE; open GIF directly
+
+    // Pokemon pixel digits for the countdown (LittleFS mounted by gifFaceInit)
+    loadPokeDigits();
+    M5.Display.setFont(&fonts::efontCN_16);
 
     clearTextArea();
     showIdle();

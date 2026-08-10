@@ -94,6 +94,15 @@ const STYLES = {
     patchColor: [0.16, 0.15, 0.17, 1],
     strokeW: 5, eyeScale: 1.0, stripes: false, mask: false, patch: true, lineOnly: false,
   },
+  'f-pikachu': {
+    label: 'F · 皮卡丘',
+    desc: '明黄 + 黑色长耳尖 + 红色电气袋,无胡须',
+    bg: [0.96, 0.94, 0.86, 1], head: [1.0, 0.80, 0.16, 1], edge: [0.70, 0.50, 0.10, 1],
+    earIn: [1.0, 0.80, 0.16, 1], eye: [0.14, 0.10, 0.08, 1], nose: [0.14, 0.10, 0.08, 1],
+    mouth: [0.30, 0.18, 0.06, 1], blush: [0.88, 0.16, 0.16, 1], whisker: [0, 0, 0, 1],
+    cheekStyle: 'circles', longEars: true, whiskers: false,
+    strokeW: 5, eyeScale: 0.9, stripes: false, mask: false, patch: false, lineOnly: false,
+  },
   'e-line': {
     label: 'E · 极简线稿',
     desc: '不上色,粗描边 + 豆豆眼,性冷淡风',
@@ -110,10 +119,25 @@ const zi2 = [[0, 0], [0, 0]];
 
 // ---------- face parts (parameterized) ----------
 function bgLayer(S, op) {
-  return layer('bg', [group('bg', [rect([0, 0], [W, H]), fill(S.bg)])], op, { p: st0([CX, CY]) });
+  // 锚定画布正中,正好铺满 320x240(不要沿用脸部的 +6 偏移,顶部会露 6px 缝)
+  return layer('bg', [group('bg', [rect([0, 0], [W, H]), fill(S.bg)])], op, { p: st0([CX, H / 2]) });
 }
 
 function earShapes(S, droop = 0) {
+  // 皮卡丘:黄色长耳 + 黑色耳尖,无粉色耳内
+  if (S.longEars) {
+    const mk = (m) => [
+      group(`ear-${m}-tip`, [
+        path([[m * 80, -88 + droop], [m * 72, -150 + droop * 2], [m * 50, -76 + droop]], zi3, zi3),
+        fill([0.16, 0.13, 0.11, 1]),
+      ]),
+      group(`ear-${m}`, [
+        path([[m * 84, -48], [m * 72, -150 + droop * 2], [m * 34, -64]], zi3, zi3),
+        fill(S.head), stroke(S.edge, S.strokeW),
+      ]),
+    ];
+    return [...mk(-1), ...mk(1)];
+  }
   const mk = (m) => [
     group(`ear-${m}-in`, [
       path([[m * 72, -62], [m * 62, -92 + droop * 2], [m * 44, -74]], zi3, zi3),
@@ -201,6 +225,7 @@ function noseMouthWhiskers(S, mode = 'smile') {
       stroke(S.mouth, 4),
     ]));
   }
+  if (S.whiskers === false) return parts;   // 皮卡丘没有胡须
   parts.push(group('whisk-l', [
     path([[-52, 8], [-92, 0]], zi2, zi2, false),
     path([[-52, 16], [-94, 16]], zi2, zi2, false),
@@ -218,6 +243,13 @@ function noseMouthWhiskers(S, mode = 'smile') {
 
 function blushShapes(S) {
   if (S.lineOnly) return [];
+  if (S.cheekStyle === 'circles') {
+    // 皮卡丘电气袋:实心红圆
+    return [
+      group('cheek-l', [ellipse([-64, 30], [30, 28]), fill(S.blush)]),
+      group('cheek-r', [ellipse([64, 30], [30, 28]), fill(S.blush)]),
+    ];
+  }
   return [
     group('blush-l', [ellipse([-58, 22], [26, 14]), fill(S.blush)], { o: 55 }),
     group('blush-r', [ellipse([58, 22], [26, 14]), fill(S.blush)], { o: 55 }),
