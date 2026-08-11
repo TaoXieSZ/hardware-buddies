@@ -47,6 +47,7 @@ static const char *TAG = "stackchan";
 /* ---- Wi-Fi: scan + multi-network ---------------------------------------- */
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
+#define WIFI_AUTO_RECONNECT_BIT BIT1
 
 struct WifiNet { const char *ssid; const char *pass; };
 static const WifiNet KNOWN_NETS[] = {
@@ -64,14 +65,18 @@ static const WifiNet KNOWN_NETS[] = {
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data) {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "Wi-Fi disconnected, reconnecting...");
-        esp_wifi_connect();
+    // Candidate selection connects explicitly after esp_wifi_set_config();
+    // auto-connecting on STA_START races that configuration update.
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        if (xEventGroupGetBits(s_wifi_event_group) & WIFI_AUTO_RECONNECT_BIT) {
+            ESP_LOGW(TAG, "Wi-Fi disconnected, reconnecting...");
+            esp_wifi_connect();
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Wi-Fi connected. IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        xEventGroupSetBits(s_wifi_event_group, WIFI_AUTO_RECONNECT_BIT);
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -79,14 +84,23 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 static bool wifi_try_connect(int idx) {
     if (idx >= (int)(sizeof(KNOWN_NETS)/sizeof(KNOWN_NETS[0]))) return false;
     // Reset event group before each attempt
-    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    xEventGroupClearBits(s_wifi_event_group,
+                         WIFI_CONNECTED_BIT | WIFI_AUTO_RECONNECT_BIT);
     wifi_config_t wc = {};
     strncpy((char*)wc.sta.ssid, KNOWN_NETS[idx].ssid, sizeof(wc.sta.ssid)-1);
     strncpy((char*)wc.sta.password, KNOWN_NETS[idx].pass, sizeof(wc.sta.password)-1);
     wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    esp_wifi_set_config(WIFI_IF_STA, &wc);  // ignore if wifi state prevents
+    esp_err_t r = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config: %s", esp_err_to_name(r));
+        return false;
+    }
     ESP_LOGI(TAG, "Wi-Fi trying [%d]: %s", idx, KNOWN_NETS[idx].ssid);
-    esp_wifi_connect();
+    r = esp_wifi_connect();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_connect: %s", esp_err_to_name(r));
+        return false;
+    }
     EventBits_t b = xEventGroupWaitBits(s_wifi_event_group,
         WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
     if (b & WIFI_CONNECTED_BIT) {
@@ -130,14 +144,16 @@ static bool wifi_init_sta(void) {
     }
     ESP_LOGE(TAG, "No known Wi-Fi connected after trying %d networks", nn);
     // Diagnostic: scan and log visible SSIDs so we can debug why our nets aren't seen
-    wifi_scan_config_t sc = { .show_hidden = false };
+    wifi_scan_config_t sc = {};
+    sc.show_hidden = false;
     esp_wifi_scan_start(&sc, true);
-    uint16_t n_ap = 0;
-    esp_wifi_scan_get_ap_num(&n_ap);
-    wifi_ap_record_t aps[10];
+    uint16_t total_ap = 0;
+    esp_wifi_scan_get_ap_num(&total_ap);
+    uint16_t n_ap = total_ap > 10 ? 10 : total_ap;
+    wifi_ap_record_t aps[10] = {};
     esp_wifi_scan_get_ap_records(&n_ap, aps);
-    ESP_LOGE(TAG, "Visible APs (%u):", n_ap > 10 ? 10 : n_ap);
-    for (int i = 0; i < (int)n_ap && i < 10; i++) {
+    ESP_LOGE(TAG, "Visible APs (%u of %u):", n_ap, total_ap);
+    for (int i = 0; i < (int)n_ap; i++) {
         ESP_LOGE(TAG, "  [%d] '%s' rssi=%d auth=%d",
                  i, aps[i].ssid, aps[i].rssi, aps[i].authmode);
     }

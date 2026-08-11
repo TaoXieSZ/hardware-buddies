@@ -5,10 +5,12 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
-# PSRAM — CoreS3 is QUAD SPI PSRAM (octal probing fails: "PSRAM ID read
-# error / chip not found", boot loop; verified on-device 2026-07-08)
+# PSRAM — CoreS3 (ESP32-S3R8) has in-package OCTAL PSRAM; Arduino core uses
+# qio_opi for this board. QUAD mode boot-loops on-device ("quad_psram: PSRAM
+# ID read error: 0x00ffffff", observed 2026-08-02). An earlier note here
+# claimed the opposite (quad, verified 2026-07-08) — that note was wrong.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
