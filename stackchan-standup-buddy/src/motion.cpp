@@ -64,20 +64,20 @@ const ServoStep PAT_ERROR[] = {
     {    0,   0, 400, 800, false },    // settle
     { 0, 0, 0, 0, false }
 };
-// --- REMINDER: attention-grabbing head shake + nod, gentler than ERROR ---
+// --- REMINDER: a gentle ~3s ±8° shake and one small nod. ---
 const ServoStep PAT_REMINDER[] = {
-    {  200,  30, 500, 250, false },    // swing right + slight up
-    { -200,  30, 500, 250, false },    // swing left
-    {  200,  30, 500, 250, false },
-    { -200,  30, 500, 250, false },
-    {    0, 120, 300, 300, false },    // nod up
-    {    0, -20, 300, 300, false },    // nod down
-    {    0, 120, 300, 300, false },
-    {    0, -20, 300, 300, false },
-    {    0,   0, 250, 600, false },    // settle at centre
+    {   80,   0, 250, 500, false },
+    {  -80,   0, 250, 500, false },
+    {   80,   0, 250, 500, false },
+    {  -80,   0, 250, 500, false },
+    {    0,  50, 220, 400, false },
+    {    0,   0, 220, 600, false },
     { 0, 0, 0, 0, false }
 };
-const ServoStep* const PATTERNS[] = { PAT_IDLE, PAT_THINKING, PAT_REPLYING, PAT_ERROR, PAT_REMINDER, PAT_IDLE /* SLEEP: park */ };
+const ServoStep* const PATTERNS[] = {
+    PAT_IDLE, PAT_THINKING, PAT_REPLYING, PAT_ERROR, PAT_REMINDER,
+    PAT_IDLE, PAT_IDLE, PAT_IDLE, PAT_IDLE, PAT_IDLE
+};
 
 // ---- Runtime globals --------------------------------------------------------
 
@@ -113,7 +113,7 @@ int16_t clampedPitch(int16_t base, int16_t delta) {
 void servoTick(AgentState st) {
     // Face tracking owns the servos while IDLE: re-issue at ~10Hz, but
     // only when the target actually moved (>=2 deg) to keep the bus quiet.
-    if (g_tracking && st == STATE_IDLE) {
+    if (g_tracking && (st == STATE_IDLE || st == STATE_FREE)) {
         uint32_t now = millis();
         if (now - g_lastServoMs < 100) return;
         bool moved = (g_trackIssuedY == 0x7FFF) ||
@@ -158,13 +158,16 @@ void ledTick(AgentState st) {
     uint32_t now = millis();
 
     switch (st) {
-    case STATE_IDLE: {
+    case STATE_IDLE:
+    case STATE_FREE: {
         if (now - g_lastLedMs < 80) return;
         g_lastLedMs = now;
         float t = (float)((now - g_motionEntryMs) % 3000) / 3000.0f;
         float b = (sinf(t * 2.0f * PI) * 0.4f + 0.6f) * 40.0f;
-        for (int i = 0; i < 12; i++)
-            M5StackChan.setRgbColor(i, 0, 0, (uint8_t)b);
+        for (int i = 0; i < 12; i++) {
+            if (st == STATE_FREE) M5StackChan.setRgbColor(i, (uint8_t)b, 0, (uint8_t)b);
+            else                  M5StackChan.setRgbColor(i, 0, 0, (uint8_t)b);
+        }
         M5StackChan.refreshRgb();
         break;
     }
@@ -200,14 +203,14 @@ void ledTick(AgentState st) {
         break;
     }
     case STATE_REMINDER: {
-        if (now - g_lastLedMs < 200) return;
-        g_lastLedMs = now;
-        g_ledFlashOn = !g_ledFlashOn;
-        M5StackChan.showRgbColor(0, g_ledFlashOn ? 80 : 10, 0);
         break;
     }
     case STATE_SLEEP:
+    case STATE_MEETING:
+    case STATE_BREAK:
         break;   // LEDs turned off once in motionSetState
+    case STATE_CELEBRATE:
+        break;
     }
 }
 
@@ -235,7 +238,8 @@ void motionSetState(AgentState next) {
     g_ledPos        = 0;
     g_lastLedMs     = 0;
     g_ledFlashOn    = false;
-    if (next == STATE_SLEEP) M5StackChan.showRgbColor(0, 0, 0);
+    if (next != STATE_IDLE && next != STATE_FREE)
+        M5StackChan.showRgbColor(0, 0, 0);
 }
 
 void motionSetTracking(bool on) {

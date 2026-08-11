@@ -1,98 +1,101 @@
 # stackchan-standup-buddy
 
-CoreS3 StackChan 站立提醒器。每 30 分钟摇头、唱歌(《两只老虎》)、LED 绿闪,
-提醒你站起来看看窗外。屏幕头像使用原尺寸 Clawd 小螃蟹像素动画。
+CoreS3 StackChan 站立提醒器。设备管理每日打卡与工作/自由/会议/休息模式，
+每个活跃周期 30 分钟，提醒你站起来看看窗外。屏幕头像使用原尺寸 Clawd
+小螃蟹像素动画。
 
 从 `stackchan-firmware` 的 Arduino 主固件衍生,去掉了 USB 串口问答功能,
-只保留提醒器用途。待机时头完全不动(每分钟静默校正一次位置)。
+只保留提醒器用途。非活跃状态头完全不动。
 
 系统架构图:[`docs/architecture.html`](./docs/architecture.html)(浏览器打开,
 支持明暗主题和 PNG/SVG 导出;源文件 `architecture.architecture.json`)。
 
 ## 界面与交互
 
-- **待机**:Clawd 小螃蟹在面板上方原尺寸居中显示 + 底部 92px 面板 ——
-  Font7 数码管大倒计时 +「后提醒站立 · 看窗外」。
-- **提醒**(8 秒):左右摇头 + 点头、喇叭唱《两只老虎》、机身 LED 绿闪,
-  屏幕显示「该起来活动一下啦 / 站起来看窗外 · 摸头确认」。
-- **确认("知道了")** 三选一,立即停:
-  - **摸头** —— CoreS3 IMU 检测拍击(jerk > 0.8g,300ms 冷却;
-    摇头自身的向心加速度只有 ~0.02g,不会误触发)
-  - 点屏幕
-  - 摸机身触摸区(前/中/后任意一条)
-- 不理会则 8 秒后自动停,重新计 30 分钟。
+- **未打卡**:固定 `sleep.gif`，三类监控、LED 和舵机全部静默；工作时段内
+  双拍脑袋完成当天唯一一次打卡。记录写入 NVS，当天重启仍保留。
+- **工作 / 自由**:底栏显示模式与 30 分钟倒计时。工作仅在日程内监控、LED
+  蓝色呼吸；自由从底栏菜单手动进入/退出、忽略工作日程、LED 紫色呼吸。
+- **会议**:可选 15/30/60/90 分钟或“直到我回来”，固定
+  `clawd-thinking.gif`；结束后自动进入 10 分钟休息。
+- **休息**:固定 `heart.gif` 并显示倒计时；点“继续工作”可提前结束。
+- **提醒**(8 秒):固定 `clawd-notification.gif`，约 3 秒轻柔摇头/点头，屏幕提供
+  “开始休息”“进入会议”。提醒态单拍脑袋等同开始休息；忽略后每 5 分钟重提醒。
+- 普通模式单拍脑袋会随机显示 Clawd + 一句短哲理 8 秒，不改变模式或倒计时；
+  未打卡单拍需等双拍窗口过期。身体三分区触摸不再用于确认。
 
 界面设计稿:`docs/ui-preview/idle-mockup.html`(浏览器打开,含三个方案的对比,
-实现的是方案 C)。
+实现从原方案 C 演进为底栏模式菜单和状态倒计时)。
 
 ## 构建与烧录
 
 ```sh
-pio run                                          # 构建
-pio run -t upload   --upload-port /dev/cu.usb*   # 固件
-pio run -t uploadfs --upload-port /dev/cu.usb*   # 文件系统(Clawd GIF,首次或 data/ 变更时)
+~/.platformio/penv/bin/pio run -e cores3-standup
+~/.platformio/penv/bin/pio run -e cores3-standup -t buildfs
+~/.platformio/penv/bin/pio run -e cores3-standup -t upload   --upload-port /dev/cu.usb*
+~/.platformio/penv/bin/pio run -e cores3-standup -t uploadfs --upload-port /dev/cu.usb*
 ```
 
 `uploadfs` 和 `upload` 分开跑;烧完设备自动复位。
 
 ## 摄像头高度自调(可选,片上)
 
-Mac 跟踪离线时,设备每 30 秒借用一次自带 GC0308 摄像头(~0.7 秒窗口:
-让渡 I2C 总线 → 抓两帧 → 帧差移动检测 → 归还总线),检测到移动就把
-俯仰角分小步(≤5°)调向移动质心,直到移动目标落在画面 40% 高度。
-Mac 跟踪在线时自动让位;睡觉态不启用。常量见 `src/main.cpp`
-`CAM_*` 与 `src/camera_height.cpp`(DIFF_TH / MOTION_RATIO)。
+三类监控启用且 Mac 跟踪离线时,设备每 30 秒借用一次自带 GC0308 摄像头
+(~0.7 秒窗口:让渡 I2C 总线 → 抓两帧 → 帧差移动检测 → 归还总线),检测到移动
+就把俯仰角分小步(≤5°)调向移动质心,直到移动目标落在画面 40% 高度。
+Mac 跟踪在线时自动让位;未打卡、会议、休息、提醒和夜间不启用。
 
-## 工作时段
+## 打卡、工作时段与模式恢复
 
-助手每分钟下发 `TIME <当天分钟数>`,固件据此门控提醒并切换状态
-(常量 `WORK_AM_START` 等在 `src/main.cpp` 顶部):
+- **08:00–12:00、14:00–17:30**:当天双拍打卡后运行工作模式；14:00
+  直接开始新的完整 30 分钟周期，无需重打卡。
+- **17:30**:自动结束工作并清除当天打卡。工作时段外双拍只显示提示，不进入自由。
+- **自由模式**:忽略工作时段，进入即开始新周期；00:00–08:00 禁止进入，
+  跨午夜自动停止。
+- 会议/自由不持久化；重启仅在“今天已打卡且仍处工作时段”时恢复工作，否则静默。
+- Mac helper 下发 `CLOCK <YYYYMMDD> <当天分钟数>` 并写入设备 RTC，断开后仍可门控。
 
-- **08:00–12:00、14:00–17:30**:正常倒计时 + 提醒。
-- **其他时段(且时钟已知)**:不提醒(每 5 分钟重查,进入时段立即补一次),
-  Clawd 固定切换为**睡觉动画**(`sleep.gif`)、LED 全灭、头静止、跟踪不生效;
-  面板显示灰色当前时间 + 状态(还没上班 / 午休中 / 已下班)。
-- **Mac 带走**:TIME 同时写进了设备 RTC(BM8563,电池保持),设备按 RTC
-  继续门控 —— 到点睡、到点醒,整夜安静。
-- **助手从未运行且 RTC 未对时**:无时钟,退化为无条件 30 分钟提醒,不睡觉。
-
-## 人脸跟踪(可选)
+## 人脸跟踪与哲理缓存(可选)
 
 Mac 端跑 `tools/face-track`(AVFoundation + Vision,零依赖),通过 USB 串口
-把人脸位置发给固件,头会一直转向你,屏幕(倒计时)始终可见。
+把人脸位置发给固件。StackChan 是模式权威：设备上报 `MODE WORK|FREE|OFF`，
+helper 只按设备模式开关摄像头，不复制日程状态机。
 
 ```sh
-swiftc -O tools/face-track.swift -o tools/face-track   # 首次编译
-./tools/face-track /dev/cu.usbmodem2101                # 常驻;首次会弹摄像头授权
-./tools/face-track /dev/cu.usbmodem2101 "iPhone"       # 多个摄像头时按名字选
+swiftc -O tools/face-track.swift -o tools/face-track
+./tools/face-track /dev/cu.usbmodem2101
+./tools/face-track /dev/cu.usbmodem2101 "iPhone"
 ```
 
-协议:每秒 ~10 行 `TRACK <cx_pm> <cy_pm> <conf_pm>`(cx/cy 为画面横/纵向
--1000..1000 千分比)或 `TRACK LOST`;每分钟一行 `TIME <当天分钟数>`。
-**非工作时段 helper 会完全停掉摄像头采集**(摄像头指示灯熄灭、省功耗),
-只保留 TIME 对时;回到工作时段自动恢复。固件侧:P 控制 + 低通(0.25)
-+ 2° 死区;3 秒收不到新数据自动释放,IDLE 步进表 1 分钟内把头停回中位。
-方向反了就翻转 `src/main.cpp` 里的 `TRACK_SIGN` / `TRACK_PITCH_SIGN` 重烧。
-仅 IDLE 状态生效,提醒摇头和睡觉时不干扰。
+跟踪协议仍为 `TRACK <cx_pm> <cy_pm> <conf_pm>` / `TRACK LOST`。设备发送
+`WISDOM_REQUEST` 后，helper 用隔离的 `codex exec --ephemeral --sandbox read-only`
+后台预生成并缓存一句哲理，再发 `WISDOM <文本>`。缓存空、超时或离线时，固件
+立即使用内置句库，拍头交互不会等待网络。
 
-## 调参(`src/main.cpp`)
+## 调参与验证
 
 | 常量 | 默认 | 说明 |
 |---|---|---|
-| `REMINDER_INTERVAL_MS` | 30 min | 提醒间隔 |
-| `REMINDER_DURATION_MS` | 8 s | 提醒最长持续(未被确认时) |
-| `REMINDER_MELODY` | 两只老虎 | 音符表 `{频率Hz, 时长ms}`,可换曲 |
-| `headPatted()` 里的 `0.8f` | 0.8g | 摸头灵敏度:误触发调大,太钝调小 |
+| `CYCLE_MS` | 30 min | 活跃周期 |
+| `REPEAT_MS` | 5 min | 忽略后的重提醒间隔 |
+| `BREAK_MS` | 10 min | 休息时长 |
+| `headPat()` 里的 `0.8f` | 0.8g | 摸头灵敏度 |
+
+```sh
+swiftc -warnings-as-errors -typecheck tools/face-track.swift
+g++ -std=c++17 -Wall -Wextra -Werror test/test_mode_logic.cpp -o /tmp/standup-mode-test
+/tmp/standup-mode-test
+```
 
 Clawd GIF 复用自 `../cardputer-adv-buddy/data/characters/clawd/`，放在
-`data/characters/clawd/`。睡眠固定使用 `sleep.gif`，提醒固定使用
-`clawd-notification.gif`；其他四个状态每次真正进入时从 13 个小尺寸
-GIF 中随机选择一次，同一状态循环期间保持不变，且不会连续抽中同一资产。
-播放器不放大素材，而是按底部面板起点水平、垂直居中。详细设计见
+`data/characters/clawd/`。睡眠/会议/休息/提醒使用固定素材；工作/自由与哲理彩蛋
+使用随机素材。播放器不放大素材，而是按底部面板起点水平、垂直居中。详细设计见
 `docs/plans/2026-08-11-clawd-random-avatar-design.md`。
 
 ## 代码结构
 
-- `src/main.cpp` —— 提醒调度、倒计时面板、旋律播放器、三路确认(摸头/点屏/摸机身)
-- `src/motion.cpp` —— 舵机步进表(IDLE 静止、REMINDER 摇头点头)+ LED
-- `src/gif_face.cpp` —— LittleFS Clawd 播放(状态随机、原尺寸居中、底部面板裁剪)
+- `src/main.cpp` —— 模式状态机、UI、打卡持久化、提醒和双向串口协议
+- `src/mode_logic.h` —— 可在主机测试的工作时段与恢复规则
+- `src/motion.cpp` —— 舵机步进表、人脸目标和工作/自由 LED
+- `src/gif_face.cpp` —— LittleFS Clawd 播放(固定/随机、原尺寸、底部面板裁剪)
+- `tools/face-track.swift` —— 设备模式驱动的摄像头 helper 与 Codex 哲理缓存

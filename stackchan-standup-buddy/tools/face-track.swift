@@ -1,103 +1,131 @@
-// face-track — Mac-side face detection for stackchan-standup-buddy.
-//
-// Uses the webcam (built-in / USB / Continuity Camera) + Vision face
-// detection, and streams the face centre to the StackChan over USB serial:
-//
-//     TRACK <cx_pm> <cy_pm> <conf_pm>\n   cx/cy: -1000..1000 per-mille of frame
-//     TRACK LOST\n                      no face in this frame
-// (cy positive = face in the upper half of the frame)
-//
-// The firmware turns those into yaw servo targets (deadzone + low-pass + P).
-//
-// Build:  swiftc -O tools/face-track.swift -o tools/face-track
-// Run:    ./tools/face-track /dev/cu.usbmodem2101 [camera-name-substring]
-//
-// First run triggers a macOS camera-permission prompt for your terminal app.
+// Mac helper for stackchan-standup-buddy.
+// The device is authoritative: MODE WORK/FREE enables Vision tracking;
+// MODE OFF stops the camera. CLOCK only synchronizes RTC. A detached,
+// ephemeral `codex exec` keeps one short philosophy cached for head pats.
 
 import AVFoundation
 import Vision
 import Foundation
+import Darwin
 
-setbuf(stdout, nil)   // unbuffered: we're a long-running daemon on a pipe
-func log(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
+setbuf(stdout, nil)
+func log(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-    FileHandle.standardError.write(Data("usage: face-track <serial-port> [camera-name-substring]\n".utf8))
+    log("usage: face-track <serial-port> [camera-name-substring]")
     exit(2)
 }
 let portPath = args[1]
 let nameFilter = args.count >= 3 ? args[2].lowercased() : nil
+let fd = open(portPath, O_RDWR | O_NOCTTY | O_NONBLOCK)
+guard fd >= 0 else { log("cannot open \(portPath): \(String(cString: strerror(errno)))"); exit(1) }
 
-let fd = open(portPath, O_WRONLY | O_NOCTTY | O_NONBLOCK)
-guard fd >= 0 else {
-    FileHandle.standardError.write(Data("cannot open \(portPath): \(String(cString: strerror(errno)))\n".utf8))
-    exit(1)
-}
-func send(_ s: String) {
-    s.withCString { _ = write(fd, $0, strlen($0)) }
-}
-
-// Wall clock for the firmware's work-hours gating: "TIME <minutes since
-// midnight>" on startup and once a minute (the firmware interpolates between).
-func sendTime() {
-    let c = Calendar.current.dateComponents([.hour, .minute], from: Date())
-    send("TIME \((c.hour ?? 0) * 60 + (c.minute ?? 0))\n")
+let writeLock = NSLock()
+let send: @Sendable (String) -> Void = { text in
+    writeLock.lock(); defer { writeLock.unlock() }
+    text.withCString { _ = write(fd, $0, strlen($0)) }
 }
 
-// Same windows as the firmware (src/main.cpp WORK_*). Outside work hours the
-// camera is stopped entirely (saves power, camera LED off); TIME keeps flowing
-// so the firmware still knows the time.
-let workWindows = [(8 * 60, 12 * 60), (14 * 60, 17 * 60 + 30)]
-func inWorkWindow() -> Bool {
-    let c = Calendar.current.dateComponents([.hour, .minute], from: Date())
-    let m = (c.hour ?? 0) * 60 + (c.minute ?? 0)
-    return workWindows.contains { m >= $0.0 && m < $0.1 }
+func sendClock() {
+    let c = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date())
+    let day = (c.year ?? 0) * 10000 + (c.month ?? 0) * 100 + (c.day ?? 0)
+    send("CLOCK \(day) \((c.hour ?? 0) * 60 + (c.minute ?? 0))\n")
 }
 
-// ---- camera selection --------------------------------------------------------
+final class WisdomCache {
+    private let lock = NSLock()
+    private var cached: String?
+    private var generating = false
+    private var waiting = false
+
+    func request() {
+        lock.lock()
+        if let text = cached {
+            cached = nil
+            lock.unlock()
+            send("WISDOM \(text)\n")
+            refill()
+        } else {
+            waiting = true
+            let start = !generating
+            lock.unlock()
+            if start { refill() }
+        }
+    }
+
+    func refill() {
+        lock.lock()
+        if generating || cached != nil { lock.unlock(); return }
+        generating = true
+        lock.unlock()
+
+        DispatchQueue.global(qos: .utility).async {
+            let output = FileManager.default.temporaryDirectory
+                .appendingPathComponent("stackchan-wisdom-\(UUID().uuidString).txt")
+            defer { try? FileManager.default.removeItem(at: output) }
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            task.arguments = ["codex", "exec", "--ephemeral", "--sandbox", "read-only",
+                              "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
+                              "-C", "/tmp", "-o", output.path,
+                              "只输出一句中文人生小哲理：暖、幽默、不说教，不超过28个汉字，不加引号或解释。"]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            // This runs on a utility queue and never blocks a head-pat response.
+            // Let the one cache fill finish naturally instead of killing Codex's
+            // child process and risking an orphan when startup is slow/offline.
+            if task.isRunning { task.waitUntilExit() }
+            var text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""
+            text = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.count > 34 { text = String(text.prefix(34)) }
+
+            self.lock.lock()
+            self.generating = false
+            let deliver = self.waiting && !text.isEmpty
+            self.waiting = false
+            if !deliver && !text.isEmpty { self.cached = text }
+            self.lock.unlock()
+            if deliver { send("WISDOM \(text)\n"); self.refill() }
+        }
+    }
+}
+
+let wisdom = WisdomCache()
+wisdom.refill()
+
 let discovery = AVCaptureDevice.DiscoverySession(
     deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external],
     mediaType: .video, position: .unspecified)
 var cameras = discovery.devices
-if let f = nameFilter { cameras = cameras.filter { $0.localizedName.lowercased().contains(f) } }
-guard let cam = cameras.first ?? AVCaptureDevice.default(for: .video) else {
-    FileHandle.standardError.write(Data("no camera found. available: \(discovery.devices.map { $0.localizedName })\n".utf8))
+if let filter = nameFilter { cameras = cameras.filter { $0.localizedName.lowercased().contains(filter) } }
+guard let camera = cameras.first ?? AVCaptureDevice.default(for: .video) else {
+    log("no camera found. available: \(discovery.devices.map { $0.localizedName })")
     exit(1)
 }
 
-// ---- face detection → serial --------------------------------------------------
 final class Tracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var lastProcess = Date.distantPast
-    private var lastReport  = Date.distantPast
+    private var lastReport = Date.distantPast
     private let request = VNDetectFaceRectanglesRequest()
-
-    func captureOutput(_ output: AVCaptureOutput,
-                       didOutput sampleBuffer: CMSampleBuffer,
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         let now = Date()
-        guard now.timeIntervalSince(lastProcess) >= 0.1 else { return }  // ~10 Hz
+        guard now.timeIntervalSince(lastProcess) >= 0.1 else { return }
         lastProcess = now
-        guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let handler = VNImageRequestHandler(cvPixelBuffer: pb, orientation: .up, options: [:])
-        try? handler.perform([request])
-        let faces = request.results ?? []
-        if let face = faces.max(by: { $0.boundingBox.width * $0.boundingBox.height
-                                    < $1.boundingBox.width * $1.boundingBox.height }) {
-            let cxPm   = Int((face.boundingBox.midX * 2 - 1) * 1000)
-            let cyPm   = Int((face.boundingBox.midY * 2 - 1) * 1000)
-            let confPm = Int(face.confidence * 1000)
-            send("TRACK \(cxPm) \(cyPm) \(confPm)\n")
-            if now.timeIntervalSince(lastReport) >= 1.0 {
-                lastReport = now
-                log("face cx=\(cxPm) cy=\(cyPm) conf=\(confPm)")
-            }
+        guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        try? VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up).perform([request])
+        if let face = (request.results ?? []).max(by: {
+            $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height
+        }) {
+            let cx = Int((face.boundingBox.midX * 2 - 1) * 1000)
+            let cy = Int((face.boundingBox.midY * 2 - 1) * 1000)
+            send("TRACK \(cx) \(cy) \(Int(face.confidence * 1000))\n")
+            if now.timeIntervalSince(lastReport) >= 1 { lastReport = now; log("face cx=\(cx) cy=\(cy)") }
         } else {
             send("TRACK LOST\n")
-            if now.timeIntervalSince(lastReport) >= 1.0 {
-                lastReport = now
-                log("no face")
-            }
+            if now.timeIntervalSince(lastReport) >= 1 { lastReport = now; log("no face") }
         }
     }
 }
@@ -105,39 +133,48 @@ final class Tracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 let session = AVCaptureSession()
 session.sessionPreset = .vga640x480
 do {
-    let input = try AVCaptureDeviceInput(device: cam)
+    let input = try AVCaptureDeviceInput(device: camera)
     guard session.canAddInput(input) else { throw NSError(domain: "face-track", code: 1) }
     session.addInput(input)
-} catch {
-    FileHandle.standardError.write(Data("cannot open camera \(cam.localizedName)\n".utf8))
-    exit(1)
-}
+} catch { log("cannot open camera \(camera.localizedName)"); exit(1) }
 let output = AVCaptureVideoDataOutput()
 output.alwaysDiscardsLateVideoFrames = true
 let tracker = Tracker()
-output.setSampleBufferDelegate(tracker, queue: DispatchQueue(label: "face-track"))
+output.setSampleBufferDelegate(tracker, queue: DispatchQueue(label: "face-track.frames"))
 guard session.canAddOutput(output) else { exit(1) }
 session.addOutput(output)
-if (inWorkWindow()) { session.startRunning() }
 
-sendTime()
-// Every 30s: resend TIME when due and pause/resume the camera with the
-// work-hours windows (camera fully off outside them).
-var lastTimeSent = Date.distantPast
-Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-    if Date().timeIntervalSince(lastTimeSent) >= 55 {
-        lastTimeSent = Date()
-        sendTime()
-    }
-    let want = inWorkWindow()
-    if want && !session.isRunning {
-        session.startRunning()
-        log("work window: camera on")
-    } else if !want && session.isRunning {
-        session.stopRunning()
-        log("off hours: camera off")
-    }
+let stateLock = NSLock()
+var deviceMonitoring = false
+func setDeviceMonitoring(_ value: Bool) {
+    stateLock.lock(); deviceMonitoring = value; stateLock.unlock()
 }
 
-print("face-track: \(cam.localizedName) -> \(portPath)  (Ctrl-C to quit)")
+let serialSource = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue.global())
+var serialBuffer = Data()
+serialSource.setEventHandler {
+    var bytes = [UInt8](repeating: 0, count: 512)
+    let count = read(fd, &bytes, bytes.count)
+    guard count > 0 else { return }
+    serialBuffer.append(contentsOf: bytes.prefix(count))
+    while let newline = serialBuffer.firstIndex(of: 10) {
+        let line = String(data: serialBuffer.prefix(upTo: newline), encoding: .utf8) ?? ""
+        serialBuffer.removeSubrange(...newline)
+        if line == "MODE WORK" || line == "MODE FREE" { setDeviceMonitoring(true) }
+        else if line == "MODE OFF" { setDeviceMonitoring(false) }
+        else if line == "WISDOM_REQUEST" { wisdom.request() }
+    }
+}
+serialSource.resume()
+
+sendClock()
+var lastClock = Date()
+Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+    stateLock.lock(); let wanted = deviceMonitoring; stateLock.unlock()
+    if wanted && !session.isRunning { session.startRunning(); log("device mode: camera on") }
+    else if !wanted && session.isRunning { session.stopRunning(); log("device mode: camera off") }
+    if Date().timeIntervalSince(lastClock) >= 55 { lastClock = Date(); sendClock() }
+}
+
+print("face-track: \(camera.localizedName) -> \(portPath); waiting for device MODE")
 RunLoop.main.run()

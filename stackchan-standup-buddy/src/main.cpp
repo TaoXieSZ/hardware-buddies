@@ -1,572 +1,579 @@
-// StackChan (M5Stack CoreS3) — stand-up reminder buddy.
-//
-// Every 30 minutes the robot shakes its head, sings a melody and shows a
-// reminder to stand up and look out the window. Acknowledge ("知道了") by
-// patting the head (IMU jolt), tapping the screen, or touching a body zone;
-// otherwise the show ends by itself after REMINDER_DURATION_MS.
-//
-// IDLE screen: centred Clawd animation + a big countdown to the next reminder.
-//
-// Animations: native-size Clawd GIFs from LittleFS, servo head movements, and
-// 12 RGB LED ring patterns — all non-blocking and millis()-driven.
-//
-// Servo hardware (StackChan BSP):
-//   Yaw servo (ID 1): 360-degree continuous-rotation, -1280..+1280 position
-//     range (= -128..+128 degrees). PWM/velocity mode available via rotateYaw().
-//   Pitch servo (ID 2): feedback servo, 0..900 range (= 0..90 degrees, 0=down).
+// StackChan CoreS3 stand-up buddy: device-authoritative work/free/meeting/break
+// state machine, 30-minute activity cycles, head-pat clock-in and wisdom easter egg.
 
 #include <M5Unified.h>
 #include <M5StackChan.h>
 #include <LittleFS.h>
+#include <Preferences.h>
+#include <esp_system.h>
 #include "motion.h"
 #include "gif_face.h"
 #include "camera_height.h"
+#include "mode_logic.h"
 
-static AgentState g_agentState = STATE_IDLE;
+namespace {
 
-// ---- Stand-up reminder -------------------------------------------------------
-static constexpr uint32_t REMINDER_INTERVAL_MS = 30UL * 60 * 1000;  // every 30 min
-static constexpr uint32_t REMINDER_DURATION_MS = 8000;              // shake+sing max length
-static uint32_t g_nextReminderMs = 0;
+constexpr uint32_t CYCLE_MS = 30UL * 60 * 1000;
+constexpr uint32_t REPEAT_MS = 5UL * 60 * 1000;
+constexpr uint32_t REMINDER_UI_MS = 8000;
+constexpr uint32_t BREAK_MS = 10UL * 60 * 1000;
+constexpr uint32_t DOUBLE_PAT_MS = 700;
+constexpr uint32_t WISDOM_MS = 8000;
+constexpr int SCREEN_W = 320;
+constexpr int PANEL_Y = 148;
+constexpr int PANEL_H = 92;
+constexpr int16_t PITCH_BASELINE = 600;
 
-// Melody: 《两只老虎》 first verse, played note-by-note via M5.Speaker.tone().
-struct Note { uint16_t freq; uint16_t ms; };
-static const Note REMINDER_MELODY[] = {
-    {262, 300}, {294, 300}, {330, 300}, {262, 300},   // C D E C
-    {262, 300}, {294, 300}, {330, 300}, {262, 300},   // C D E C
-    {330, 300}, {349, 300}, {392, 600},               // E F G
-    {330, 300}, {349, 300}, {392, 600},               // E F G
+BuddyMode g_mode = MODE_UNCHECKED;
+BuddyMode g_returnMode = MODE_UNCHECKED;
+BuddyMode g_freeReturnMode = MODE_UNCHECKED;
+AgentState g_agentState = STATE_SLEEP;
+bool g_menu = false;
+bool g_meetingMenu = false;
+bool g_reminder = false;
+bool g_repeatReminder = false;
+bool g_wisdom = false;
+bool g_checkedToday = false;
+bool g_prevMonitoring = false;
+uint32_t g_checkedDate = 0;
+uint16_t g_checkedMinute = 0;
+uint32_t g_nextReminderMs = 0;
+uint32_t g_reminderEndsMs = 0;
+uint32_t g_modeEndsMs = 0;
+uint32_t g_wisdomEndsMs = 0;
+uint32_t g_firstPatMs = 0;
+uint32_t g_lastModeReportMs = 0;
+uint32_t g_lastPanelSecond = UINT32_MAX;
+uint32_t g_lastDateSeen = 0;
+int g_lastMinute = -2;
+Preferences g_prefs;
+String g_remoteWisdom;
+String g_activeWisdom;
+void acceptTrack(int cx, int cy);
+
+// TIME/CLOCK from helper, RTC fallback when helper is absent.
+bool g_timeKnown = false;
+int g_timeBaseMin = 0;
+uint32_t g_timeBaseMs = 0;
+uint32_t g_lastTimeMs = 0;
+
+const char* LOCAL_WISDOM[] = {
+    "今天也不用满分，在线就很好。",
+    "先伸个懒腰，世界不会趁机跑掉。",
+    "人生很长，肩膀不用一直加班。",
+    "喝口水吧，灵感也喜欢湿润的土壤。",
+    "暂停不是掉线，是给自己缓冲。",
+    "慢一点没关系，螃蟹也是横着到达。",
+    "认真生活的人，也值得认真休息。",
+    "站起来看看，难题也许只是坐太久了。",
 };
-static const int REMINDER_MELODY_LEN = sizeof(REMINDER_MELODY) / sizeof(REMINDER_MELODY[0]);
-static int      g_noteIndex   = 0;
-static uint32_t g_noteStartMs = 0;
-static bool     g_melodyOn    = false;
 
-static void melodyStart() {
-    g_noteIndex   = 0;
-    g_noteStartMs = 0;
-    g_melodyOn    = true;
+uint32_t dateKey(const m5::rtc_date_t& d) {
+    return (uint32_t)d.year * 10000 + d.month * 100 + d.date;
 }
 
-static void melodyTick() {
-    if (!g_melodyOn) return;
+bool readRtc(m5::rtc_datetime_t& dt) {
+    return M5.Rtc.getDateTime(&dt) && dt.date.year >= 2024;
+}
+
+int currentMinutes() {
     uint32_t now = millis();
-    if (g_noteStartMs == 0) {   // first note
-        g_noteStartMs = now;
-        M5.Speaker.tone(REMINDER_MELODY[0].freq, REMINDER_MELODY[0].ms);
-        return;
+    if (g_timeKnown && now - g_lastTimeMs < 90000)
+        return (g_timeBaseMin + (int)((now - g_timeBaseMs) / 60000)) % 1440;
+    static uint32_t lastRead = 0;
+    static int cached = -1;
+    if (now - lastRead >= 1000) {
+        lastRead = now;
+        m5::rtc_datetime_t dt;
+        cached = readRtc(dt) ? dt.time.hours * 60 + dt.time.minutes : -1;
     }
-    if (now - g_noteStartMs >= REMINDER_MELODY[g_noteIndex].ms) {
-        g_noteIndex++;
-        g_noteStartMs = now;
-        if (g_noteIndex >= REMINDER_MELODY_LEN) {
-            g_melodyOn = false;
-            return;
-        }
-        M5.Speaker.tone(REMINDER_MELODY[g_noteIndex].freq,
-                        REMINDER_MELODY[g_noteIndex].ms);
-    }
+    return cached;
 }
 
-// ---- Work-hours gating (Mac helper -> "TIME <minutes_since_midnight>") -------
-// Reminders only fire inside the work windows. The TIME message is also
-// written to the battery-backed RTC, so gating keeps working after the Mac
-// leaves. Only with neither helper nor RTC do reminders fire unconditionally.
-static constexpr int WORK_AM_START = 8 * 60;          // 08:00
-static constexpr int WORK_AM_END   = 12 * 60;         // 12:00
-static constexpr int WORK_PM_START = 14 * 60;         // 14:00
-static constexpr int WORK_PM_END   = 17 * 60 + 30;    // 17:30
-static constexpr uint32_t RECHECK_MS = 5UL * 60 * 1000;  // outside hours: poll every 5 min
+uint32_t currentDate() {
+    static uint32_t lastRead = 0;
+    static uint32_t cached = 0;
+    if (millis() - lastRead >= 1000 || cached == 0) {
+        lastRead = millis();
+        m5::rtc_datetime_t dt;
+        cached = readRtc(dt) ? dateKey(dt.date) : 0;
+    }
+    return cached;
+}
 
-static bool     g_timeKnown   = false;
-static int      g_timeBaseMin = 0;
-static uint32_t g_timeBaseMs  = 0;
-static uint32_t g_lastTimeMs  = 0;   // last TIME from the helper
-
-// Write the helper's clock into the BM8563 RTC so the wall clock keeps
-// ticking (and gating correctly) after the Mac leaves.
-static void syncRtc(int mins) {
+void setRtcClock(uint32_t day, int minute) {
     m5::rtc_datetime_t dt;
-    M5.Rtc.getDateTime(&dt);
-    if (dt.date.year < 2024) dt.date = m5::rtc_date_t(2026, 1, 1, 4);  // valid placeholder date
-    dt.time = m5::rtc_time_t(mins / 60, mins % 60, 0);
+    if (!readRtc(dt)) dt = {{2026, 1, 1}, {0, 0, 0}};
+    if (day >= 20240101) {
+        dt.date.year = day / 10000;
+        dt.date.month = (day / 100) % 100;
+        dt.date.date = day % 100;
+    }
+    dt.time = m5::rtc_time_t(minute / 60, minute % 60, 0);
     M5.Rtc.setDateTime(&dt);
 }
 
-static int currentMinutes() {   // -1 = wall clock unknown (helper never seen, RTC unset)
-    uint32_t now = millis();
-    // Helper path: corrected every minute while the Mac is here.
-    if (g_timeKnown && now - g_lastTimeMs < 90000)
-        return (g_timeBaseMin + (int)((now - g_timeBaseMs) / 60000)) % 1440;
-    // RTC path: Mac is gone, the battery-backed RTC keeps the time.
-    static uint32_t lastRtcReadMs = 0;
-    static int rtcMins = -1;
-    if (now - lastRtcReadMs >= 1000) {   // don't hammer the shared I2C bus
-        lastRtcReadMs = now;
-        m5::rtc_datetime_t dt;
-        rtcMins = (M5.Rtc.getDateTime(&dt) && dt.date.year >= 2024)
-                ? (dt.time.hours * 60 + dt.time.minutes) : -1;
-    }
-    if (rtcMins >= 0) return rtcMins;
-    if (g_timeKnown) return (g_timeBaseMin + (int)((now - g_timeBaseMs) / 60000)) % 1440;
-    return -1;
-}
+void clearPanel() { M5.Display.fillRect(0, PANEL_Y, SCREEN_W, PANEL_H, TFT_BLACK); }
 
-static bool inWorkWindow(int m) {
-    return (m >= WORK_AM_START && m < WORK_AM_END) ||
-           (m >= WORK_PM_START && m < WORK_PM_END);
-}
-
-// ---- Face tracking (Mac helper -> "TRACK <cx_pm> <cy_pm> <conf_pm>" over USB serial) --
-// cx_pm/cy_pm: face centre, -1000..1000 per-mille of frame width/height (0 = centre;
-// cy positive = face in the upper half). "TRACK LOST" (or 3s of silence)
-// releases the head back to the IDLE pattern.
-static constexpr int      TRACK_SIGN         = 1;      // flip if the head turns the wrong way
-static constexpr int      TRACK_PITCH_SIGN   = 1;      // flip if the head tilts the wrong way
-static constexpr int16_t  TRACK_MAX_YAW      = 1000;   // ±100° hard clamp (yaw range is ±128°)
-static constexpr float    TRACK_DEG_AT_EDGE  = 45.0f;  // yaw degrees when the face is at the frame edge
-static constexpr float    TRACK_PITCH_AT_EDGE = 20.0f; // pitch degrees when the face is at the top/bottom edge
-static constexpr int16_t  PITCH_BASELINE_MAIN = 600;   // keep in sync with motion.cpp PITCH_BASELINE
-static constexpr int16_t  TRACK_PITCH_MIN    = 400;    // clamp: 40°..80° (0..900 = 0..90°)
-static constexpr int16_t  TRACK_PITCH_MAX    = 800;
-static constexpr float    TRACK_SMOOTH       = 0.25f;  // low-pass factor per 100ms step
-static constexpr uint32_t TRACK_STALE_MS     = 3000;
-
-static int      g_trackCxPm     = 0;
-static int      g_trackCyPm     = 0;
-static uint32_t g_lastTrackMs   = 0;
-static float    g_yawFiltered   = 0.0f;
-static float    g_pitchFiltered = PITCH_BASELINE_MAIN;
-static bool     g_trackOn       = false;
-
-static void parseTrackLine(const char* line) {
-    int t = 0;
-    if (sscanf(line, "TIME %d", &t) == 1) {
-        g_timeBaseMin = constrain(t, 0, 1439);
-        g_timeBaseMs  = millis();
-        g_lastTimeMs  = g_timeBaseMs;
-        g_timeKnown   = true;
-        syncRtc(g_timeBaseMin);
-        return;
-    }
-    if (strncmp(line, "TRACK LOST", 10) == 0) return;  // staleness timeout handles it
-    int cx = 0, cy = 0, conf = 0;
-    if (sscanf(line, "TRACK %d %d %d", &cx, &cy, &conf) == 3) {
-        g_trackCxPm   = constrain(cx, -1000, 1000);
-        g_trackCyPm   = constrain(cy, -1000, 1000);
-        g_lastTrackMs = millis();
+const char* modeName(BuddyMode m) {
+    switch (m) {
+    case MODE_WORK: return "工作";
+    case MODE_MEETING: return "会议";
+    case MODE_FREE: return "自由";
+    case MODE_BREAK: return "休息";
+    default: return "未打卡";
     }
 }
 
-static void pollSerial() {
-    static char buf[48];
-    static uint8_t len = 0;
-    while (Serial.available()) {
-        char c = (char)Serial.read();
-        if (c == '\n') {
-            buf[len] = 0;
-            parseTrackLine(buf);
-            len = 0;
-        } else if (c != '\r') {
-            if (len < sizeof(buf) - 1) buf[len++] = c;
-            else len = 0;   // overflow: drop the line
-        }
-    }
+AgentState visualState() {
+    if (g_reminder) return STATE_REMINDER;
+    if (g_mode == MODE_MEETING) return STATE_MEETING;
+    if (g_mode == MODE_BREAK) return STATE_BREAK;
+    if (g_mode == MODE_FREE && monitoringEnabled(g_mode, currentMinutes())) return STATE_FREE;
+    if (g_mode == MODE_WORK && monitoringEnabled(g_mode, currentMinutes())) return STATE_IDLE;
+    return STATE_SLEEP;
 }
 
-// P-control toward the face: per-mille cx/cy -> target yaw/pitch, low-passed.
-// The motion layer applies the 2° deadzone when issuing to the servo.
-static void trackingTick() {
-    bool fresh = (millis() - g_lastTrackMs) < TRACK_STALE_MS;
-    if (fresh && !g_trackOn) { g_trackOn = true;  motionSetTracking(true); }
-    if (!fresh && g_trackOn) { g_trackOn = false; motionSetTracking(false); }
-    if (!g_trackOn) return;
-
-    float targetYaw = TRACK_SIGN * (g_trackCxPm / 1000.0f) * TRACK_DEG_AT_EDGE * 10.0f;
-    targetYaw = constrain(targetYaw, -(float)TRACK_MAX_YAW, (float)TRACK_MAX_YAW);
-    g_yawFiltered += TRACK_SMOOTH * (targetYaw - g_yawFiltered);
-
-    float targetPitch = PITCH_BASELINE_MAIN +
-        TRACK_PITCH_SIGN * (g_trackCyPm / 1000.0f) * TRACK_PITCH_AT_EDGE * 10.0f;
-    targetPitch = constrain(targetPitch, (float)TRACK_PITCH_MIN, (float)TRACK_PITCH_MAX);
-    g_pitchFiltered += TRACK_SMOOTH * (targetPitch - g_pitchFiltered);
-
-    motionTrackTarget((int16_t)g_yawFiltered, (int16_t)g_pitchFiltered);
-}
-
-// ---- Camera height adjust (intermittent GC0308 probe, see camera_height.cpp) --
-// Only while IDLE-awake AND the Mac tracker is offline: borrow the I2C bus for
-// a ~0.7s window every CAM_PROBE_MS, frame-diff for motion, nudge pitch toward
-// the motion centroid. Yaw stays centred in this mode (Mac owns yaw when here).
-static constexpr uint32_t CAM_PROBE_MS       = 30000;
-static constexpr float    CAM_CY_TARGET      = 0.40f;  // want motion at 40% from top
-static constexpr float    CAM_PITCH_GAIN     = 500.0f; // pitch units (10/deg) per full cy
-static constexpr int16_t  CAM_PITCH_STEP_MAX = 50;     // ≤5° per probe
-static int16_t  g_camPitch  = PITCH_BASELINE_MAIN;
-static uint32_t g_nextCamMs = 20000;   // first probe 20s after boot
-
-static void cameraHeightTick() {
-    if (g_agentState != STATE_IDLE || g_trackOn) return;
-
-    if ((int32_t)(millis() - g_nextCamMs) >= 0) {
-        g_nextCamMs = millis() + CAM_PROBE_MS;
-        CamProbe p = cameraProbeOnce();
-        if (p.ok && p.motion) {
-            // motion below the target row -> tilt down (pitch value decreases)
-            int delta = (int)((CAM_CY_TARGET - p.cy) * CAM_PITCH_GAIN);
-            delta = constrain(delta, -CAM_PITCH_STEP_MAX, CAM_PITCH_STEP_MAX);
-            g_camPitch = constrain(g_camPitch + delta, TRACK_PITCH_MIN, TRACK_PITCH_MAX);
-        }
-        if (p.ok) Serial.printf("[cam] motion=%d cy=%.2f pitch=%d\n",
-                                p.motion, p.cy, g_camPitch);
-    }
-    // Camera mode owns the head (yaw centred, pitch camera-derived).
-    motionSetTracking(true);
-    motionTrackTarget(0, g_camPitch);
-}
-
-// ---- Countdown digits: pixel-font alpha masks from LittleFS, Font6 fallback --
-// M5GFX in this build has no TTF support, so tools/make-digit-font.py renders
-// "0123456789:" from PokemonClassic.ttf into 64x64 alpha masks (poke-digits.bin).
-constexpr int PG_MAX = 64;   // 字形 cell 上限;实际尺寸读 bin 头
-static uint8_t* g_pokeGlyphs = nullptr;
-static bool     g_pokeOk = false;
-static int      g_pgN = 0, g_pgW = 0, g_pgH = 0;
-
-static void loadPokeDigits() {
-    File f = LittleFS.open("/fonts/poke-digits.bin", "r");
-    if (f) {
-        uint8_t hdr[7];
-        if (f.read(hdr, 7) == 7 && memcmp(hdr, "PDGF", 4) == 0 &&
-            hdr[5] <= PG_MAX && hdr[6] <= PG_MAX &&
-            f.size() == 7 + hdr[4] * hdr[5] * hdr[6]) {
-            g_pgN = hdr[4]; g_pgW = hdr[5]; g_pgH = hdr[6];
-            g_pokeGlyphs = (uint8_t*)ps_malloc(g_pgN * g_pgW * g_pgH);   // 常驻,不 free
-            if (g_pokeGlyphs && f.read(g_pokeGlyphs, g_pgN * g_pgW * g_pgH) == g_pgN * g_pgW * g_pgH)
-                g_pokeOk = true;
-        }
-        f.close();
-    }
-    Serial.println(g_pokeOk ? "[font] poke digits loaded"
-                            : "[font] poke digits missing, fallback Font6");
-}
-
-// Blend masks onto the (black) panel. Data is pushed big-endian — same byte
-// order the GIF player uses on this panel.
-static void drawPokeDigits(const char* s, int cx, int y, uint16_t color) {
-    const int digitStride = g_pgW * 3 / 4, colonStride = g_pgW * 3 / 8;
-    int w = 0;
-    for (const char* p = s; *p; p++) w += (*p == ':') ? colonStride : digitStride;
-    int x = cx - w / 2;
-    uint8_t cr = (color >> 11) & 31, cg = (color >> 5) & 63, cb = color & 31;
-    static uint16_t line[PG_MAX];
-    for (const char* p = s; *p; p++) {
-        int gi = (*p == ':') ? 10 : (*p - '0');
-        const uint8_t* g = g_pokeGlyphs + gi * g_pgW * g_pgH;
-        for (int row = 0; row < g_pgH; row++) {
-            const uint8_t* grow = g + row * g_pgW;
-            for (int col = 0; col < g_pgW; col++) {
-                uint8_t a = grow[col];
-                uint16_t v = (uint16_t)(((cr * a + 127) / 255) << 11 |
-                                        ((cg * a + 127) / 255) << 5  |
-                                        ((cb * a + 127) / 255));
-                line[col] = __builtin_bswap16(v);
-            }
-            M5.Display.pushImage(x, y + row, g_pgW, 1, line);
-        }
-        x += (*p == ':') ? colonStride : digitStride;
-    }
-}
-
-// ---- Colours / Layout ---------------------------------------------------------
-static constexpr uint16_t TEXT_BG   = 0x0000;  // bottom panel: black
-static constexpr int SCREEN_W       = 320;
-static constexpr int TEXT_AREA_Y    = 148;    // bottom panel starts here
-static constexpr int TEXT_AREA_H    = 92;
-static constexpr int FACE_YOFFSET   = 0;      // centre native-size Clawd above the panel
-
-// ---- Animation Timing Globals -----------------------------------------------
-static uint32_t g_stateEntryMs = 0;
-
-// ---- Text Overlay (shown in the bottom panel during REMINDER) ---------------
-static String g_overlayLine1;
-static String g_overlayLine2;
-static uint16_t g_overlayColor2 = TFT_WHITE;
-
-// ============================================================================
-//  Bottom Panel (bottom 92px; GIF face owns everything above it).
-//  IDLE shows the stand-up countdown; REMINDER shows overlay text.
-// ============================================================================
-
-static void clearTextArea() {
-    M5.Display.fillRect(0, TEXT_AREA_Y, SCREEN_W, TEXT_AREA_H, TEXT_BG);
-}
-
-// Countdown panel: big 7-seg mm:ss + label. Redraws only when the displayed
-// second changes; g_lastPanelSec is reset to force a redraw on entry to IDLE.
-// Outside work hours (wall clock known) it shows a paused state instead.
-static uint32_t g_lastPanelSec = 0xFFFFFFFF;
-static int      g_lastPanelMin = -1;
-
-// Paused panel: current time in grey + why we're paused.
-static void drawPausedPanel(int mins) {
-    if (mins == g_lastPanelMin) return;
-    g_lastPanelMin = mins;
-    g_lastPanelSec = 0xFFFFFFFF;   // force full redraw when work resumes
-
-    clearTextArea();
-
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%02d:%02d", (mins / 60) % 24, mins % 60);
-    if (g_pokeOk) {
-        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 4, TFT_DARKGREY);
-    } else {
-        M5.Display.setFont(&fonts::Font6);
-        M5.Display.setTextColor(TFT_DARKGREY);
-        M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
-    }
-
-    const char* status;
-    if (mins < WORK_AM_START)      status = "还没上班 · 08:00 开始";
-    else if (mins < WORK_PM_START) status = "午休中 · 14:00 继续";
-    else                           status = "已下班 · 明早见";
-    M5.Display.setTextDatum(TC_DATUM);   // poke 分支不设锚点,这里统一恢复居中
-    M5.Display.setFont(&fonts::efontCN_16);
-    M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.drawString(status, SCREEN_W / 2, TEXT_AREA_Y + 66);
-
-    M5.Display.setTextDatum(TL_DATUM);
-}
-
-static void drawCountdownPanel() {
-    int mins = currentMinutes();
-    if (mins >= 0 && !inWorkWindow(mins)) { drawPausedPanel(mins); return; }
-    g_lastPanelMin = -1;
-
-    uint32_t now = millis();
-    uint32_t remain = ((int32_t)(g_nextReminderMs - now) > 0) ? (g_nextReminderMs - now) : 0;
-    uint32_t sec = (remain + 999) / 1000;   // ceil: shows 30:00 down to 00:01
-    if (sec == g_lastPanelSec) return;
-    g_lastPanelSec = sec;
-
-    clearTextArea();
-
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
-    if (g_pokeOk) {
-        drawPokeDigits(buf, SCREEN_W / 2, TEXT_AREA_Y + 4, TFT_GREEN);
-    } else {
-        M5.Display.setFont(&fonts::Font6);
-        M5.Display.setTextColor(TFT_GREEN);
-        M5.Display.drawString(buf, SCREEN_W / 2, TEXT_AREA_Y + 6);
-    }
-
-    M5.Display.setTextDatum(TC_DATUM);   // poke 分支不设锚点,这里统一恢复居中
-    M5.Display.setFont(&fonts::efontCN_16);
-    M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.drawString("后提醒站立 · 看窗外", SCREEN_W / 2, TEXT_AREA_Y + 66);
-
-    M5.Display.setTextDatum(TL_DATUM);
-}
-
-// ============================================================================
-//  State Management & Animation Driver
-// ============================================================================
-
-static void setAgentState(AgentState next) {
-    if (g_agentState == next) return;
-    g_agentState   = next;
-    g_stateEntryMs = millis();
+void applyVisualState(bool force = false) {
+    AgentState next = visualState();
+    if (!force && next == g_agentState) return;
+    g_agentState = next;
     motionSetState(next);
-    gifFaceSetState(next);
-    if (next != STATE_REPLYING && next != STATE_ERROR) {
-        g_overlayLine1  = "";
-        g_overlayLine2  = "";
+    if (force) gifFaceForceState(next);
+    else gifFaceSetState(next);
+    g_lastPanelSecond = UINT32_MAX;
+}
+
+void reportMode(bool force = false) {
+    uint32_t now = millis();
+    if (!force && now - g_lastModeReportMs < 30000) return;
+    g_lastModeReportMs = now;
+    const char* token = monitoringEnabled(g_mode, currentMinutes())
+        ? (g_mode == MODE_FREE ? "FREE" : "WORK") : "OFF";
+    Serial.printf("MODE %s\n", token);
+}
+
+void persistCheckin() {
+    g_prefs.putUInt("checkDate", g_checkedDate);
+    g_prefs.putUShort("checkMin", g_checkedMinute);
+}
+
+void clearCheckin() {
+    g_checkedToday = false;
+    g_checkedDate = 0;
+    g_checkedMinute = 0;
+    g_prefs.remove("checkDate");
+    g_prefs.remove("checkMin");
+}
+
+void startCycle() {
+    g_nextReminderMs = millis() + CYCLE_MS;
+    g_repeatReminder = false;
+    g_lastPanelSecond = UINT32_MAX;
+}
+
+void setMode(BuddyMode next, uint32_t durationMs = 0) {
+    if (next == MODE_MEETING && g_mode != MODE_MEETING && g_mode != MODE_BREAK)
+        g_returnMode = g_mode;
+    g_mode = next;
+    g_modeEndsMs = durationMs ? millis() + durationMs : 0;
+    g_reminder = false;
+    M5.Speaker.stop();
+    if (next == MODE_WORK || next == MODE_FREE) startCycle();
+    applyVisualState();
+    reportMode(true);
+}
+
+void startBreak() {
+    if (g_mode != MODE_MEETING && g_mode != MODE_BREAK) g_returnMode = g_mode;
+    setMode(MODE_BREAK, BREAK_MS);
+}
+
+void endBreak() {
+    int minute = currentMinutes();
+    BuddyMode target = g_returnMode;
+    if (target == MODE_WORK && (!g_checkedToday || (minute >= 0 && !inWorkWindow(minute))))
+        target = MODE_UNCHECKED;
+    if (target == MODE_FREE && inQuietHours(minute)) target = MODE_UNCHECKED;
+    setMode(target);
+}
+
+void endMeeting() {
+    g_returnMode = (g_returnMode == MODE_FREE) ? MODE_FREE : MODE_WORK;
+    startBreak();
+}
+
+void playReminderSound(bool repeated) {
+    const uint8_t normal = 40;
+    M5.Speaker.setVolume(repeated ? normal / 3 : normal / 2);
+    M5.Speaker.tone(880, repeated ? 110 : 140);
+    delay(repeated ? 130 : 220);
+    if (!repeated) {
+        M5.Speaker.tone(1047, 140);
+        delay(220);
     }
+    M5.Speaker.stop();
+    M5.Speaker.setVolume(normal);
 }
 
-static void animateAll(AgentState state) {
-    gifFaceTick();
-    motionTick(state);
-
-    static String lastL1;
-    static String lastL2;
-    static uint16_t lastCol2 = TFT_WHITE;
-    if (g_overlayLine1 != lastL1 || g_overlayLine2 != lastL2 || g_overlayColor2 != lastCol2) {
-        lastL1   = g_overlayLine1;
-        lastL2   = g_overlayLine2;
-        lastCol2 = g_overlayColor2;
-        clearTextArea();
-        M5.Display.setCursor(0, TEXT_AREA_Y + 8);
-        M5.Display.setTextWrap(true);
-        if (!g_overlayLine1.isEmpty()) {
-            M5.Display.setTextSize(1);
-    M5.Display.setFont(&fonts::efontCN_24);
-            M5.Display.setTextColor(TFT_WHITE);
-            M5.Display.println(g_overlayLine1);
-        }
-        if (!g_overlayLine2.isEmpty()) {
-            M5.Display.setFont(&fonts::efontCN_16);
-            M5.Display.setTextColor(g_overlayColor2);
-            M5.Display.println(g_overlayLine2);
-            M5.Display.setTextColor(TFT_WHITE);
-        }
-    }
-
-    if (state == STATE_IDLE || state == STATE_SLEEP) drawCountdownPanel();
+void fireReminder() {
+    g_reminder = true;
+    g_reminderEndsMs = millis() + REMINDER_UI_MS;
+    applyVisualState();
+    playReminderSound(g_repeatReminder);
 }
 
-// ============================================================================
-//  UI helpers
-// ============================================================================
-
-static void showLines(const char* l1, const char* l2, uint16_t color2 = TFT_WHITE) {
-    g_overlayLine1  = l1 ? l1 : "";
-    g_overlayLine2  = l2 ? l2 : "";
-    g_overlayColor2 = color2;
-}
-
-// Off-hours (wall clock known) the cat sleeps; at work it's the idle face.
-static AgentState homeState() {
-    int m = currentMinutes();
-    return (m >= 0 && !inWorkWindow(m)) ? STATE_SLEEP : STATE_IDLE;
-}
-
-static void showIdle() {
-    setAgentState(homeState());
-    // IDLE panel is the countdown — no overlay text. Force a panel redraw.
-    g_overlayLine1  = "";
-    g_overlayLine2  = "";
-    g_lastPanelSec  = 0xFFFFFFFF;
-}
-
-// ============================================================================
-//  Stand-up reminder: shake head + sing + on-screen text every 30 minutes.
-//  Pat the head, tap the screen, or touch a body zone to acknowledge —
-//  "知道了" — which stops the show immediately; otherwise it ends after
-//  REMINDER_DURATION_MS.
-// ============================================================================
-
-// Head-pat detection via the CoreS3 IMU. A pat is a sharp acceleration jolt
-// (~1g jerk between samples); the reminder's own head shake is two orders of
-// magnitude smaller (~0.02g centripetal at the IMU), so a plain jerk
-// threshold separates them cleanly. Only sampled during the reminder window.
-static bool headPatted() {
+bool headPat() {
     if (!M5.Imu.isEnabled()) return false;
-    static float    lastMag    = 1.0f;
-    static uint32_t lastFireMs = 0;
+    static float lastMag = 1.0f;
+    static uint32_t lastFire = 0;
     float ax, ay, az;
-    M5.Imu.getAccel(&ax, &ay, &az);          // values in g
-    float mag  = sqrtf(ax * ax + ay * ay + az * az);
+    M5.Imu.getAccel(&ax, &ay, &az);
+    float mag = sqrtf(ax * ax + ay * ay + az * az);
     float jerk = fabsf(mag - lastMag);
     lastMag = mag;
     uint32_t now = millis();
-    if (jerk > 0.8f && now - lastFireMs > 300) {   // tune threshold on device
-        lastFireMs = now;
+    if (jerk > 0.8f && now - lastFire > 300) {
+        lastFire = now;
         return true;
     }
     return false;
 }
 
-static bool dismissTouched() {
-    if (M5.Touch.getDetail().wasPressed()) return true;
-    if (headPatted()) return true;           // 摸头
-    const auto& intensities = M5StackChan.TouchSensor.getIntensities();
-    for (int z = 0; z < 3; z++) if (intensities[z] > 0) return true;
-    return false;
+void showWisdom() {
+    g_activeWisdom = g_remoteWisdom.length() ? g_remoteWisdom
+        : LOCAL_WISDOM[esp_random() % (sizeof(LOCAL_WISDOM) / sizeof(LOCAL_WISDOM[0]))];
+    g_remoteWisdom = "";
+    g_wisdom = true;
+    g_wisdomEndsMs = millis() + WISDOM_MS;
+    gifFaceShowRandom();
+    Serial.println("WISDOM_REQUEST");
+    g_lastPanelSecond = UINT32_MAX;
 }
 
-// Wait until nothing is being touched, so the acknowledging touch doesn't
-// linger into the next reminder window and instantly dismiss it.
-static void waitForRelease() {
-    while (true) {
-        animateAll(g_agentState);
-        bool touching = M5.Touch.getDetail().isPressed();
-        const auto& intensities = M5StackChan.TouchSensor.getIntensities();
-        for (int z = 0; z < 3; z++) touching = touching || (intensities[z] > 0);
-        if (!touching) break;
-        delay(10);
+void clockIn() {
+    int minute = currentMinutes();
+    uint32_t today = currentDate();
+    if (minute < 0 || today == 0 || !inWorkWindow(minute)) {
+        g_activeWisdom = "现在不在工作时段，先好好休息吧。";
+        g_wisdom = true;
+        g_wisdomEndsMs = millis() + WISDOM_MS;
+        gifFaceShowRandom();
+        return;
+    }
+    g_checkedToday = true;
+    g_checkedDate = today;
+    g_checkedMinute = minute;
+    persistCheckin();
+    g_agentState = STATE_CELEBRATE;
+    motionSetState(STATE_CELEBRATE);
+    gifFaceSetState(STATE_CELEBRATE);
+    M5.Speaker.setVolume(20);
+    M5.Speaker.tone(1047, 120);
+    delay(200);
+    M5.Speaker.stop();
+    M5.Speaker.setVolume(40);
+    uint32_t until = millis() + 2000;
+    while ((int32_t)(millis() - until) < 0) {
+        gifFaceTick(); motionTick(STATE_CELEBRATE); delay(10);
+    }
+    setMode(MODE_WORK);
+}
+
+void handlePat() {
+    if (g_reminder) { startBreak(); return; }
+    uint32_t now = millis();
+    if (!g_checkedToday && g_mode == MODE_UNCHECKED) {
+        if (g_firstPatMs && now - g_firstPatMs <= DOUBLE_PAT_MS) {
+            g_firstPatMs = 0;
+            clockIn();
+        } else {
+            g_firstPatMs = now;
+        }
+        return;
+    }
+    showWisdom();
+}
+
+void drawCentered(const String& text, int y, uint16_t color, const lgfx::IFont* font) {
+    M5.Display.setTextDatum(TC_DATUM);
+    M5.Display.setFont(font);
+    M5.Display.setTextColor(color, TFT_BLACK);
+    M5.Display.drawString(text, SCREEN_W / 2, y);
+    M5.Display.setTextDatum(TL_DATUM);
+}
+
+void drawButton(int x, int y, int w, int h, const char* label, uint16_t color) {
+    M5.Display.fillRoundRect(x, y, w, h, 8, color);
+    M5.Display.setTextDatum(MC_DATUM);
+    M5.Display.setFont(&fonts::efontCN_16);
+    M5.Display.setTextColor(TFT_WHITE, color);
+    M5.Display.drawString(label, x + w / 2, y + h / 2);
+    M5.Display.setTextDatum(TL_DATUM);
+}
+
+void drawPanel() {
+    uint32_t now = millis();
+    uint32_t seconds = 0;
+    if (g_mode == MODE_MEETING || g_mode == MODE_BREAK)
+        seconds = g_modeEndsMs && (int32_t)(g_modeEndsMs - now) > 0 ? (g_modeEndsMs - now + 999) / 1000 : 0;
+    else if (monitoringEnabled(g_mode, currentMinutes()))
+        seconds = (int32_t)(g_nextReminderMs - now) > 0 ? (g_nextReminderMs - now + 999) / 1000 : 0;
+    if (!g_wisdom && !g_reminder && seconds == g_lastPanelSecond && currentMinutes() == g_lastMinute) return;
+    g_lastPanelSecond = seconds;
+    g_lastMinute = currentMinutes();
+    clearPanel();
+
+    if (g_wisdom) {
+        M5.Display.setTextDatum(TL_DATUM);
+        M5.Display.setFont(&fonts::efontCN_16);
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.setTextWrap(true);
+        M5.Display.setCursor(16, PANEL_Y + 8);
+        M5.Display.println(g_activeWisdom);
+        drawCentered("轻轻一拍，补给一点好心情", PANEL_Y + 62, TFT_DARKGREY, &fonts::efontCN_16);
+        return;
+    }
+    if (g_reminder) {
+        drawCentered("该起来活动一下啦", PANEL_Y + 2, TFT_WHITE, &fonts::efontCN_16);
+        drawButton(8, PANEL_Y + 34, 146, 50, "开始休息", TFT_DARKGREEN);
+        drawButton(166, PANEL_Y + 34, 146, 50, "进入会议", TFT_NAVY);
+        return;
+    }
+    if (g_mode == MODE_UNCHECKED) {
+        drawCentered("未打卡 · 双拍脑袋打卡", PANEL_Y + 34, TFT_WHITE, &fonts::efontCN_16);
+        return;
+    }
+    char value[32];
+    if (g_mode == MODE_MEETING && g_modeEndsMs == 0) snprintf(value, sizeof(value), "会议 · 等你回来");
+    else snprintf(value, sizeof(value), "%s · %02lu:%02lu", modeName(g_mode),
+                  (unsigned long)(seconds / 60), (unsigned long)(seconds % 60));
+    drawCentered(value, PANEL_Y + 10, g_mode == MODE_FREE ? TFT_MAGENTA : TFT_WHITE, &fonts::efontCN_24);
+    if (g_mode == MODE_MEETING) drawButton(80, PANEL_Y + 50, 160, 36, "我回来了", TFT_NAVY);
+    else if (g_mode == MODE_BREAK) drawButton(80, PANEL_Y + 50, 160, 36, "继续工作", TFT_DARKGREEN);
+    else {
+        int minute = currentMinutes();
+        if (g_mode == MODE_WORK && minute >= 0 && !inWorkWindow(minute)) {
+            const char* msg = minute < WORK_AM_START ? "08:00 开始" : (minute < WORK_PM_START ? "午休中 · 14:00 继续" : "今天辛苦了");
+            drawCentered(msg, PANEL_Y + 62, TFT_DARKGREY, &fonts::efontCN_16);
+        } else drawCentered("点这里切换模式", PANEL_Y + 62, TFT_DARKGREY, &fonts::efontCN_16);
     }
 }
 
-static void fireReminder() {
-    setAgentState(STATE_REMINDER);
-    // showLines AFTER setAgentState so the overlay survives the state
-    // transition (setAgentState clears it for non-REPLYING/ERROR states).
-    showLines("该起来活动一下啦", "站起来看窗外 · 摸头确认", TFT_GREEN);
-    melodyStart();
-    uint32_t endTime = millis() + REMINDER_DURATION_MS;
-    while (millis() < endTime) {
-        animateAll(g_agentState);
-        melodyTick();
-        if (dismissTouched()) break;   // pat / tap = "知道了"
-        delay(10);
+void drawMenu() {
+    M5.Display.fillScreen(TFT_BLACK);
+    drawCentered(g_meetingMenu ? "会议时长" : "选择模式", 12, TFT_WHITE, &fonts::efontCN_24);
+    if (g_meetingMenu) {
+        const char* labels[] = {"15 分钟", "30 分钟", "60 分钟", "90 分钟", "直到我回来"};
+        for (int i = 0; i < 5; ++i) drawButton(28, 48 + i * 36, 264, 30, labels[i], i == 4 ? TFT_DARKGREY : TFT_NAVY);
+    } else {
+        if (g_checkedToday) {
+            char checked[32];
+            snprintf(checked, sizeof(checked), "今日打卡 %02u:%02u", g_checkedMinute / 60, g_checkedMinute % 60);
+            drawCentered(checked, 36, TFT_DARKGREY, &fonts::efontCN_16);
+        }
+        const char* work = g_checkedToday ? "工作模式" : "工作模式（请先双拍打卡）";
+        drawButton(28, 52, 264, 42, work, g_checkedToday ? TFT_NAVY : TFT_DARKGREY);
+        drawButton(28, 104, 264, 42, "自由模式", TFT_PURPLE);
+        drawButton(28, 156, 264, 42, "会议模式", TFT_DARKCYAN);
+        if (g_mode == MODE_FREE) {
+            drawButton(24, 208, 128, 26, "退出自由", TFT_DARKGREY);
+            drawButton(168, 208, 128, 26, "关闭", TFT_DARKGREY);
+        } else drawButton(104, 208, 112, 26, "关闭", TFT_DARKGREY);
     }
-    g_melodyOn = false;
-    M5.Speaker.stop();                 // cut the sounding note immediately
-    waitForRelease();
-    showIdle();                        // back to the countdown panel
 }
 
-// ============================================================================
-//  setup / loop
-// ============================================================================
+void closeMenu() {
+    g_menu = false; g_meetingMenu = false;
+    gifFaceRefresh();
+    g_lastPanelSecond = UINT32_MAX;
+}
+
+void handleTouch() {
+    auto t = M5.Touch.getDetail();
+    if (!t.wasReleased()) return;
+    if (g_menu) {
+        if (g_meetingMenu) {
+            if (t.x >= 28 && t.x <= 292 && t.y >= 48 && t.y < 228) {
+                int row = (t.y - 48) / 36;
+                const uint32_t mins[] = {15, 30, 60, 90, 0};
+                setMode(MODE_MEETING, mins[row] * 60UL * 1000);
+                closeMenu();
+            }
+            return;
+        }
+        if (t.y >= 52 && t.y < 94 && g_checkedToday) { setMode(MODE_WORK); closeMenu(); }
+        else if (t.y >= 104 && t.y < 146) {
+            if (inQuietHours(currentMinutes())) {
+                closeMenu();
+                g_activeWisdom = "08:00 前保持安静，自由模式也要睡觉。";
+                g_wisdom = true; g_wisdomEndsMs = millis() + WISDOM_MS; gifFaceShowRandom();
+            } else {
+                if (g_mode != MODE_FREE) g_freeReturnMode = g_mode;
+                setMode(MODE_FREE); closeMenu();
+            }
+        } else if (t.y >= 156 && t.y < 198 && (g_mode == MODE_WORK || g_mode == MODE_FREE)) {
+            g_meetingMenu = true; drawMenu();
+        } else if (t.y >= 204) {
+            if (g_mode == MODE_FREE && t.x < 160) {
+                BuddyMode target = g_freeReturnMode;
+                int minute = currentMinutes();
+                if (target == MODE_WORK && (!g_checkedToday || !inWorkWindow(minute)))
+                    target = MODE_UNCHECKED;
+                setMode(target);
+            }
+            closeMenu();
+        }
+        return;
+    }
+    if (g_reminder) {
+        if (t.y >= PANEL_Y + 28 && t.x < SCREEN_W / 2) startBreak();
+        else if (t.y >= PANEL_Y + 28) { g_menu = true; g_meetingMenu = true; drawMenu(); }
+        return;
+    }
+    if (g_mode == MODE_MEETING && t.y >= PANEL_Y + 42) { endMeeting(); return; }
+    if (g_mode == MODE_BREAK && t.y >= PANEL_Y + 42) { endBreak(); return; }
+    if (t.y >= PANEL_Y) { g_menu = true; drawMenu(); }
+}
+
+// Mac tracker serial protocol. StackChan reports MODE; helper sends CLOCK and
+// one cached WISDOM. The helper never decides the mode or work schedule.
+void parseSerial(const char* line) {
+    unsigned day = 0; int minute = 0;
+    if (sscanf(line, "CLOCK %u %d", &day, &minute) == 2) {
+        minute = constrain(minute, 0, 1439);
+        g_timeBaseMin = minute; g_timeBaseMs = millis(); g_lastTimeMs = g_timeBaseMs; g_timeKnown = true;
+        setRtcClock(day, minute);
+        reportMode(true);
+        return;
+    }
+    if (sscanf(line, "TIME %d", &minute) == 1) {
+        minute = constrain(minute, 0, 1439);
+        g_timeBaseMin = minute; g_timeBaseMs = millis(); g_lastTimeMs = g_timeBaseMs; g_timeKnown = true;
+        setRtcClock(0, minute);
+        reportMode(true);
+        return;
+    }
+    if (strncmp(line, "WISDOM ", 7) == 0) g_remoteWisdom = String(line + 7).substring(0, 120);
+    if (strncmp(line, "TRACK LOST", 10) == 0) return;
+    int cx, cy, conf;
+    if (sscanf(line, "TRACK %d %d %d", &cx, &cy, &conf) == 3) {
+        acceptTrack(constrain(cx, -1000, 1000), constrain(cy, -1000, 1000));
+    }
+}
+
+void pollSerial() {
+    static char buf[160]; static uint8_t len = 0;
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n') { buf[len] = 0; parseSerial(buf); len = 0; }
+        else if (c != '\r') { if (len < sizeof(buf) - 1) buf[len++] = c; else len = 0; }
+    }
+}
+
+// Face tracking and board-camera height adjustment are both gated by the same
+// monitoringEnabled() result as reminders.
+int g_trackCx = 0, g_trackCy = 0;
+uint32_t g_lastTrackMs = 0;
+float g_yaw = 0, g_pitch = PITCH_BASELINE;
+int16_t g_camPitch = PITCH_BASELINE;
+uint32_t g_nextCamMs = 20000;
+
+void acceptTrack(int cx, int cy) { g_trackCx = cx; g_trackCy = cy; g_lastTrackMs = millis(); }
+
+void monitoringTick() {
+    bool enabled = monitoringEnabled(g_mode, currentMinutes()) && !g_reminder;
+    bool fresh = enabled && millis() - g_lastTrackMs < 3000;
+    if (fresh) {
+        g_yaw += .25f * ((g_trackCx * .45f) - g_yaw);
+        g_pitch += .25f * ((PITCH_BASELINE + g_trackCy * .20f) - g_pitch);
+        motionSetTracking(true);
+        motionTrackTarget(constrain((int)g_yaw, -1000, 1000), constrain((int)g_pitch, 400, 800));
+    } else if (enabled) {
+        if (enabled && (int32_t)(millis() - g_nextCamMs) >= 0) {
+            g_nextCamMs = millis() + 30000;
+            CamProbe p = cameraProbeOnce();
+            if (p.ok && p.motion) g_camPitch = constrain(g_camPitch + constrain((int)((.40f - p.cy) * 500), -50, 50), 400, 800);
+            Serial.printf("[cam] motion=%d cy=%.2f pitch=%d\n", p.motion, p.cy, g_camPitch);
+        }
+        motionSetTracking(true);
+        motionTrackTarget(0, g_camPitch);
+    } else motionSetTracking(false);
+}
+
+void timeTransitions() {
+    int minute = currentMinutes();
+    uint32_t today = currentDate();
+    if (today && today != g_lastDateSeen) {
+        g_lastDateSeen = today;
+        g_checkedToday = g_checkedDate == today;
+        if (!g_checkedToday) { clearCheckin(); if (g_mode == MODE_WORK) setMode(MODE_UNCHECKED); }
+        else if (g_mode == MODE_UNCHECKED && inWorkWindow(minute)) setMode(MODE_WORK);
+        if (g_mode == MODE_FREE && inQuietHours(minute)) setMode(MODE_UNCHECKED);
+    }
+    if (g_checkedToday && shouldClearCheckin(minute)) {
+        clearCheckin();
+        if (g_mode == MODE_WORK) setMode(MODE_UNCHECKED);
+    }
+    if (g_mode == MODE_FREE && inQuietHours(minute)) setMode(MODE_UNCHECKED);
+    if (g_mode == MODE_UNCHECKED && g_checkedToday && inWorkWindow(minute)) setMode(MODE_WORK);
+
+    bool active = monitoringEnabled(g_mode, minute);
+    if (active && !g_prevMonitoring) startCycle(); // includes 14:00 resume
+    if (active != g_prevMonitoring) { g_prevMonitoring = active; applyVisualState(); reportMode(true); }
+}
+
+} // namespace
 
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
-
-    motionInit();
-
     Serial.begin(115200);
     M5.Speaker.setVolume(40);
-
-    M5.Display.setFont(&fonts::efontCN_16);
-    M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.setTextWrap(true);
-
+    motionInit();
     gifFaceInit();
-    gifFaceSetTextBand(TEXT_AREA_Y);   // GIF keeps out of the bottom panel
-    gifFaceSetYOffset(FACE_YOFFSET);   // Clawd stays centred above the panel
-    gifFaceSetState(STATE_IDLE);       // g_agentState already IDLE; open GIF directly
-
-    // Pokemon pixel digits for the countdown (LittleFS mounted by gifFaceInit)
-    loadPokeDigits();
-    M5.Display.setFont(&fonts::efontCN_16);
-
-    clearTextArea();
-    showIdle();
-
-    g_nextReminderMs = millis() + REMINDER_INTERVAL_MS;
+    gifFaceSetTextBand(PANEL_Y);
+    gifFaceSetYOffset(0);
+    g_prefs.begin("standup", false);
+    g_checkedDate = g_prefs.getUInt("checkDate", 0);
+    g_checkedMinute = g_prefs.getUShort("checkMin", 0);
+    uint32_t today = currentDate();
+    int minute = currentMinutes();
+    g_checkedToday = today && g_checkedDate == today;
+    g_lastDateSeen = today;
+    g_mode = restoredMode(g_checkedToday, minute);
+    g_prevMonitoring = monitoringEnabled(g_mode, minute);
+    g_nextReminderMs = millis() + CYCLE_MS;
+    applyVisualState(true);
+    Serial.println("WISDOM_REQUEST");
+    reportMode(true);
 }
 
 void loop() {
-    // -- Stand-up reminder (gated to work hours when the wall clock is known) --
-    if ((int32_t)(millis() - g_nextReminderMs) >= 0) {
-        int mins = currentMinutes();
-        if (mins < 0 || inWorkWindow(mins)) {
-            fireReminder();
-            g_nextReminderMs = millis() + REMINDER_INTERVAL_MS;
-        } else {
-            g_nextReminderMs = millis() + RECHECK_MS;
-        }
-    }
-
     pollSerial();
-    trackingTick();
-    cameraHeightTick();
+    timeTransitions();
 
-    // -- Sleep outside work hours, wake inside (only when in a home state) --
-    if (g_agentState == STATE_IDLE || g_agentState == STATE_SLEEP) {
-        AgentState want = homeState();
-        if (want != g_agentState) {
-            setAgentState(want);
-            g_lastPanelSec = 0xFFFFFFFF;   // force panel redraw in the new mode
-            g_lastPanelMin = -1;
-        }
+    uint32_t now = millis();
+    if (g_mode == MODE_MEETING && g_modeEndsMs && (int32_t)(now - g_modeEndsMs) >= 0) endMeeting();
+    if (g_mode == MODE_BREAK && g_modeEndsMs && (int32_t)(now - g_modeEndsMs) >= 0) endBreak();
+    if (g_wisdom && (int32_t)(now - g_wisdomEndsMs) >= 0) { g_wisdom = false; applyVisualState(true); }
+    if (g_reminder && (int32_t)(now - g_reminderEndsMs) >= 0) {
+        g_reminder = false; g_repeatReminder = true; g_nextReminderMs = now + REPEAT_MS; applyVisualState();
     }
+    if (!g_reminder && monitoringEnabled(g_mode, currentMinutes()) && (int32_t)(now - g_nextReminderMs) >= 0) fireReminder();
 
-    animateAll(g_agentState);
-
+    if (!g_menu) {
+        monitoringTick();
+        gifFaceTick();
+        motionTick(g_agentState);
+        if (!g_wisdom && headPat()) handlePat();
+        if (g_firstPatMs && now - g_firstPatMs > DOUBLE_PAT_MS) { g_firstPatMs = 0; showWisdom(); }
+        drawPanel();
+    } else {
+        monitoringTick();
+        motionTick(g_agentState);
+    }
+    handleTouch();
+    reportMode();
     delay(10);
 }

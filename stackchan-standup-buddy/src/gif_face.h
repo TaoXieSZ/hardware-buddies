@@ -6,6 +6,9 @@
 
 void gifFaceInit();                      // mount LittleFS, init decoder
 void gifFaceSetState(AgentState state);  // switch to that state's GIF
+void gifFaceForceState(AgentState state); // restore fixed face after an overlay
+void gifFaceShowRandom();                // force a fresh random GIF without changing mode
+void gifFaceRefresh();                   // redraw after a full-screen menu
 void gifFaceTick();                      // call every loop(); paces frames itself
 
 // When the bottom text band (y >= bandY) is in use, GIF scanlines under it

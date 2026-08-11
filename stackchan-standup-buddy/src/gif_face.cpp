@@ -35,6 +35,9 @@ constexpr int RANDOM_FILE_COUNT = sizeof(RANDOM_FILES) / sizeof(RANDOM_FILES[0])
 const char* IDLE_FALLBACK = "/characters/clawd/idle.gif";
 const char* REMINDER_FILE = "/characters/clawd/clawd-notification.gif";
 const char* SLEEP_FILE    = "/characters/clawd/sleep.gif";
+const char* MEETING_FILE  = "/characters/clawd/clawd-thinking.gif";
+const char* BREAK_FILE    = "/characters/clawd/heart.gif";
+const char* CELEBRATE_FILE = "/characters/clawd/celebrate.gif";
 
 AnimatedGIF g_gif;
 File        g_file;
@@ -189,6 +192,9 @@ const char* pickRandomFile() {
 const char* selectFile(AgentState state) {
     if (state == STATE_SLEEP) return SLEEP_FILE;
     if (state == STATE_REMINDER) return REMINDER_FILE;
+    if (state == STATE_MEETING) return MEETING_FILE;
+    if (state == STATE_BREAK) return BREAK_FILE;
+    if (state == STATE_CELEBRATE) return CELEBRATE_FILE;
     return pickRandomFile();
 }
 
@@ -207,6 +213,22 @@ void gifFaceSetState(AgentState state) {
     g_state = (uint8_t)state;
     g_nextFrameAt = 0;
     openWithFallback(selectFile(state), true);
+}
+
+void gifFaceForceState(AgentState state) {
+    g_state = (uint8_t)state;
+    g_nextFrameAt = 0;
+    openWithFallback(selectFile(state), true);
+}
+
+void gifFaceShowRandom() {
+    g_nextFrameAt = 0;
+    openWithFallback(pickRandomFile(), true);
+}
+
+void gifFaceRefresh() {
+    g_nextFrameAt = 0;
+    openWithFallback(g_currentFile, true);
 }
 
 void gifFaceSetTextBand(int bandY) {
