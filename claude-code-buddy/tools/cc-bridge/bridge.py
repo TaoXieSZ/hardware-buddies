@@ -658,7 +658,13 @@ if __name__ == "__main__":
     from control_plane.cmux_control import CmuxClient
     from control_plane.stager import RouteStager
     _cmux = CmuxClient()
-    _route_stager = RouteStager(route_fn=_cmux.route)
+    def _route_exact_or_alias(target, text):
+        live_surfaces = {session.surface for session in _cmux.list_sessions()}
+        if target in live_surfaces:
+            return _cmux.route_surface(target, text)
+        return _cmux.route(target, text)
+
+    _route_stager = RouteStager(route_fn=_route_exact_or_alias)
 
     # cardputer physical session switcher (openspec change cardputer-session-
     # switcher): firmware sends {"cmd":"selectSession","sid":<claude session_id>}
@@ -735,6 +741,7 @@ if __name__ == "__main__":
         rtc_sync_on_connect=False,  # Claude Desktop handles RTC for cc-bridge
         on_loop_start=_on_loop_start,
         route_stager=_route_stager,
+        control_cmux=_cmux,
         on_select_session=_select_session,
         on_answer_question=_answer_question,
         extra_tasks=[reaper_loop, cmux_label_loop, cmux_question_loop],

@@ -1238,7 +1238,8 @@ class CompositeWriter:
 # ─── socket protocol ───────────────────────────────────────────────────
 async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                         dirty: asyncio.Event, apply_event: Callable,
-                        pending: dict, log: logging.Logger, route_stager=None):
+                        pending: dict, log: logging.Logger, route_stager=None,
+                        control_api=None):
     try:
         # Read the first frame line-by-line: hook clients write a single
         # JSON-per-line and close; wait_permission writes one line then
@@ -1261,7 +1262,47 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
             head = None
 
         if isinstance(head, dict) and head.get("action") == "wait_permission":
-            await _handle_wait_permission(head, writer, state, dirty, pending, ble, log)
+            await _handle_wait_permission(head, writer, state, dirty, pending, ble, log,
+                                          control_api=control_api)
+            return
+
+        if isinstance(head, dict) and str(head.get("action") or "").startswith("control."):
+            action = head["action"]
+            response = {"ok": False, "error": "control_unavailable"}
+            if control_api is not None:
+                try:
+                    if action == "control.snapshot":
+                        response = {"ok": True, **control_api.snapshot()}
+                    elif action == "control.stage":
+                        response = control_api.stage(
+                            str(head.get("command_id") or "")[:64],
+                            str(head.get("session_key") or "")[:64],
+                            int(head.get("target_revision") or 0),
+                            str(head.get("text") or "")[:1024],
+                        )
+                    elif action == "control.confirm":
+                        loop = asyncio.get_running_loop()
+                        response = await loop.run_in_executor(
+                            None, control_api.confirm, str(head.get("command_id") or "")[:64])
+                    elif action == "control.cancel":
+                        response = control_api.cancel(str(head.get("command_id") or "")[:64])
+                    elif action == "control.events":
+                        response = {"ok": True, **control_api.events.poll(
+                            int(head.get("after") or 0), int(head.get("limit") or 32))}
+                    elif action == "control.task.status":
+                        response = control_api.task_status(str(head.get("session_key") or "")[:64])
+                    elif action == "control.permission.resolve":
+                        response = control_api.resolve_permission(
+                            str(head.get("request_id") or "")[:64],
+                            str(head.get("decision") or "")[:16],
+                        )
+                    else:
+                        response = {"ok": False, "error": "unknown_action"}
+                except (KeyError, TypeError, ValueError):
+                    response = {"ok": False, "error": "invalid_request"}
+            log.info("control_action action=%s ok=%s", action[:48], response.get("ok"))
+            writer.write((json.dumps(response) + "\n").encode())
+            await writer.drain()
             return
 
         # External agent session snapshot (cursor-bridge → cc-bridge). Stash by
@@ -1306,8 +1347,8 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
                     ack = {"ok": True}
                 except Exception as e:  # noqa: BLE001 - report back, don't crash
                     ack = {"ok": False, "error": str(e)}
-            log.info("stage_route target=%r text=%r -> %s",
-                     target, head.get("text"), ack)
+            log.info("stage_route target=%r text_len=%d ok=%s",
+                     target, len(str(head.get("text") or "")), ack.get("ok"))
             writer.write((json.dumps(ack) + "\n").encode())
             await writer.drain()
             return
@@ -1365,7 +1406,7 @@ async def handle_client(reader, writer, state: BuddyState, ble: BleWriter,
 
 async def _handle_wait_permission(req, writer, state: BuddyState,
                                   dirty: asyncio.Event, pending: dict,
-                                  ble, log: logging.Logger):
+                                  ble, log: logging.Logger, control_api=None):
     rid = req.get("id") or f"req_{int(time.time() * 1000)}"
     tool = req.get("tool", "tool")
     sid = req.get("session_id") or "anon"   # full session_id → per-session pin
@@ -1387,7 +1428,7 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
     # back to its normal terminal prompt. Keeps PreToolUse hook latency
     # ~0ms instead of the daemon's ~6-8s default timeout.
     prefixes = ble.connected_prefixes if hasattr(ble, "connected_prefixes") else []
-    has_stick = any("SC" not in p.upper() for p in prefixes)
+    has_stick = any("SC" not in p.upper() for p in prefixes) or control_api is not None
     if not has_stick:
         log.info("wait_permission %s: no permission-capable peer → ask", rid)
         try:
@@ -1412,6 +1453,11 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
 
     fut = asyncio.get_running_loop().create_future()
     pending[rid] = fut
+    if control_api is not None:
+        control_api.publish_permission(
+            str(rid)[:64], ext_agent or "claude", str(sid)[:128],
+            str(tool)[:48], str(hint)[:120])
+    decision = "ask"
     try:
         decision = await asyncio.wait_for(fut, timeout=timeout)
         log.info("permission %s → %s", rid, decision)
@@ -1420,6 +1466,9 @@ async def _handle_wait_permission(req, writer, state: BuddyState,
         log.info("permission %s timed out → ask", rid)
     finally:
         pending.pop(rid, None)
+        if control_api is not None:
+            control_api.events.publish(
+                "permission.resolved", request_id=str(rid)[:64], decision=decision)
         # Clear waiting state.
         state.waiting = 0
         state.prompt = None
@@ -1536,6 +1585,7 @@ def run(
     log_fmt: Callable[[dict], str] | None = None,
     on_loop_start: Callable | None = None,
     route_stager=None,
+    control_cmux=None,
     on_select_session: "Callable[[str], None] | None" = None,
     on_answer_question: "Callable[[str, list | None, str | None], None] | None" = None,
     serial_port: str | None = None,
@@ -1584,6 +1634,10 @@ def run(
         on_select_session=on_select_session,
         on_answer_question=on_answer_question,
     )
+    control_api = None
+    if route_stager is not None and control_cmux is not None:
+        from control_plane.local_api import LocalControlAPI
+        control_api = LocalControlAPI(control_cmux, route_stager, pending, state=state)
 
     # device_prefix is comma-separated for multi-peer (Plus2 + StackChan).
     # A single token (no comma) preserves the original single-peer
@@ -1635,7 +1689,8 @@ def run(
 
         server = await asyncio.start_unix_server(
             lambda r, w: handle_client(r, w, state, ble, dirty, apply_event,
-                                       pending, log, route_stager=route_stager),
+                                       pending, log, route_stager=route_stager,
+                                       control_api=control_api),
             path=socket_path,
         )
         os.chmod(socket_path, 0o600)

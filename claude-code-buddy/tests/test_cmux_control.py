@@ -750,6 +750,28 @@ def test_answer_question_empty_args_no_call():
     assert all(c[2] != "feed.question.reply" for c in m.calls if len(c) > 2)
 
 
+def test_route_surface_revalidates_and_uses_argument_array_rpc():
+    m = MockRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    text = "literal '$HOME' `pwd`\nnext"
+
+    assert c.route_surface("S1", text) == "S1"
+    assert _method_call(m.calls, "surface.focus") == [
+        "CMUX", "rpc", "surface.focus", json.dumps({"surface_id": "S1"})]
+    assert _method_call(m.calls, "surface.send_text") == [
+        "CMUX", "rpc", "surface.send_text", json.dumps({"surface_id": "S1", "text": text})]
+    assert _method_call(m.calls, "surface.send_key") == [
+        "CMUX", "rpc", "surface.send_key", json.dumps({"surface_id": "S1", "key": "Enter"})]
+
+
+def test_route_surface_rejects_non_live_surface_without_send():
+    m = MockRunner()
+    c = CmuxClient(binary="CMUX", runner=m)
+    with pytest.raises(KeyError):
+        c.route_surface("gone", "do nothing")
+    assert not any(len(call) > 2 and call[2] == "surface.send_text" for call in m.calls)
+
+
 def test_read_status_returns_last_nonempty_line():
     m = MockRunner(screen="line one\n\n  last meaningful line  \n\n")
     c = CmuxClient(binary="CMUX", runner=m)

@@ -36,6 +36,8 @@ class Pending:
     target: Any          # nickname str (preferred), int, or numeric str (legacy)
     text: str
     staged_at: float
+    command_id: str = ""
+    target_revision: int = 0
 
     # Back-compat: existing callers/tests read `.number`. Returns int when the
     # target is numeric; -1 for nicknames.
@@ -74,7 +76,7 @@ class RouteStager:
             self._drop_if_expired_locked()
             return self._pending
 
-    def stage(self, target, text: str) -> None:
+    def stage(self, target, text: str, command_id: str = "", target_revision: int = 0) -> None:
         """Stage a command (last-wins), resetting the TTL.
 
         `target` is passed through unchanged (nickname str / int / numeric str);
@@ -82,10 +84,11 @@ class RouteStager:
         """
         with self._lock:
             self._pending = Pending(
-                target=target, text=text, staged_at=self._clock()
+                target=target, text=text, staged_at=self._clock(),
+                command_id=command_id, target_revision=target_revision,
             )
 
-    def confirm(self) -> bool:
+    def confirm(self, command_id: str | None = None) -> bool:
         """Thumbs-up: fire the staged route. Returns True if something fired.
 
         Takes + clears the pending under the lock, then runs the (blocking)
@@ -95,16 +98,21 @@ class RouteStager:
         with self._lock:
             self._drop_if_expired_locked()
             p = self._pending
+            if p is not None and command_id is not None and p.command_id != command_id:
+                return False
             self._pending = None
         if p is None:
             return False
         self._route(p.target, p.text)
         return True
 
-    def cancel(self) -> bool:
+    def cancel(self, command_id: str | None = None) -> bool:
         """Thumbs-down: drop any staged command. Returns True if one existed."""
         with self._lock:
             self._drop_if_expired_locked()
+            if (self._pending is not None and command_id is not None
+                    and self._pending.command_id != command_id):
+                return False
             had = self._pending is not None
             self._pending = None
         return had
