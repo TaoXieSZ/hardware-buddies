@@ -17,8 +17,8 @@
 ## Product goals
 
 - Goals: make the current state readable in under one second; make KEYA/KEYB behavior obvious; keep recording visually alive; fit short transcripts inside the circular safe area
-- Non-goals: touch navigation, agent selection, approval UI, TTS controls, settings, notifications, or final production visual polish
-- Success signals: the user can identify all six states at arm's length and can cycle the showcase using the two physical keys without instructions
+- Non-goals: touch navigation, new-agent spawning, automatic agent selection, settings, or final production visual polish
+- Success signals: the user can identify all thirteen states at arm's length, review the exact target/command, and distinguish actionable approval from notification-only permission states
 
 ## Personas and jobs
 
@@ -29,7 +29,7 @@
 ## Information architecture
 
 - Primary navigation: none in runtime; the state machine owns the whole screen
-- Core screens: connecting, ready, recording, transcribing, result, error
+- Core screens: connecting, ready, recording, transcribing, result, error, proposal review, dispatching, running, waiting permission, completed, cancelled, failed
 - Content hierarchy: state ring → central symbol/activity → state title → one-line detail → physical-key hints
 - Showcase navigation: KEYA advances one state; KEYB moves back one state
 
@@ -53,8 +53,8 @@
 ## Components
 
 - Existing components to reuse: `DeviceState`, `AudioLoop`, M5Unified display and buttons
-- New/changed components: `WalkieUi`, generated state assets, state palette, perimeter progress ring, microphone glyph, waveform, spinner, result card, error mark, physical-key hints
-- Variants and states: one visual variant for each explicit device state plus a showcase indicator
+- New/changed components: `WalkieUi`, generated state assets, state palette, perimeter progress ring, microphone glyph, waveform, spinner, result card, error mark, physical-key hints, and transcript TTS playback
+- Variants and states: one visual variant for each explicit device state plus a showcase indicator; control states reuse the same renderer and safe-area tokens
 - Token/component ownership: colors, geometry, motion, copy, and renderer live in `include/walkie_ui.h` and `src/walkie_ui.cpp`
 
 ## Accessibility
@@ -76,7 +76,9 @@
 - Loading: amber orbit and `FINDING MAC`
 - Empty: ready microphone symbol with `HOLD A TO TALK`
 - Error: orange-red ring, explicit error code, and `A RETRY`
-- Success: mint check mark and bounded transcript preview
+- Success: mint check mark and bounded transcript or pane-snapshot summary
+- Proposal: amber review state with KEYA approve and KEYB reject
+- Permission: actionable A/B controls only for Claude Code and OpenCode; Codex/Kimi show terminal-only notice
 - Disabled: disconnected input remains on connecting/error UI and does not start capture
 - Offline/slow network: connecting pulse; transcribing spinner never implies progress percentage
 
@@ -88,10 +90,10 @@
 
 ## Implementation constraints
 
-- Framework/styling system: Arduino + M5Unified/M5GFX with build-time browser-rendered PNG assets; no LVGL or new runtime dependency
+- Framework/styling system: Arduino + M5Unified/M5GFX with build-time browser-rendered PNG assets shared by the runtime and showcase builds; no LVGL or new runtime dependency
 - Design-token constraints: state colors and dimensions are compile-time constants
-- Performance constraints: decode the selected embedded PNG into a PSRAM-backed full-screen `M5Canvas`, reuse the canvas, and never allocate per frame; primitive fallback remains available when decoding fails
-- Compatibility constraints: preserve the pinned official PlatformIO platform and microphone initialization sequence
+- Performance constraints: decode the selected embedded PNG once per state into a PSRAM-backed full-screen `M5Canvas`, reuse the canvas, and never allocate per frame; runtime recording redraws only its waveform region, while primitive fallback remains available when decoding fails
+- Compatibility constraints: preserve the pinned official PlatformIO platform and microphone initialization sequence; switch microphone and speaker ownership in the exact order used by the pinned M5Unified microphone example
 - Test/screenshot expectations: native state tests remain green; both runtime and showcase environments build; showcase flashes to the known StopWatch and cycles all states via KEYA/KEYB
 
 ## Open questions

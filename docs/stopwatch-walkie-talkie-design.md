@@ -1,12 +1,12 @@
 # StopWatch Agent 对讲机 · 设计文档
 
-> 2026-08-02  grilling 会话定稿。设备已购（M5 StopWatch, SKU:C152），代码未动。
-> 换电脑续作时从「MVP 切片」开始。
+> 2026-08-09 实现状态：音频闭环与 steer-only 多 Agent 控制面已落地。
+> 本文中的 spawn、LLM 自动选目标、WSS、离线 ASR、mDNS 与 launchd 均为 NEXT，不是当前能力。
 
 ## 一句话
 
 把 M5 StopWatch 变成 AI agent 对讲机：**按住对它说话，它调度这台 Mac 上的 agent
-干活**——派新任务、指挥已有会话、结果语音播报，危险操作在表上震动审批。
+干活**——当前可在腕上确认后指挥已有会话、观察结果和处理受支持的权限；派新任务属于后续能力。
 
 ## 硬件依据（StopWatch 提供的能力）
 
@@ -28,21 +28,18 @@
 ┌─ StopWatch (ESP32-S3) ──────────────────────────────┐
 │  按住 KEYA 说话（PTT）· KEYB 打断/取消                 │
 │  I2S 采音 16kHz PCM ──WebSocket──┐                   │
-│  震动: 审批请求 / 长任务完成       │  LAN (mDNS:       │
-│  圆屏: 派发前确认目标 + 结果详情   │  walkie.local,    │
-│  喇叭: TTS 播报                 │  静态IP兜底)        │
+│  震动: 审批请求 / 长任务完成       │  trusted LAN       │
+│  圆屏: 派发前确认目标 + 结果详情   │  静态 IP           │
+│  喇叭: TTS 播报                 │                    │
 └──────────────────────────────────│────────────────────┘
                                    ▼
 ┌─ Mac: walkie-bridge daemon（新子项目 tools/ 下）───────┐
-│  ASR:  DashScope qwen3-asr-flash（断网降级 whisper.cpp）│
-│  大脑: kimi -p 无头会话                                 │
-│        输入 = 转写文本 + 项目注册表 + cc-bridge 会话列表  │
-│        输出 = 结构化调度指令                             │
-│  调度: ├─ 新任务 → spawn kimi -p / claude -p @项目目录   │
-│        └─ 老会话 → cc-bridge steer → cmux 注入终端       │
-│  TTS:  edge-tts（断网降级 say）→ 回表播放                │
-│  审批: agent 要权限 → 推表震动 → KEYA批/KEYB拒          │
-│        （复用 buddy 审批链；"放手去干"口令才 yolo）       │
+│  ASR:  DashScope qwen3-asr-flash                       │
+│  认证: HMAC-SHA-256 双向证明 + session/seq 防重放         │
+│  路由: 显式别名 + cc-bridge 规范化现有会话快照            │
+│  调度: proposal → KEYA → stage/confirm → cmux exact surface│
+│  TTS:  macOS say → 回表播放 bounded pane 摘要             │
+│  审批: Claude/OpenCode 可 A批/B拒；Codex/Kimi 仅通知终端   │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -52,24 +49,21 @@
    云端大脑（Agora/小智）碰本地会话都别扭。固件也省事——不在 ESP32 上跑唤醒词/VAD。
 2. **PTT 交互**：按住 KEYA 说话、松开发送、震动确认。永不误触发，且天然给出
    语音边界（省 VAD）。KEYB = 打断/取消。
-3. **调度新老通吃**：新任务 spawn 无头 agent；老会话 steer（"让 stackchan 那个
-   会话把波特率改了"）。
+3. **当前只 steer 现有会话**：新任务 spawn 暂不开放；找不到目标时 fail closed。
 4. **结果回传 = 语音摘要 + 圆屏详情**；>30s 长任务自动转异步：挂起、完成时震动、
    等用户主动问。
 5. **音频传输 = 裸 PCM over WebSocket**（16kHz/16bit 单声道）。LAN 内 256kbps
    无压力，Opus/WebRTC 的复杂度用不上。要出公网那天再换。
-6. **ASR = DashScope Qwen ASR（qwen3-asr-flash）**，断网自动降级本地 whisper.cpp。
+6. **ASR = DashScope Qwen ASR（qwen3-asr-flash）**。本地 whisper.cpp 仍是 NEXT。
    注意：这意味着语音内容出云上阿里，已接受。
-7. **寻址 = 注册表 + LLM 匹配**：daemon 维护项目注册表（名字/路径/别名）+
-   cc-bridge 实时会话列表，大脑 LLM 做目标匹配。**派发前圆屏显示理解结果，
-   KEYA 确认才执行，KEYB 重说**——语音链路必须有一次眼见为实。
+7. **寻址 = 显式别名 + 唯一会话匹配**：daemon 读取 cc-bridge 的规范化会话快照，
+   不调用 LLM 猜目标。**派发前圆屏显示精确提案，KEYA 确认才执行，KEYB 拒绝**。
 8. **steer 通道 = cc-bridge 加 steer 命令**，走 cmux rpc 往终端窗口注入文本+回车。
    对所有终端 TUI agent（kimi/claude）通吃。kimi 出官方 steer API 后再议。
-9. **权限 = 继承 buddy 审批链**：spawn 的 agent 走正常权限模式，审批请求推给表，
-   震动 + 屏幕 + KEYA批/KEYB拒。显式口令"放手去干"才 yolo。
-10. **大脑 = `kimi -p` 无头会话**：复用 Kimi Code 登录态，零新密钥；大脑自带工具
-    能力（读注册表、查会话列表）。备选 `claude -p`，配置项。
-11. **服务发现 = mDNS（`walkie.local`）**，找不到时读配置里的静态 IP 兜底。
+9. **权限 = 能力驱动**：Claude Code / OpenCode 复用 pending future，first-response-wins；
+   Codex / Kimi Code 在未验证双向适配器前只提示去终端处理。禁止 yolo/bypass。
+10. **无独立“大脑”**：当前 `MultiAgentRouter` 是确定性策略层，四类 Coding Agent 平级。
+11. **连接 = 配置静态 IP**。mDNS（`walkie.local`）仍是 NEXT。
 
 ## 项目形态（按 monorepo 惯例）
 
@@ -86,16 +80,16 @@
 | 切片 | 内容 | 验证点 |
 |---|---|---|
 | **0** | 按住说话 → PCM 流到 Mac → ASR 转文字 → 圆屏回显 | 音频链路（全部技术风险在这：I2S + WebSocket 在 S3 上的稳定性）。不通就回头改决策 5 |
-| **1** | 派新任务闭环：语音→大脑→spawn agent→TTS 念结果 | 核心产品价值 |
-| **2** | 老会话 steer（cmux 注入） | 依赖 cc-bridge steer（OpenSpec change） |
-| **3** | 审批震动闭环 | buddy 审批链接入新 spawn 的会话 |
+| **1** | 已有会话 steer：认证→显式目标→腕上提案→cmux 注入 | 已实现，待四 Agent + 真机完整 smoke |
+| **2** | 能力驱动的权限与任务反馈 | Claude/OpenCode 可操作；Codex/Kimi 通知型 |
+| **3 (NEXT)** | 新会话 spawn、LLM 策略选择、WSS、离线 ASR、mDNS | 后续独立 OpenSpec change |
 
 切片0 是第零步验证，应该最先做——它发现音频链路不稳的代价最小。
 
 ## 凭证
 
 - DashScope API key 一枚（ASR）。
-- 大脑白嫖 Kimi Code 登录态，无需新密钥。
+- 每台表一枚随机 32-byte control secret，仅存 ignored 本地配置。
 
 ## 未定的实现期细节（不影响架构）
 

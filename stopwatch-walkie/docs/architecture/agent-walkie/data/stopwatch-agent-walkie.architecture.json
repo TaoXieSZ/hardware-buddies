@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "StopWatch Multi-Agent Walkie 架构",
+    "subtitle": "NOW：Qwen ASR + HMAC 腕上确认 + 现有四类 Agent 会话 steer · NEXT：spawn / WSS / offline ASR",
+    "output": "stopwatch-agent-walkie.html",
+    "visual_preset": "classic",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "current-loop",
+        "label": "当前语音闭环",
+        "focus": ["user", "watch-ui", "watch-firmware", "ws-bridge", "qwen-asr", "feedback"],
+        "note": "已验证：按住说话、Qwen ASR、文字回显、Mac TTS 回放。"
+      },
+      {
+        "id": "approval-loop",
+        "label": "腕上确认闭环",
+        "focus": ["user", "watch-ui", "ws-bridge", "dispatch-gate", "agent-router"],
+        "note": "已实现：语音先变成可读提案，必须在手表确认后才能派发。"
+      },
+      {
+        "id": "multi-agent-routing",
+        "label": "多 Agent 编排",
+        "focus": ["dispatch-gate", "agent-router", "opencode", "codex", "claude-code", "kimi-code"],
+        "note": "统一 Router 只按显式别名选择现有 Coding Agent 会话；不猜目标、不启动新会话。"
+      },
+      {
+        "id": "trust-boundaries",
+        "label": "数据与信任边界",
+        "focus": ["watch-firmware", "ws-bridge", "qwen-asr", "dispatch-gate", "agent-router"],
+        "note": "音频仅为 ASR 离开本地；控制 JSON 已认证并防重放；API Key、代码与 Agent 会话留在本机。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "使用者",
+      "sublabel": "说话 · 查看 · 确认",
+      "pos": [30, 360],
+      "size": [140, 66],
+      "tag": "HUMAN"
+    },
+    {
+      "id": "watch-ui",
+      "type": "frontend",
+      "label": "腕上交互",
+      "sublabel": "466×466 AMOLED · A/B 键",
+      "pos": [220, 220],
+      "size": [168, 70],
+      "tag": "NOW + NEXT"
+    },
+    {
+      "id": "watch-firmware",
+      "type": "backend",
+      "label": "StopWatch 固件",
+      "sublabel": "ESP32-S3 · Mic/Speaker/Haptic",
+      "pos": [220, 360],
+      "size": [168, 70],
+      "tag": "NOW"
+    },
+    {
+      "id": "qwen-asr",
+      "type": "cloud",
+      "label": "百炼 Qwen ASR",
+      "sublabel": "qwen3-asr-flash",
+      "pos": [480, 70],
+      "size": [164, 68],
+      "tag": "NOW · CLOUD"
+    },
+    {
+      "id": "ws-bridge",
+      "type": "backend",
+      "label": "Walkie Bridge",
+      "sublabel": "Python · WebSocket :8765",
+      "pos": [480, 360],
+      "size": [164, 70],
+      "tag": "NOW · LOCAL"
+    },
+    {
+      "id": "feedback",
+      "type": "backend",
+      "label": "反馈合成",
+      "sublabel": "say · Agent pane 摘要",
+      "pos": [480, 560],
+      "size": [164, 68],
+      "tag": "NOW"
+    },
+    {
+      "id": "dispatch-gate",
+      "type": "security",
+      "label": "派发确认闸门",
+      "sublabel": "HMAC 提案 · A 确认 / B 拒绝",
+      "pos": [720, 360],
+      "size": [176, 70],
+      "tag": "NOW"
+    },
+    {
+      "id": "agent-router",
+      "type": "messagebus",
+      "label": "Multi-Agent Router",
+      "sublabel": "显式别名 · 现有会话路由",
+      "pos": [950, 360],
+      "size": [180, 70],
+      "tag": "NOW · LOCAL"
+    },
+    {
+      "id": "opencode",
+      "type": "backend",
+      "label": "OpenCode",
+      "sublabel": "opencode-bridge · session",
+      "pos": [1230, 160],
+      "size": [178, 66],
+      "tag": "NOW"
+    },
+    {
+      "id": "codex",
+      "type": "backend",
+      "label": "Codex",
+      "sublabel": "codex-bridge · task",
+      "pos": [1230, 285],
+      "size": [178, 66],
+      "tag": "NOW"
+    },
+    {
+      "id": "claude-code",
+      "type": "backend",
+      "label": "Claude Code",
+      "sublabel": "cc-bridge · session",
+      "pos": [1230, 410],
+      "size": [178, 66],
+      "tag": "NOW"
+    },
+    {
+      "id": "kimi-code",
+      "type": "backend",
+      "label": "Kimi Code",
+      "sublabel": "hooks → cc-bridge",
+      "pos": [1230, 535],
+      "size": [178, 66],
+      "tag": "NOW"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "M5 StopWatch · 随身端",
+      "wraps": ["watch-ui", "watch-firmware"]
+    },
+    {
+      "kind": "region",
+      "label": "Mac · 当前语音原型",
+      "wraps": ["ws-bridge", "feedback"]
+    },
+    {
+      "kind": "security-group",
+      "label": "阿里云百炼 · 外部处理边界",
+      "wraps": ["qwen-asr"],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "Mac · 当前 steer-only Agent 平面",
+      "wraps": ["dispatch-gate", "agent-router", "opencode", "codex", "claude-code", "kimi-code"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-watch",
+      "from": "user",
+      "to": "watch-ui",
+      "label": "语音 / 按键 / 反馈",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[185, 393], [185, 255]],
+      "labelAt": [185, 324]
+    },
+    {
+      "id": "ui-firmware",
+      "from": "watch-ui",
+      "to": "watch-firmware",
+      "label": "UI 状态 + 设备 I/O",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelAt": [304, 325]
+    },
+    {
+      "id": "pcm-stream",
+      "from": "watch-firmware",
+      "to": "ws-bridge",
+      "label": "WS · PCM 16 kHz",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "id": "asr-request",
+      "from": "ws-bridge",
+      "to": "qwen-asr",
+      "label": "HTTPS · 音频 → 文本",
+      "variant": "security",
+      "route": "straight",
+      "labelAt": [656, 342]
+    },
+    {
+      "id": "transcript-return",
+      "from": "ws-bridge",
+      "to": "watch-ui",
+      "label": "transcript",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "right",
+      "via": [[562, 320], [430, 320], [430, 255]],
+      "labelAt": [487, 308]
+    },
+    {
+      "id": "feedback-build",
+      "from": "ws-bridge",
+      "to": "feedback",
+      "label": "文字 / 结果摘要",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelAt": [646, 495]
+    },
+    {
+      "id": "feedback-playback",
+      "from": "feedback",
+      "to": "watch-firmware",
+      "label": "PCM 回放",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "bottom",
+      "via": [[440, 594], [430, 594], [430, 490], [304, 490]],
+      "labelAt": [372, 479]
+    },
+    {
+      "id": "proposal-decision",
+      "from": "ws-bridge",
+      "to": "dispatch-gate",
+      "label": "提案 ↔ 腕上决定",
+      "variant": "dashed",
+      "route": "straight",
+      "labelAt": [682, 346]
+    },
+    {
+      "id": "approved-command",
+      "from": "dispatch-gate",
+      "to": "agent-router",
+      "label": "已确认命令 ↔ 状态",
+      "variant": "dashed",
+      "route": "straight",
+      "labelAt": [923, 346]
+    },
+    {
+      "id": "route-opencode",
+      "from": "agent-router",
+      "to": "opencode",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1160, 395], [1160, 193]]
+    },
+    {
+      "id": "route-codex",
+      "from": "agent-router",
+      "to": "codex",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1180, 395], [1180, 318]]
+    },
+    {
+      "id": "route-claude",
+      "from": "agent-router",
+      "to": "claude-code",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1200, 395], [1200, 443]]
+    },
+    {
+      "id": "route-kimi",
+      "from": "agent-router",
+      "to": "kimi-code",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1220, 395], [1220, 568]]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "NOW · 已跑通",
+      "items": [
+        "KEYA 按住录音，KEYB 可取消；固件采集 16 kHz / 16-bit 单声道 PCM",
+        "Mac Bridge 调用百炼 qwen3-asr-flash，并把 transcript 回显到高清界面",
+        "macOS say 生成回声语音，手表切换 Mic/Speaker 后播放并恢复录音"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "NOW · steer-only 多 Agent 控制面",
+      "items": [
+        "ASR 结果先生成提案，不直接执行；腕上 A 确认、B 取消或重说",
+        "Multi-Agent Router 按显式别名选择现有 OpenCode、Codex、Claude Code 或 Kimi Code 会话",
+        "各适配器双向传递命令、进度、权限请求和结果，统一回到手表展示、震动与播报"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "边界与约束",
+      "items": [
+        "DashScope API Key 只保留在 Mac，不下发到手表",
+        "原始音频只为 ASR 发送到百炼；Agent、代码仓库与会话均留在本机",
+        "控制 JSON 已认证并防重放；ws:// 音频仍仅适用于可信局域网，正式化前需 WSS"
+      ]
+    }
+  ]
+}

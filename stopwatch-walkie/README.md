@@ -2,15 +2,20 @@
 
 M5 StopWatch push-to-talk audio prototype. The watch captures 16 kHz mono
 signed 16-bit PCM while KEYA is held, streams it to a trusted-LAN Mac bridge,
-and displays the final DashScope `qwen3-asr-flash` transcript.
+displays the final DashScope `qwen3-asr-flash` transcript, and either plays that
+text through the watch speaker (protocol v1) or presents an authenticated
+proposal for steering one existing local coding-agent session (protocol v2).
 
-This prototype proves the audio loop only. It does not dispatch an agent,
-steer an existing session, play TTS, or approve permissions.
+Protocol v2 supports live Claude Code, Codex, OpenCode, and Kimi Code sessions
+already visible to cc-bridge. It never starts a new agent. The exact recognized
+command remains server-side until KEYA approves it; KEYB rejects it without
+sending terminal input.
 
 ## Prerequisites
 
 - PlatformIO Core 6.x
 - Python 3.10 or newer
+- macOS `say` and `afconvert` for the current dependency-free TTS path
 - An M5 StopWatch connected by USB
 - The Mac and StopWatch on the same trusted LAN
 - A DashScope API key and workspace-specific OpenAI-compatible base URL
@@ -54,6 +59,26 @@ ESP32 MAC.
 Never commit `include/walkie_config.h`. The project-specific installed name
 avoids a collision with the ESP32 framework's unrelated generic `config.h`.
 
+### Enable protocol-v2 control mode
+
+Control mode is opt-in and falls back to protocol-v1 audio-only operation when
+disabled. Generate one random 32-byte base64url secret locally:
+
+```bash
+python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode())'
+```
+
+Put the same value in the ignored files only:
+
+- `include/walkie_config.h`: set `WALKIE_CONTROL_ENABLED` to `1` and
+  `WALKIE_CONTROL_SECRET` to the generated value.
+- `tools/walkie-bridge/.env`: set `WALKIE_CONTROL_ENABLED=1` and
+  `WALKIE_CONTROL_SECRET` to the same value.
+
+The secret must decode to exactly 32 bytes. Never commit either local file.
+Protocol v2 authenticates and replay-protects control JSON with HMAC-SHA-256;
+PCM audio remains plaintext on the trusted LAN.
+
 ## Build and test the firmware
 
 Run the host-side state-machine, protocol, and bounded-queue tests first:
@@ -72,8 +97,8 @@ pio run -e m5stack-stopwatch
 
 ## Try the interface without Wi-Fi
 
-The `m5stack-stopwatch-ui-demo` environment uses the same round-screen renderer
-as the runtime firmware but skips Wi-Fi and WebSocket startup. It is intended for
+The `m5stack-stopwatch-ui-demo` environment uses the same embedded 466×466 PNG
+assets as the runtime firmware but skips Wi-Fi and WebSocket startup. It is intended for
 visual and physical-key review when the Mac and watch are on different networks.
 
 ```bash
@@ -113,8 +138,54 @@ python -m pip install -r requirements-dev.txt
 
 export DASHSCOPE_API_KEY='...'
 export DASHSCOPE_BASE_URL='https://<WorkspaceId>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
+export WALKIE_TTS_VOICE='Tingting'
 python bridge.py --host 0.0.0.0 --port 8765
 ```
+
+启动后在 Mac 浏览器打开 [StopWatch Bridge 看板](http://127.0.0.1:8766/)。
+8765 是手表连接的 WebSocket 端口；8766 是只绑定 IPv4 loopback 的只读
+看板；现有 cc-bridge 页面使用的 18765 与这两个端口不是同一个服务。
+看板默认开启，也可以在忽略提交的 `.env` 中调整：
+
+```dotenv
+WALKIE_DASHBOARD_ENABLED=1
+WALKIE_DASHBOARD_PORT=8766
+```
+
+For control mode, start cc-bridge first, then walkie-bridge. The default local
+socket is `/tmp/cc-bridge.sock` and is created owner-only (`0600`). A typical
+ignored `.env` addition is:
+
+```dotenv
+WALKIE_CONTROL_ENABLED=1
+WALKIE_CONTROL_SECRET=<same-base64url-secret-as-the-watch>
+WALKIE_CC_BRIDGE_SOCKET=/tmp/cc-bridge.sock
+WALKIE_PROPOSAL_TTL=60
+WALKIE_CONTROL_ALIASES_JSON={"小表 codex":{"agent":"codex","project_label":"hardware-buddies"}}
+```
+
+Targeting is deterministic. A configured alias must prefix the spoken command,
+or a supported agent name may prefix a unique live agent/session/project label.
+Examples: `小表 codex 跑单元测试`, `claude alpha review this diff`, and
+`opencode website fix the header`. Missing or ambiguous targets show a bounded
+retry error; the bridge does not ask an LLM to guess the destination.
+
+看板会把语音链路明确标成录音、百炼识别、路由、手表确认和 Agent 执行。
+如果只看到 ASR 完成而没有提案，先看“识别与诊断”：`target_required`
+表示语音没有以 Agent/别名开头，`target_not_found` 表示没有匹配会话，
+`target_ambiguous` 表示需要补充会话/项目标签，`spawn_not_supported` 表示
+试图从手表新建会话，`control_plane_unavailable` 表示 cc-bridge 控制面离线。
+这些错误都不会发送终端输入。
+
+| Agent | Steer existing unique session | Reply to permission on watch |
+|---|---:|---:|
+| Claude Code | Yes | Yes |
+| OpenCode | Yes | Yes |
+| Codex | Yes | No; answer in terminal |
+| Kimi Code | Yes | No; answer in terminal |
+
+Codex or Kimi panes whose available native identity collides remain visible but
+are marked non-steerable. No “first pane wins” fallback is used.
 
 Use the workspace endpoint for the selected DashScope region. The bridge exits
 with a local configuration error when either required DashScope setting is
@@ -140,15 +211,26 @@ Without the opt-in flag or DashScope settings, the live test is skipped.
 After the bridge reports that it is listening and the watch shows `Ready`:
 
 1. Hold KEYA for at least five seconds while speaking, then release it. Confirm
-   `Ready -> Recording -> Transcribing -> Result` and one short vibration only
-   after capture stops.
+   `Ready -> Recording -> Transcribing -> Result`, a readable transcript, one
+   short vibration after capture stops, and matching speech from the watch.
 2. Hold KEYA, press KEYB, and confirm the watch returns to `Ready` without an
    ASR request.
 3. During recording, stop the bridge. Confirm the partial utterance is discarded,
    the watch shows a connection error, and it returns to `Ready` after reconnect.
 4. Repeat at least 20 five-second utterances in the same watch and bridge
    processes. Check serial logs for a stable boot, correlated utterance IDs,
-   and no `device_queue_overflow` event.
+and no `device_queue_overflow` event.
+
+With protocol v2 enabled, additionally verify a harmless existing session:
+
+1. Speak an explicit alias and command. Confirm the proposal screen shows the
+   intended agent/project/session and exact bounded preview before any terminal
+   input occurs.
+2. Press KEYB and confirm the target pane receives nothing.
+3. Repeat, press KEYA once, and confirm the exact text plus one Enter arrives
+   once. Repeating or replaying the decision must not send it again.
+4. Disconnect and reconnect while a task is running. The watch may restore the
+   latest state or cached terminal result, but must not redispatch.
 
 The serial-only hardware acceptance still requires confirming that physical
 KEYA maps to `M5.BtnA`, KEYB maps to `M5.BtnB`, microphone samples are non-silent,
@@ -157,15 +239,28 @@ captured utterance.
 
 ## Prototype security and privacy limits
 
-- The WebSocket is plain `ws://` with no authentication. Use it only on a trusted
-  development LAN; do not port-forward or expose the bridge publicly.
+- Protocol-v1 WebSocket traffic is unauthenticated. Protocol v2 authenticates
+  control messages and rejects replay, but both still use plaintext `ws://`.
+  Use only on a trusted development LAN; do not port-forward or expose the
+  bridge publicly. WSS is required before production or untrusted networks.
 - Audio is sent only between KEYA press and release and is buffered in memory for
   at most 60 seconds, but the completed utterance is sent to DashScope for ASR.
 - Normal logs include IDs, byte counts, latency, queue watermarks, and error codes.
   They must not contain PCM/Base64 data, API keys, Wi-Fi passwords, or full
   transcripts.
-- There is no production launchd service, TLS, multi-device routing, or offline
+- The dashboard is read-only, memory-only, and bound to `127.0.0.1`. It keeps at
+  most 200 semantic events and at most 160 UTF-8 bytes of transcript/proposal
+  preview. It never exposes secrets, PCM, cwd/surface/session identifiers, raw
+  control payloads, terminal output, or a command-entry endpoint. Physical
+  KEYA/KEYB confirmation remains the only approval authority.
+- There is no production launchd service, WSS, multi-device routing, mDNS, or offline
   transcription fallback in this change.
+
+To roll back, set `WALKIE_CONTROL_ENABLED=0` in both ignored configurations,
+restart walkie-bridge, and rebuild/reflash the runtime firmware. cc-bridge's
+existing BLE/session behavior is unchanged; no data migration is required.
+To disable only the browser view without changing watch behavior, set
+`WALKIE_DASHBOARD_ENABLED=0` and restart walkie-bridge.
 
 ## Restore the factory demo
 

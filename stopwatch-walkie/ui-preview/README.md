@@ -23,5 +23,5 @@ node scripts/measure-device-fidelity.mjs
 
 The interactive HTML remains a review artifact and does not connect to Wi-Fi,
 capture audio, or flash the device. The generated device PNGs are compiled only
-into the `m5stack-stopwatch-ui-demo` environment; the production runtime keeps
-its dynamic UI path unchanged until the visual direction is approved on-device.
+into both StopWatch environments. The production runtime reuses the approved
+frames and redraws only dynamic content such as the live waveform and transcript.

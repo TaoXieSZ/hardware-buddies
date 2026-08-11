@@ -1,6 +1,7 @@
 #include "audio_constants.h"
 #include "audio_loop.h"
 #include "audio_queue.h"
+#include "control_protocol.h"
 #include "protocol.h"
 #include "walkie_ui.h"
 
@@ -13,6 +14,15 @@
 #define WALKIE_WS_PORT 8765
 #define WALKIE_WS_PATH "/audio"
 #define WALKIE_DEVICE_ID ""
+#define WALKIE_CONTROL_ENABLED 0
+#define WALKIE_CONTROL_SECRET ""
+#endif
+
+#ifndef WALKIE_CONTROL_ENABLED
+#define WALKIE_CONTROL_ENABLED 0
+#endif
+#ifndef WALKIE_CONTROL_SECRET
+#define WALKIE_CONTROL_SECRET ""
 #endif
 
 #include <Arduino.h>
@@ -21,6 +31,8 @@
 #include <M5Unified.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -34,6 +46,7 @@ constexpr uint8_t kIoeAddrSecondary = 0x6F;
 constexpr uint8_t kMotorPin = M5IOE1_PIN_9;
 constexpr uint8_t kMotorPwmChannel = 0;
 constexpr uint16_t kMotorPwmHz = 5000;
+constexpr size_t kMaxTtsPcmBytes = 16000 * sizeof(int16_t) * 30;
 
 AudioLoop loop_state;
 AudioQueue audio_queue;
@@ -51,12 +64,29 @@ uint32_t last_ui_ms = 0;
 bool ws_connected = false;
 bool ioe_ready = false;
 bool ws_started = false;
+bool ws_attempt_in_progress = false;
 uint16_t ui_audio_level = 0;
+uint8_t* tts_pcm = nullptr;
+size_t tts_pcm_bytes = 0;
+String tts_result_id;
+bool tts_receiving = false;
+bool tts_playing = false;
+ControlCrypto control_crypto;
+SequenceWindow inbound_control_sequence;
+String control_device_nonce;
+String control_bridge_nonce;
+String control_session_id;
+uint64_t outbound_control_sequence = 0;
+bool control_authenticated = false;
+bool control_mode = false;
 
 #if defined(WALKIE_UI_DEMO)
-constexpr std::array<DeviceState, 6> kDemoStates = {
+constexpr std::array<DeviceState, 13> kDemoStates = {
     DeviceState::Connecting, DeviceState::Ready,         DeviceState::Recording,
     DeviceState::Transcribing, DeviceState::Result,      DeviceState::Error,
+    DeviceState::ProposalReview, DeviceState::Dispatching, DeviceState::Running,
+    DeviceState::WaitingPermission, DeviceState::Completed, DeviceState::Cancelled,
+    DeviceState::Failed,
 };
 size_t demo_state_index = 0;
 #endif
@@ -81,8 +111,62 @@ bool sendText(const std::string& payload)
     if (ws_connected) {
         sent = web_socket.sendTXT(reinterpret_cast<const uint8_t*>(payload.c_str()), payload.size());
     }
-    Serial.printf("[ws] tx %s %s\n", sent ? "ok" : "failed", payload.c_str());
+    Serial.printf("[ws] tx %s bytes=%u\n", sent ? "ok" : "failed", static_cast<unsigned>(payload.size()));
     return sent;
+}
+
+String randomToken()
+{
+    uint8_t bytes[kControlNonceBytes]{};
+    esp_fill_random(bytes, sizeof(bytes));
+    return String(base64UrlEncode(bytes, sizeof(bytes)).c_str());
+}
+
+bool sendControlText(const std::string& body)
+{
+    if (!control_authenticated) {
+        return sendText(body);
+    }
+    if (body.size() > kMaxControlBodyBytes || outbound_control_sequence == UINT64_MAX) {
+        return false;
+    }
+    const std::string encoded = base64UrlEncode(reinterpret_cast<const uint8_t*>(body.data()), body.size());
+    const uint64_t sequence = ++outbound_control_sequence;
+    const std::string mac = control_crypto.envelopeMac("d2b", control_session_id.c_str(), sequence, encoded);
+    JsonDocument envelope;
+    envelope["session_id"] = control_session_id;
+    envelope["direction"] = "d2b";
+    envelope["seq"] = sequence;
+    envelope["body"] = encoded;
+    envelope["mac"] = mac;
+    String serialized;
+    serializeJson(envelope, serialized);
+    return sendText(serialized.c_str());
+}
+
+bool decodeControlEnvelope(const JsonDocument& envelope, String& body)
+{
+    if (!control_authenticated || String(envelope["session_id"] | "") != control_session_id ||
+        std::strcmp(envelope["direction"] | "", "b2d") != 0) {
+        return false;
+    }
+    const uint64_t sequence = envelope["seq"] | 0ULL;
+    const std::string encoded = envelope["body"] | "";
+    const std::string received_mac = envelope["mac"] | "";
+    if (sequence == 0 || sequence <= inbound_control_sequence.last() || encoded.size() > kMaxControlBodyBytes * 2) {
+        return false;
+    }
+    const std::string expected = control_crypto.envelopeMac("b2d", control_session_id.c_str(), sequence, encoded);
+    if (expected.empty() || !constantTimeEqual(expected, received_mac)) {
+        return false;
+    }
+    std::vector<uint8_t> decoded;
+    if (!base64UrlDecode(encoded, decoded) || decoded.size() > kMaxControlBodyBytes) {
+        return false;
+    }
+    decoded.push_back(0);
+    body = String(reinterpret_cast<const char*>(decoded.data()));
+    return inbound_control_sequence.accept(sequence);
 }
 
 void updateAudioLevel()
@@ -107,26 +191,33 @@ void renderUi(bool force = false)
 
     UiModel model;
 #if defined(WALKIE_UI_DEMO)
-    static constexpr std::array<const char*, 6> kDemoDetails = {
+    static constexpr std::array<const char*, 13> kDemoDetails = {
         "Searching for your Mac", "Press A to explore", "Speak to test the mic",
         "Sending audio securely", "Agent reply received", "bridge_unreachable",
+        "run the focused tests", "Verifying exact target", "Agent is working",
+        "shell needs approval", "All tests passed", "Nothing was sent", "target_stale",
     };
     model.state = kDemoStates[demo_state_index];
     model.detail = kDemoDetails[demo_state_index];
     model.retryable = true;
     model.showcase = true;
+    model.actionable = model.state == DeviceState::ProposalReview || model.state == DeviceState::WaitingPermission;
 #else
     String detail;
     model.state = loop_state.state();
     model.retryable = loop_state.retryableError();
     if (model.state == DeviceState::Connecting) {
         detail = String(WALKIE_WS_HOST) + ":" + String(WALKIE_WS_PORT);
-    } else if (model.state == DeviceState::Result) {
+    } else if (model.state == DeviceState::Result || model.state == DeviceState::ProposalReview ||
+               model.state == DeviceState::WaitingPermission || model.state == DeviceState::Completed ||
+               model.state == DeviceState::Cancelled || model.state == DeviceState::Failed) {
         detail = String(loop_state.resultText().c_str());
     } else if (model.state == DeviceState::Error) {
         detail = String(loop_state.errorCode().c_str());
     }
     model.detail = detail.c_str();
+    model.actionable = model.state == DeviceState::ProposalReview ||
+                       (model.state == DeviceState::WaitingPermission && loop_state.permissionActionable());
 #endif
     model.audio_level = ui_audio_level;
     walkie_ui.render(model, now);
@@ -171,6 +262,20 @@ void releaseAck()
     ioe.setPwmDuty(kMotorPwmChannel, 0, false, true);
 }
 
+void controlFeedback(DeviceState state)
+{
+    if (!ioe_ready) return;
+    const uint8_t strength = state == DeviceState::WaitingPermission ? 75 : 55;
+    const uint16_t duration = state == DeviceState::Completed ? 90 : 55;
+    const int pulses = state == DeviceState::WaitingPermission ? 2 : 1;
+    for (int i = 0; i < pulses; ++i) {
+        ioe.setPwmDuty(kMotorPwmChannel, motorDutyFromStrength(strength), false, true);
+        delay(duration);
+        ioe.setPwmDuty(kMotorPwmChannel, 0, false, true);
+        if (i + 1 < pulses) delay(45);
+    }
+}
+
 void resetBackoff()
 {
     reconnect_delay_ms = kReconnectInitialMs;
@@ -193,17 +298,39 @@ void beginWebSocket()
 
 bool sendStart(const std::string& id)
 {
-    return sendText(utteranceStartMessage(id));
+    return sendControlText(utteranceStartMessage(id));
 }
 
 bool sendEnd(const std::string& id)
 {
-    return sendText(utteranceEndMessage(id));
+    return sendControlText(utteranceEndMessage(id));
 }
 
 bool sendCancel(const std::string& id)
 {
-    return sendText(utteranceCancelMessage(id));
+    return sendControlText(utteranceCancelMessage(id));
+}
+
+bool sendDecision(const char* type, const std::string& id, const char* decision)
+{
+    JsonDocument doc;
+    doc["type"] = type;
+    if (std::strcmp(type, "command.decision") == 0) doc["command_id"] = id;
+    else doc["request_id"] = id;
+    doc["decision"] = decision;
+    String serialized;
+    serializeJson(doc, serialized);
+    return sendControlText(serialized.c_str());
+}
+
+bool sendTaskSnapshot(const std::string& task_id)
+{
+    JsonDocument doc;
+    doc["type"] = "task.snapshot";
+    doc["task_id"] = task_id;
+    String serialized;
+    serializeJson(doc, serialized);
+    return sendControlText(serialized.c_str());
 }
 
 void cancelActiveForDeviceError(const char* code)
@@ -226,15 +353,179 @@ void handleTextFrame(const uint8_t* payload, size_t length)
         return;
     }
 
+    if (!doc["type"].is<const char*>()) {
+        String body;
+        if (!decodeControlEnvelope(doc, body)) {
+            Serial.println("[control] rejected envelope");
+            return;
+        }
+        handleTextFrame(reinterpret_cast<const uint8_t*>(body.c_str()), body.length());
+        return;
+    }
+
     const char* type = doc["type"] | "";
     const char* id = doc["id"] | "";
+    if (std::strcmp(type, "auth.challenge") == 0) {
+        if (!control_mode || control_device_nonce.isEmpty()) {
+            Serial.println("[control] unexpected challenge");
+            return;
+        }
+        control_bridge_nonce = doc["bridge_nonce"] | "";
+        control_session_id = doc["session_id"] | "";
+        const std::string proof = doc["proof"] | "";
+        if (control_bridge_nonce.length() > kMaxSessionId || control_session_id.length() > kMaxSessionId ||
+            proof.size() > kMaxSessionId) {
+            loop_state.onControlError("authentication_failed", false);
+            renderUi(true);
+            return;
+        }
+        const std::string expected = control_crypto.proof(
+            "bridge", device_id.c_str(), control_device_nonce.c_str(),
+            control_bridge_nonce.c_str(), control_session_id.c_str());
+        if (control_bridge_nonce.isEmpty() || control_session_id.isEmpty() || !constantTimeEqual(expected, proof)) {
+            loop_state.onControlError("authentication_failed", false);
+            renderUi(true);
+            return;
+        }
+        JsonDocument response;
+        response["type"] = "auth.proof";
+        response["proof"] = control_crypto.proof(
+            "device", device_id.c_str(), control_device_nonce.c_str(),
+            control_bridge_nonce.c_str(), control_session_id.c_str());
+        String serialized;
+        serializeJson(response, serialized);
+        if (!sendText(serialized.c_str())) {
+            loop_state.onControlError("authentication_send_failed", true);
+            renderUi(true);
+            return;
+        }
+        inbound_control_sequence.reset();
+        outbound_control_sequence = 0;
+        control_authenticated = true;
+        return;
+    }
+    if (std::strcmp(type, "auth.ok") == 0) {
+        loop_state.onConnected();
+        if (!loop_state.taskId().empty()) sendTaskSnapshot(loop_state.taskId());
+        renderUi(true);
+        return;
+    }
     if (std::strcmp(type, "transcript") == 0) {
         const char* text = doc["text"] | "";
         if (!loop_state.onTranscript(id, text)) {
             Serial.printf("[ws] ignored transcript for id=%s\n", id);
             return;
         }
+        tts_result_id = id;
         renderUi(true);
+        return;
+    }
+
+    if (std::strcmp(type, "audio.start") == 0) {
+        JsonObjectConst audio = doc["audio"];
+        const bool format_ok = (audio["rate"] | 0) == 16000 && (audio["bits"] | 0) == 16 &&
+                               (audio["channels"] | 0) == 1 &&
+                               std::strcmp(audio["encoding"] | "", "pcm_s16le") == 0;
+        if (!tts_pcm || tts_result_id != id || !format_ok || tts_playing) {
+            Serial.printf("[tts] rejected start id=%s\n", id);
+            return;
+        }
+        tts_pcm_bytes = 0;
+        tts_receiving = true;
+        Serial.printf("[tts] receiving id=%s\n", id);
+        return;
+    }
+
+    if (std::strcmp(type, "command.proposal") == 0) {
+        const std::string command_id = doc["command_id"] | "";
+        const std::string preview = doc["preview"] | "";
+        if (command_id.size() <= kMaxCommandId && preview.size() <= kMaxPreview &&
+            loop_state.onProposal(command_id, preview)) {
+            controlFeedback(DeviceState::ProposalReview);
+            renderUi(true);
+        }
+        return;
+    }
+
+    if (std::strcmp(type, "command.error") == 0) {
+        loop_state.onControlError(doc["code"] | "target_required", true);
+        renderUi(true);
+        return;
+    }
+
+    if (std::strcmp(type, "task.accepted") == 0) {
+        const std::string command_id = doc["command_id"] | "";
+        const std::string task_id = doc["task_id"] | "";
+        if (command_id.size() <= kMaxCommandId && task_id.size() <= kMaxTaskId &&
+            loop_state.onTaskAccepted(command_id, task_id)) renderUi(true);
+        return;
+    }
+    if (std::strcmp(type, "task.running") == 0) {
+        if (loop_state.onTaskRunning(doc["task_id"] | "")) renderUi(true);
+        return;
+    }
+    if (std::strcmp(type, "permission.request") == 0) {
+        const std::string task_id = doc["task_id"] | "";
+        const std::string request_id = doc["request_id"] | "";
+        const std::string hint = doc["hint"] | "Permission requested";
+        const bool actionable = doc["actionable"] | false;
+        if (request_id.size() <= kMaxCommandId && hint.size() <= kMaxErrorDetail &&
+            loop_state.onPermission(task_id, request_id, hint, actionable)) {
+            controlFeedback(DeviceState::WaitingPermission);
+            renderUi(true);
+        }
+        return;
+    }
+    if (std::strcmp(type, "permission.resolved") == 0) {
+        if (String(doc["request_id"] | "") == loop_state.permissionId().c_str()) {
+            loop_state.onTaskRunning(loop_state.taskId());
+            renderUi(true);
+        }
+        return;
+    }
+    if (std::strcmp(type, "task.completed") == 0 || std::strcmp(type, "task.failed") == 0 ||
+        std::strcmp(type, "task.cancelled") == 0) {
+        const std::string task_id = doc["task_id"] | "";
+        const std::string command_id = doc["command_id"] | "";
+        const std::string detail = std::strcmp(type, "task.completed") == 0
+            ? std::string(doc["summary"] | "Completed") : std::string(doc["code"] | type);
+        DeviceState terminal = DeviceState::Failed;
+        if (std::strcmp(type, "task.completed") == 0) terminal = DeviceState::Completed;
+        else if (std::strcmp(type, "task.cancelled") == 0) terminal = DeviceState::Cancelled;
+        bool changed = loop_state.onTaskTerminal(task_id, terminal, detail);
+        if (!changed && terminal == DeviceState::Failed) changed = loop_state.onDispatchFailed(command_id, detail);
+        if (changed) {
+            tts_result_id = task_id.c_str();
+            controlFeedback(terminal);
+            renderUi(true);
+        }
+        return;
+    }
+
+    if (std::strcmp(type, "audio.end") == 0) {
+        if (!tts_receiving || tts_result_id != id || tts_pcm_bytes == 0 || (tts_pcm_bytes % 2) != 0) {
+            Serial.printf("[tts] rejected end id=%s bytes=%u\n", id, static_cast<unsigned>(tts_pcm_bytes));
+            tts_receiving = false;
+            tts_pcm_bytes = 0;
+            return;
+        }
+        tts_receiving = false;
+        while (M5.Mic.isRecording()) {
+            M5.delay(1);
+        }
+        M5.Mic.end();
+        M5.Speaker.setVolume(180);
+        if (!M5.Speaker.begin() ||
+            !M5.Speaker.playRaw(reinterpret_cast<const int16_t*>(tts_pcm), tts_pcm_bytes / sizeof(int16_t), 16000,
+                                false, 1, 0, true)) {
+            Serial.println("[tts] playback start failed");
+            M5.Speaker.end();
+            M5.Mic.begin();
+            tts_pcm_bytes = 0;
+            return;
+        }
+        tts_playing = true;
+        Serial.printf("[tts] playback started bytes=%u\n", static_cast<unsigned>(tts_pcm_bytes));
         return;
     }
 
@@ -255,22 +546,52 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length)
     switch (type) {
         case WStype_CONNECTED:
             ws_connected = true;
+            ws_attempt_in_progress = false;
             resetBackoff();
-            loop_state.onConnected();
-            sendText(helloMessage(device_id.c_str()));
+            control_authenticated = false;
+            inbound_control_sequence.reset();
+            outbound_control_sequence = 0;
+            if (control_mode) {
+                control_device_nonce = randomToken();
+                JsonDocument hello;
+                hello["type"] = "hello";
+                hello["protocol"] = kProtocolV2;
+                hello["device_id"] = device_id;
+                hello["device_nonce"] = control_device_nonce;
+                String serialized;
+                serializeJson(hello, serialized);
+                sendText(serialized.c_str());
+            } else {
+                loop_state.onConnected();
+                sendText(helloMessage(device_id.c_str()));
+            }
             renderUi(true);
             Serial.println("[ws] connected");
             break;
         case WStype_DISCONNECTED:
             ws_connected = false;
+            ws_attempt_in_progress = false;
             audio_queue.clear();
             loop_state.onDisconnected();
+            control_authenticated = false;
+            control_session_id = "";
             scheduleReconnect();
             renderUi(true);
             Serial.println("[ws] disconnected");
             break;
         case WStype_TEXT:
             handleTextFrame(payload, length);
+            break;
+        case WStype_BIN:
+            if (!tts_receiving || !tts_pcm || (length % 2) != 0 || tts_pcm_bytes + length > kMaxTtsPcmBytes) {
+                Serial.printf("[tts] rejected audio chunk bytes=%u total=%u\n", static_cast<unsigned>(length),
+                              static_cast<unsigned>(tts_pcm_bytes));
+                tts_receiving = false;
+                tts_pcm_bytes = 0;
+                break;
+            }
+            std::memcpy(tts_pcm + tts_pcm_bytes, payload, length);
+            tts_pcm_bytes += length;
             break;
         default:
             break;
@@ -305,6 +626,10 @@ void initHardware()
         Serial.println("[mic] M5.Mic.begin failed");
     }
     initVibrator();
+    control_mode = WALKIE_CONTROL_ENABLED && control_crypto.configure(WALKIE_CONTROL_SECRET);
+    if (WALKIE_CONTROL_ENABLED && !control_mode) {
+        Serial.println("[control] disabled: invalid local secret");
+    }
 }
 
 #if defined(WALKIE_UI_DEMO)
@@ -338,15 +663,36 @@ void captureDemoMic()
 
 void handleButtons()
 {
+    if (tts_playing) {
+        if (M5.BtnB.wasPressed()) {
+            M5.Speaker.stop();
+            M5.Speaker.end();
+            M5.Mic.begin();
+            tts_playing = false;
+            tts_pcm_bytes = 0;
+            Serial.println("[tts] playback cancelled");
+        }
+        return;
+    }
+
     if (M5.BtnA.wasPressed()) {
         const std::string id = makeUtteranceId(device_id.c_str(), ++utterance_seq);
-        if (loop_state.onKeyADown(id) == LoopAction::StartUtterance) {
+        const LoopAction action = loop_state.onKeyADown(id);
+        if (action == LoopAction::StartUtterance) {
             audio_queue.clear();
             if (sendStart(id)) {
                 renderUi(true);
             } else {
                 cancelActiveForDeviceError("device_control_send_failed");
             }
+        } else if (action == LoopAction::ApproveProposal) {
+            if (!sendDecision("command.decision", loop_state.commandId(), "approve")) {
+                loop_state.onDispatchFailed(loop_state.commandId(), "device_control_send_failed");
+            }
+            renderUi(true);
+        } else if (action == LoopAction::ApprovePermission) {
+            sendDecision("permission.decision", loop_state.permissionId(), "approve");
+            renderUi(true);
         } else {
             renderUi(true);
         }
@@ -354,11 +700,20 @@ void handleButtons()
 
     if (M5.BtnB.wasPressed()) {
         const std::string id = loop_state.activeId();
-        if (loop_state.onKeyBCancel() == LoopAction::CancelUtterance) {
+        const LoopAction action = loop_state.onKeyBCancel();
+        if (action == LoopAction::CancelUtterance) {
             if (!sendCancel(id)) {
                 Serial.printf("[ws] cancel send failed id=%s\n", id.c_str());
             }
             audio_queue.clear();
+            renderUi(true);
+        } else if (action == LoopAction::RejectProposal) {
+            sendDecision("command.decision", loop_state.commandId(), "reject");
+            renderUi(true);
+        } else if (action == LoopAction::DenyPermission) {
+            sendDecision("permission.decision", loop_state.permissionId(), "deny");
+            renderUi(true);
+        } else if (action == LoopAction::Acknowledge) {
             renderUi(true);
         }
     }
@@ -428,11 +783,36 @@ void maintainConnection()
         connectWiFi();
     }
 
-    if (!ws_connected && (!ws_started || millis() >= next_reconnect_ms)) {
+    if (!ws_started) {
         beginWebSocket();
-        scheduleReconnect();
+    }
+    if (!ws_connected && !ws_attempt_in_progress) {
+        const uint32_t now = millis();
+        if (next_reconnect_ms != 0 && static_cast<int32_t>(now - next_reconnect_ms) < 0) {
+            return;
+        }
+        // WebSocketsClient retries inside loop(). Clear the due time before
+        // allowing exactly one attempt so its disconnect callback (or the
+        // fallback below) owns the next exponential-backoff deadline.
+        next_reconnect_ms = 0;
+        ws_attempt_in_progress = true;
     }
     web_socket.loop();
+    if (!ws_connected && !ws_attempt_in_progress && next_reconnect_ms == 0) {
+        scheduleReconnect();
+    }
+}
+
+void maintainPlayback()
+{
+    if (!tts_playing || M5.Speaker.isPlaying()) {
+        return;
+    }
+    M5.Speaker.end();
+    M5.Mic.begin();
+    tts_playing = false;
+    tts_pcm_bytes = 0;
+    Serial.println("[tts] playback complete");
 }
 
 }  // namespace
@@ -442,6 +822,9 @@ void setup()
     Serial.begin(115200);
     delay(200);
     device_id = deriveDeviceId();
+    tts_pcm = static_cast<uint8_t*>(heap_caps_malloc(kMaxTtsPcmBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    Serial.printf("[tts] psram buffer %s bytes=%u\n", tts_pcm ? "ready" : "failed",
+                  static_cast<unsigned>(kMaxTtsPcmBytes));
     initHardware();
     renderUi(true);
 #if defined(WALKIE_UI_DEMO)
@@ -461,6 +844,7 @@ void loop()
     captureDemoMic();
 #else
     maintainConnection();
+    maintainPlayback();
     handleButtons();
     captureIfRecording();
     drainAudioQueue();

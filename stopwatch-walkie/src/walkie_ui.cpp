@@ -1,8 +1,5 @@
 #include "walkie_ui.h"
-
-#if defined(WALKIE_UI_DEMO)
 #include "ui_assets.h"
-#endif
 
 #include <algorithm>
 #include <cmath>
@@ -49,6 +46,20 @@ StateCopy stateCopy(DeviceState state, bool retryable)
             return {"MESSAGE RECEIVED", "DONE", "Transcript is ready", kMint};
         case DeviceState::Error:
             return {retryable ? "TRY AGAIN" : "NEEDS ATTENTION", "NOT SENT", "Check the connection", kError};
+        case DeviceState::ProposalReview:
+            return {"PHYSICAL CONFIRMATION", "REVIEW", "Approve exact command?", kAmber};
+        case DeviceState::Dispatching:
+            return {"LOCAL CONTROL PLANE", "SENDING", "Revalidating target", kCyan};
+        case DeviceState::Running:
+            return {"AGENT SESSION", "RUNNING", "Watching live session", kCyan};
+        case DeviceState::WaitingPermission:
+            return {"AGENT NEEDS INPUT", "PERMISSION", "Review requested action", kAmber};
+        case DeviceState::Completed:
+            return {"AGENT SESSION", "COMPLETE", "Pane snapshot received", kMint};
+        case DeviceState::Cancelled:
+            return {"NOT DISPATCHED", "CANCELLED", "No command was sent", kMuted};
+        case DeviceState::Failed:
+            return {"CONTROL PLANE", "FAILED", "Command was not completed", kError};
     }
     return {"STOPWATCH WALKIE", "UNKNOWN", "", kWhite};
 }
@@ -144,7 +155,8 @@ void drawOuterRing(M5Canvas& canvas, DeviceState state, uint16_t color, uint32_t
 {
     canvas.drawCircle(kCenter, kCenter, kRingRadius, kSurface);
     canvas.drawCircle(kCenter, kCenter, kRingRadius - 1, kSurface);
-    if (state == DeviceState::Connecting || state == DeviceState::Transcribing) {
+    if (state == DeviceState::Connecting || state == DeviceState::Transcribing ||
+        state == DeviceState::Dispatching || state == DeviceState::Running) {
         const float start = static_cast<float>((now_ms / 8) % 360);
         canvas.drawArc(kCenter, kCenter, kRingRadius, kRingRadius - 5, start, start + 72.0F, color);
         return;
@@ -168,7 +180,6 @@ bool WalkieUi::begin()
     Serial.printf("[ui] %s %dx%d canvas on %dx%d display\n", sprite_ready_ ? "psram" : "direct", kCanvasSize,
                   kCanvasSize, M5.Display.width(), M5.Display.height());
 
-#if defined(WALKIE_UI_DEMO)
     if (sprite_ready_) {
         constexpr DeviceState kStates[] = {DeviceState::Connecting, DeviceState::Ready, DeviceState::Recording,
                                            DeviceState::Transcribing, DeviceState::Result, DeviceState::Error};
@@ -182,7 +193,6 @@ bool WalkieUi::begin()
         Serial.printf("[ui] preview assets verified=%u/%u\n", static_cast<unsigned>(decoded),
                       static_cast<unsigned>(sizeof(kStates) / sizeof(kStates[0])));
     }
-#endif
 
     return sprite_ready_;
 }
@@ -194,29 +204,53 @@ void WalkieUi::render(const UiModel& model, uint32_t now_ms)
         return;
     }
 
-#if defined(WALKIE_UI_DEMO)
-    if (model.showcase) {
-        if (rendered_asset_ready_ && rendered_asset_state_ == model.state) {
-            return;
-        }
-
+    const bool state_changed = !rendered_asset_ready_ || rendered_asset_state_ != model.state;
+    if (state_changed) {
         const UiAsset asset = uiAssetFor(model.state);
         canvas_->fillSprite(kBackground);
         if (asset.data != nullptr && canvas_->drawPng(asset.data, asset.size, 0, 0)) {
-            const int offset_x = (M5.Display.width() - kCanvasSize) / 2;
-            const int offset_y = (M5.Display.height() - kCanvasSize) / 2;
-            canvas_->pushSprite(&M5.Display, offset_x, offset_y);
             rendered_asset_state_ = model.state;
             rendered_asset_ready_ = true;
-            Serial.printf("[ui] preview asset state=%s bytes=%u\n", stateName(model.state),
+            Serial.printf("[ui] hd asset state=%s bytes=%u\n", stateName(model.state),
                           static_cast<unsigned>(asset.size));
-            return;
+        } else {
+            rendered_asset_ready_ = false;
+            Serial.printf("[ui] hd asset decode failed state=%s\n", stateName(model.state));
         }
-        Serial.printf("[ui] preview asset decode failed state=%s\n", stateName(model.state));
     }
-#endif
 
-    drawFrame(*canvas_, model, now_ms);
+    if (!rendered_asset_ready_) {
+        drawFrame(*canvas_, model, now_ms);
+    } else if (!model.showcase) {
+        if (model.state == DeviceState::Recording) {
+            canvas_->fillRect(130, 105, 206, 136, kBackground);
+            drawWaveform(*canvas_, stateCopy(model.state, model.retryable).color, model.audio_level, now_ms);
+        }
+
+        if (state_changed) {
+            const StateCopy copy = stateCopy(model.state, model.retryable);
+            if (model.state == DeviceState::Result || model.state == DeviceState::Error) {
+                canvas_->fillRect(70, 306, 326, 42, kBackground);
+                canvas_->setTextDatum(top_center);
+                canvas_->setFont(&fonts::efontCN_16);
+                canvas_->setTextColor(copy.color, kBackground);
+                canvas_->drawString(safeDetail(model, copy), kCenter, 318);
+                canvas_->setTextFont(2);
+            }
+
+            canvas_->fillRect(118, 350, 230, 75, kBackground);
+            if (model.state == DeviceState::Ready) {
+                drawButtonHint(*canvas_, kCenter, "A", "HOLD TO TALK", kKeyA);
+            } else if (model.state == DeviceState::Recording) {
+                drawButtonHint(*canvas_, 154, "A", "RELEASE", kKeyA);
+                drawButtonHint(*canvas_, 312, "B", "CANCEL", kKeyB);
+            }
+        }
+    }
+
+    if (rendered_asset_ready_ && !state_changed && model.state != DeviceState::Recording) {
+        return;
+    }
     const int offset_x = (M5.Display.width() - kCanvasSize) / 2;
     const int offset_y = (M5.Display.height() - kCanvasSize) / 2;
     canvas_->pushSprite(&M5.Display, offset_x, offset_y);
@@ -252,6 +286,23 @@ void WalkieUi::drawFrame(M5Canvas& canvas, const UiModel& model, uint32_t now_ms
         case DeviceState::Error:
             drawError(canvas, copy.color);
             break;
+        case DeviceState::ProposalReview:
+            drawResult(canvas, copy.color);
+            break;
+        case DeviceState::Dispatching:
+        case DeviceState::Running:
+            drawThinking(canvas, copy.color, now_ms);
+            break;
+        case DeviceState::WaitingPermission:
+            drawError(canvas, copy.color);
+            break;
+        case DeviceState::Completed:
+            drawResult(canvas, copy.color);
+            break;
+        case DeviceState::Cancelled:
+        case DeviceState::Failed:
+            drawError(canvas, copy.color);
+            break;
     }
 
     canvas.setTextDatum(top_center);
@@ -270,6 +321,13 @@ void WalkieUi::drawFrame(M5Canvas& canvas, const UiModel& model, uint32_t now_ms
     } else if (model.state == DeviceState::Recording) {
         drawButtonHint(canvas, 154, "A", "RELEASE", kKeyA);
         drawButtonHint(canvas, 312, "B", "CANCEL", kKeyB);
+    } else if (model.state == DeviceState::ProposalReview ||
+               (model.state == DeviceState::WaitingPermission && model.actionable)) {
+        drawButtonHint(canvas, 154, "A", "APPROVE", kKeyA);
+        drawButtonHint(canvas, 312, "B", "REJECT", kKeyB);
+    } else if (model.state == DeviceState::Completed || model.state == DeviceState::Cancelled ||
+               model.state == DeviceState::Failed) {
+        drawButtonHint(canvas, kCenter, "A", "DONE", kKeyA);
     }
 }
 

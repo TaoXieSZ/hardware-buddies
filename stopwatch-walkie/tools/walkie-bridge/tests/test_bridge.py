@@ -13,10 +13,14 @@ from bridge import (
     ASRFailure,
     BridgeConfig,
     ConnectionHandler,
+    ControlProtocolError,
     DashScopeASRClient,
+    MacSystemTTSClient,
     MAX_PCM_BYTES,
+    main,
     pcm_to_wav,
 )
+from dashboard import DashboardState
 
 
 VALID_AUDIO = {"rate": 16000, "bits": 16, "channels": 1, "encoding": "pcm_s16le"}
@@ -39,7 +43,7 @@ class FakeWebSocket:
         return item
 
     async def send(self, message):
-        self.sent.append(json.loads(message))
+        self.sent.append(message if isinstance(message, bytes) else json.loads(message))
 
 
 class FakeASR:
@@ -56,6 +60,16 @@ class FakeASR:
         if self.failure:
             raise self.failure
         return self.text
+
+
+class FakeTTS:
+    def __init__(self, pcm=b"\x01\x00\x02\x00"):
+        self.pcm = pcm
+        self.calls = []
+
+    async def synthesize_pcm(self, text):
+        self.calls.append(text)
+        return self.pcm
 
 
 def msg(payload):
@@ -94,6 +108,24 @@ def test_complete_framed_utterance_returns_correlated_transcript():
     assert len(asr.calls) == 1
 
 
+def test_transcript_can_be_followed_by_correlated_tts_audio():
+    websocket = FakeWebSocket([start("utt-1"), b"\x01\x00\x02\x00", end("utt-1")])
+    asr = FakeASR(text="你好")
+    tts = FakeTTS()
+    dashboard = DashboardState()
+
+    asyncio.run(ConnectionHandler(asr, tts_client=tts, dashboard_state=dashboard).handle(websocket))
+
+    assert websocket.sent == [
+        {"type": "transcript", "id": "utt-1", "text": "你好"},
+        {"type": "audio.start", "id": "utt-1", "audio": VALID_AUDIO},
+        b"\x01\x00\x02\x00",
+        {"type": "audio.end", "id": "utt-1"},
+    ]
+    assert tts.calls == ["你好"]
+    assert dashboard.snapshot()["tts"] == {"state": "completed", "bytes": 4}
+
+
 def test_invalid_json_control_message_is_rejected():
     websocket, asr = run_handler(["{"])
 
@@ -108,10 +140,10 @@ def test_missing_control_message_type_is_rejected():
     assert asr.calls == []
 
 
-def test_unsupported_protocol_version_is_rejected():
+def test_protocol_v2_is_rejected_when_control_mode_is_disabled():
     websocket, asr = run_handler([msg({"type": "hello", "protocol": 2, "device_id": "watch-1"})])
 
-    assert websocket.sent[0]["code"] == "protocol_version"
+    assert websocket.sent[0]["code"] == "control_disabled"
     assert asr.calls == []
 
 
@@ -220,11 +252,15 @@ def test_no_speech_response_is_structured_retryable_error():
 
 def test_asr_failure_is_structured_and_correlated():
     failure = ASRFailure("asr_unavailable", "ASR request failed")
-    websocket, asr = run_handler([start("utt-1"), b"\x00\x00", end("utt-1")], FakeASR(failure=failure))
+    websocket = FakeWebSocket([start("utt-1"), b"\x00\x00", end("utt-1")])
+    dashboard = DashboardState()
+    asyncio.run(ConnectionHandler(
+        FakeASR(failure=failure), dashboard_state=dashboard).handle(websocket))
 
     assert websocket.sent[0]["type"] == "error"
     assert websocket.sent[0]["code"] == "asr_unavailable"
     assert websocket.sent[0]["id"] == "utt-1"
+    assert dashboard.snapshot()["pipeline"]["error_code"] == "asr_unavailable"
 
 
 def test_asr_timeout_is_structured_and_correlated():
@@ -297,6 +333,66 @@ def test_bridge_config_reads_environment_without_printing_secret(monkeypatch):
 
     assert config.dashscope_api_key == "sk-test-redacted"
     assert config.dashscope_base_url == "https://example.invalid/v1"
+    assert config.dashboard_enabled is True
+    assert config.dashboard_port == 8766
+
+
+def test_bridge_config_can_disable_dashboard_and_select_port(monkeypatch):
+    monkeypatch.setenv("WALKIE_DASHBOARD_ENABLED", "0")
+    monkeypatch.setenv("WALKIE_DASHBOARD_PORT", "9876")
+
+    config = BridgeConfig.from_env()
+
+    assert config.dashboard_enabled is False
+    assert config.dashboard_port == 9876
+
+
+@pytest.mark.parametrize("value", ["0", "65536"])
+def test_bridge_config_rejects_invalid_dashboard_port(monkeypatch, value):
+    monkeypatch.setenv("WALKIE_DASHBOARD_PORT", value)
+
+    with pytest.raises(ControlProtocolError) as excinfo:
+        BridgeConfig.from_env()
+
+    assert excinfo.value.code == "invalid_dashboard_port"
+
+
+def test_bridge_config_reads_control_fields_without_logging_values(monkeypatch, caplog):
+    from protocol_v2 import b64url_encode
+
+    secret = b64url_encode(bytes(range(32)))
+    monkeypatch.setenv("WALKIE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("WALKIE_CONTROL_SECRET", secret)
+    monkeypatch.setenv("WALKIE_CONTROL_ALIASES_JSON", '{"小表 codex":{"agent":"codex"}}')
+    monkeypatch.setenv("WALKIE_PROPOSAL_TTL", "45")
+    monkeypatch.setenv("WALKIE_CC_BRIDGE_SOCKET", "/tmp/test-cc.sock")
+
+    config = BridgeConfig.from_env()
+
+    assert config.control_enabled is True
+    assert config.control_secret == bytes(range(32))
+    assert config.control_aliases == {"小表 codex": {"agent": "codex"}}
+    assert config.proposal_ttl_seconds == 45
+    assert config.cc_bridge_socket == "/tmp/test-cc.sock"
+    assert secret not in caplog.text
+
+
+def test_main_reports_invalid_control_secret_without_traceback(monkeypatch, caplog):
+    monkeypatch.setenv("WALKIE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("WALKIE_CONTROL_SECRET", "not-a-32-byte-secret")
+
+    assert main() == 2
+    assert "configuration_error" in caplog.text
+    assert "not-a-32-byte-secret" not in caplog.text
+
+
+def test_mac_system_tts_returns_16khz_mono_pcm():
+    client = MacSystemTTSClient(voice="Tingting", timeout_seconds=10)
+
+    pcm = asyncio.run(client.synthesize_pcm("测试"))
+
+    assert pcm
+    assert len(pcm) % 2 == 0
 
 
 @pytest.mark.live

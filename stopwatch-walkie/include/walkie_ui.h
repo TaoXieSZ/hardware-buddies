@@ -14,6 +14,7 @@ struct UiModel {
     uint16_t audio_level = 0;
     bool retryable = false;
     bool showcase = false;
+    bool actionable = false;
 };
 
 class WalkieUi {
@@ -27,10 +28,8 @@ private:
 
     std::unique_ptr<M5Canvas> canvas_;
     bool sprite_ready_ = false;
-#if defined(WALKIE_UI_DEMO)
     DeviceState rendered_asset_state_ = DeviceState::Connecting;
     bool rendered_asset_ready_ = false;
-#endif
 };
 
 }  // namespace stopwatch
