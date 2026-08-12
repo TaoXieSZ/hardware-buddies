@@ -18,6 +18,7 @@ build** — always `cd <subdir>` first.
 | `cardputer-adv-buddy/` | Active (ESP32-S3) | `pio run -e cardputer-adv` | `README.md` + `HANDOFF.md` |
 | `tab5-agentfarm-buddy/` | Active (ESP32-P4) | `pio run -e tab5-agentfarm` | `README.md` |
 | `stopwatch-walkie/` | In development (ESP32-S3 + Python) | `pio run -e m5stack-stopwatch` | `README.md` |
+| `sticks3-wrist-buddy/` | Active (StickS3 腕表通知器 + Unit Vibrator) | `pio run -e m5stack-sticks3` | `README.md` |
 | `m5-paper-buddy/` | **Frozen fork** (third-party) | `pio run -e m5paper` | `README.md` |
 | `stackchan-firmware/` | Active (CoreS3 StackChan) | `pio run` (main) / ESP-IDF `voice-agent/` | `CANVAS.md` + `docs/` |
 | `stackchan-standup-buddy/` | Active (CoreS3 StackChan 站立提醒器) | `pio run -e cores3-standup` | `README.md` |
@@ -64,13 +65,23 @@ build** — always `cd <subdir>` first.
   launchd 起的外部进程（`Access denied - only processes started inside cmux
   can connect`）。必须在 cmux Settings → Automation → Socket Control Mode
   选 `Automation` 并**完全重启 app**（改了不重启不生效，cmux#7984）。
-- **Kimi Code 已接入 cc-bridge**（2026-08-02）：`~/.kimi-code/config.toml`
-  末尾的 `cc-bridge Kimi Code hooks` 块把 13 个事件转发给
-  `tools/cc-bridge/hook.py`（Kimi hook 事件名/stdin JSON 与 Claude Code
+- **Kimi Code 已接入 cc-bridge**（2026-08-02；hook block 一度丢失、2026-08-10
+  补回为 14 事件，与 vibe-island block 共存）：`~/.kimi-code/config.toml`
+  末尾的 `cc-bridge Kimi Code hooks` 块把事件转发给
+  `tools/cc-bridge/hook.py --agent kimi`（Kimi hook 事件名/stdin JSON 与 Claude Code
   同构）。特性与边界：Kimi 会话无 cmux 标签、无 `agent` 标记（设备上显示
   `cc` 前缀 + sid），`selectSession` 不可聚焦；daemon 重启后 Kimi 会话要等
-  下次活动（UserPromptSubmit 等）才重新出现在设备列表。修复标记/聚焦是
-  预留的后续 change。
+  下次活动（UserPromptSubmit 等）才重新出现在设备列表；Kimi 的 PermissionRequest
+  是异步事件，腕上/设备审批能否真正 gate 住 Kimi 工具调用未验证。修复标记/聚焦是
+  预留的后续 change。⚠️ vibe-island 的安装/修复脚本会重写 config.toml 并可能
+  静默丢别的 block（2026-08-10 omk block 就被丢过一次）——改完记得检查。
+- **cc-bridge plist 的端口 env（本机特有）**：macOS `sharingd` 占着 8770
+  （FrameServer 默认端口），daemon 不覆盖就启动即崩。plist
+  `EnvironmentVariables` 现有 `CC_BRIDGE_DASH_PORT=8771` +
+  `CC_BRIDGE_FRAME_PORT=8772` + `CC_BRIDGE_DEVICE_PREFIX=Claude-,Wrist-`
+  （多 peer 逗号分隔，`Wrist-` 是 sticks3-wrist-buddy；前缀不能含 `SC`
+  子串——core.py 用它识别无按键 StackChan peer）。改 env 必须
+  bootout+bootstrap。
 - **这台机器（taoxie）的 platformio penv 是 2026-08-02 重建的**：
   `~/.platformio/penv`（python3 venv + `pip install platformio`），
   pio 不在 PATH，用 `~/.platformio/penv/bin/pio`。pytest 装在
