@@ -355,6 +355,15 @@ void drawPanel() {
         return;
     }
     if (g_mode == MODE_UNCHECKED) {
+        if (g_checkedToday) {
+            // 已打卡但处于时段外(常见于午休重启):显示真实状态,别让人以为没打卡
+            int minute = currentMinutes();
+            const char* msg = (minute >= WORK_AM_END && minute < WORK_PM_START) ? "午休中 · 14:00 继续"
+                            : (minute >= 0 && minute < WORK_AM_START) ? "还没到上班时间"
+                            : "今天辛苦了 · 明天见";
+            drawCentered(msg, PANEL_Y + 34, TFT_WHITE, &fonts::efontCN_16);
+            return;
+        }
         drawCentered("未打卡 · 点我打卡", PANEL_Y + 34, TFT_WHITE, &fonts::efontCN_16);
         return;
     }
