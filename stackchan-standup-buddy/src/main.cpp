@@ -17,7 +17,6 @@ constexpr uint32_t CYCLE_MS = 30UL * 60 * 1000;
 constexpr uint32_t REPEAT_MS = 5UL * 60 * 1000;
 constexpr uint32_t REMINDER_UI_MS = 8000;
 constexpr uint32_t BREAK_MS = 10UL * 60 * 1000;
-constexpr uint32_t DOUBLE_PAT_MS = 700;
 constexpr uint32_t WISDOM_MS = 8000;
 constexpr int SCREEN_W = 320;
 constexpr int PANEL_Y = 148;
@@ -41,7 +40,6 @@ uint32_t g_nextReminderMs = 0;
 uint32_t g_reminderEndsMs = 0;
 uint32_t g_modeEndsMs = 0;
 uint32_t g_wisdomEndsMs = 0;
-uint32_t g_firstPatMs = 0;
 uint32_t g_lastModeReportMs = 0;
 uint32_t g_lastPanelSecond = UINT32_MAX;
 uint32_t g_lastDateSeen = 0;
@@ -56,6 +54,7 @@ bool g_timeKnown = false;
 int g_timeBaseMin = 0;
 uint32_t g_timeBaseMs = 0;
 uint32_t g_lastTimeMs = 0;
+uint32_t g_clockDay = 0;   // helper CLOCK 下发的日期(YYYYMMDD)
 
 const char* LOCAL_WISDOM[] = {
     "今天也不用满分，在线就很好。",
@@ -73,7 +72,12 @@ uint32_t dateKey(const m5::rtc_date_t& d) {
 }
 
 bool readRtc(m5::rtc_datetime_t& dt) {
-    return M5.Rtc.getDateTime(&dt) && dt.date.year >= 2024;
+    // BM8563 在共享 I2C 总线上偶发读到错位/垃圾数据(如 2065-25-45),
+    // 严格校验字段,垃圾读数视为无效,沿用缓存。
+    return M5.Rtc.getDateTime(&dt)
+        && dt.date.year >= 2024 && dt.date.year <= 2099
+        && dt.date.month >= 1 && dt.date.month <= 12
+        && dt.date.date >= 1 && dt.date.date <= 31;
 }
 
 int currentMinutes() {
@@ -93,10 +97,14 @@ int currentMinutes() {
 uint32_t currentDate() {
     static uint32_t lastRead = 0;
     static uint32_t cached = 0;
+    // 优先用 helper CLOCK 下发的日期(与 currentMinutes 同一新鲜度窗口);
+    // helper 失联才读 RTC —— RTC 偶发垃圾读数会造成日期反复横跳、误清打卡。
+    if (g_timeKnown && millis() - g_lastTimeMs < 90000 && g_clockDay >= 20240101)
+        return g_clockDay;
     if (millis() - lastRead >= 1000 || cached == 0) {
         lastRead = millis();
         m5::rtc_datetime_t dt;
-        cached = readRtc(dt) ? dateKey(dt.date) : 0;
+        if (readRtc(dt)) cached = dateKey(dt.date);
     }
     return cached;
 }
@@ -282,17 +290,7 @@ void clockIn() {
 
 void handlePat() {
     if (g_reminder) { startBreak(); return; }
-    uint32_t now = millis();
-    if (!g_checkedToday && g_mode == MODE_UNCHECKED) {
-        if (g_firstPatMs && now - g_firstPatMs <= DOUBLE_PAT_MS) {
-            g_firstPatMs = 0;
-            clockIn();
-        } else {
-            g_firstPatMs = now;
-        }
-        return;
-    }
-    showWisdom();
+    showWisdom();   // 单拍 = 金句;打卡用触屏(见 handleTouch)
 }
 
 void drawCentered(const String& text, int y, uint16_t color, const lgfx::IFont* font) {
@@ -319,7 +317,23 @@ void drawPanel() {
         seconds = g_modeEndsMs && (int32_t)(g_modeEndsMs - now) > 0 ? (g_modeEndsMs - now + 999) / 1000 : 0;
     else if (monitoringEnabled(g_mode, currentMinutes()))
         seconds = (int32_t)(g_nextReminderMs - now) > 0 ? (g_nextReminderMs - now + 999) / 1000 : 0;
-    if (!g_wisdom && !g_reminder && seconds == g_lastPanelSecond && currentMinutes() == g_lastMinute) return;
+    // 金句/提醒是静态画面:只在进入或内容变化时重绘,否则 clearPanel 每帧
+    // 都在跑 → 闪屏。
+    static String lastWisdom;
+    static bool reminderDrawn = false;
+    if (g_wisdom) {
+        if (g_activeWisdom == lastWisdom) return;
+        lastWisdom = g_activeWisdom;
+    } else {
+        lastWisdom = "";
+    }
+    if (g_reminder) {
+        if (reminderDrawn) return;
+        reminderDrawn = true;
+    } else {
+        reminderDrawn = false;
+    }
+    if (seconds == g_lastPanelSecond && currentMinutes() == g_lastMinute) return;
     g_lastPanelSecond = seconds;
     g_lastMinute = currentMinutes();
     clearPanel();
@@ -341,7 +355,7 @@ void drawPanel() {
         return;
     }
     if (g_mode == MODE_UNCHECKED) {
-        drawCentered("未打卡 · 双拍脑袋打卡", PANEL_Y + 34, TFT_WHITE, &fonts::efontCN_16);
+        drawCentered("未打卡 · 点我打卡", PANEL_Y + 34, TFT_WHITE, &fonts::efontCN_16);
         return;
     }
     char value[32];
@@ -372,7 +386,7 @@ void drawMenu() {
             snprintf(checked, sizeof(checked), "今日打卡 %02u:%02u", g_checkedMinute / 60, g_checkedMinute % 60);
             drawCentered(checked, 36, TFT_DARKGREY, &fonts::efontCN_16);
         }
-        const char* work = g_checkedToday ? "工作模式" : "工作模式（请先双拍打卡）";
+        const char* work = g_checkedToday ? "工作模式" : "工作模式（请先打卡）";
         drawButton(28, 52, 264, 42, work, g_checkedToday ? TFT_NAVY : TFT_DARKGREY);
         drawButton(28, 104, 264, 42, "自由模式", TFT_PURPLE);
         drawButton(28, 156, 264, 42, "会议模式", TFT_DARKCYAN);
@@ -433,6 +447,7 @@ void handleTouch() {
     }
     if (g_mode == MODE_MEETING && t.y >= PANEL_Y + 42) { endMeeting(); return; }
     if (g_mode == MODE_BREAK && t.y >= PANEL_Y + 42) { endBreak(); return; }
+    if (g_mode == MODE_UNCHECKED) { clockIn(); return; }   // 点屏幕任意位置打卡
     if (t.y >= PANEL_Y) { g_menu = true; drawMenu(); }
 }
 
@@ -443,6 +458,7 @@ void parseSerial(const char* line) {
     if (sscanf(line, "CLOCK %u %d", &day, &minute) == 2) {
         minute = constrain(minute, 0, 1439);
         g_timeBaseMin = minute; g_timeBaseMs = millis(); g_lastTimeMs = g_timeBaseMs; g_timeKnown = true;
+        g_clockDay = day;
         setRtcClock(day, minute);
         reportMode(true);
         return;
@@ -567,7 +583,6 @@ void loop() {
         gifFaceTick();
         motionTick(g_agentState);
         if (!g_wisdom && headPat()) handlePat();
-        if (g_firstPatMs && now - g_firstPatMs > DOUBLE_PAT_MS) { g_firstPatMs = 0; showWisdom(); }
         drawPanel();
     } else {
         monitoringTick();
