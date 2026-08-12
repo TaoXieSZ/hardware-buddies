@@ -14,6 +14,9 @@
 namespace {
 
 constexpr uint32_t CYCLE_MS = 30UL * 60 * 1000;
+// 每 5 分钟换一张随机 Clawd 头像(仅工作/自由这两个随机头像状态;
+// 金句、提醒、菜单、会议、休息、睡觉期间顺延)
+constexpr uint32_t FACE_ROTATE_MS = 5UL * 60 * 1000;
 constexpr uint32_t REPEAT_MS = 5UL * 60 * 1000;
 constexpr uint32_t REMINDER_UI_MS = 8000;
 constexpr uint32_t BREAK_MS = 10UL * 60 * 1000;
@@ -55,6 +58,7 @@ int g_timeBaseMin = 0;
 uint32_t g_timeBaseMs = 0;
 uint32_t g_lastTimeMs = 0;
 uint32_t g_clockDay = 0;   // helper CLOCK 下发的日期(YYYYMMDD)
+uint32_t g_nextFaceRotateMs = 0;
 
 const char* LOCAL_WISDOM[] = {
     "今天也不用满分，在线就很好。",
@@ -569,6 +573,7 @@ void setup() {
     g_mode = restoredMode(g_checkedToday, minute);
     g_prevMonitoring = monitoringEnabled(g_mode, minute);
     g_nextReminderMs = millis() + CYCLE_MS;
+    g_nextFaceRotateMs = millis() + FACE_ROTATE_MS;
     applyVisualState(true);
     Serial.println("WISDOM_REQUEST");
     reportMode(true);
@@ -599,5 +604,17 @@ void loop() {
     }
     handleTouch();
     reportMode();
+
+    // -- 头像轮换 --
+    if ((int32_t)(now - g_nextFaceRotateMs) >= 0) {
+        bool eligible = !g_menu && !g_wisdom && !g_reminder &&
+                        (g_agentState == STATE_IDLE || g_agentState == STATE_FREE);
+        if (eligible) {
+            gifFaceShowRandom();
+            g_nextFaceRotateMs = now + FACE_ROTATE_MS;
+        } else {
+            g_nextFaceRotateMs = now + 60000;   // 状态不合适,1 分钟后再看
+        }
+    }
     delay(10);
 }
