@@ -21,9 +21,25 @@ build** — always `cd <subdir>` first.
 | `sticks3-wrist-buddy/` | Active (StickS3 腕表通知器 + Unit Vibrator) | `pio run -e m5stack-sticks3` | `README.md` |
 | `m5-paper-buddy/` | **Frozen fork** (third-party) | `pio run -e m5paper` | `README.md` |
 | `stackchan-firmware/` | Active (CoreS3 StackChan) | `pio run` (main) / ESP-IDF `voice-agent/` | `CANVAS.md` + `docs/` |
-| `stackchan-standup-buddy/` | Active (CoreS3 StackChan 站立提醒器) | `pio run -e cores3-standup` | `README.md` |
+| `stackchan-standup-buddy/` | Active (CoreS3 StackChan 站立提醒器) | `pio run -e cores3-standup` | `README.md` + `HANDOFF.md` |
 
 ## Gotchas that aren't obvious
+
+- **stackchan-standup-buddy 烧录前先停 helper** —— `tools/face-track` 常驻时会
+  一直往 USB 串口写 TRACK/CLOCK,esptool 握手必挂(`serial noise` /
+  `No serial data received`)。`pkill -f tools/face-track` 再烧,烧完重启 helper。
+  端口号会随重插变化(`usbmodem2101` / `21401`...),别沿用旧号。
+- **CoreS3 的 BM8563 RTC 在共享 I2C 上会读到错位垃圾**(如 2065-25-45),
+  且能通过宽松的 `year >= 2024` 校验。用它做日期决策（打卡清理）前必须严格
+  校验 month 1-12 / date 1-31,或干脆以 helper 的 CLOCK 下发为准。
+  踩坑记录:垃圾日期横跳曾导致打卡状态秒丢。
+- **M5GFX 没编入 TTF 渲染**(`LGFX_TTFFONT_HPP_` 对应的头不在发行里,
+  `loadFont(ft_ttf)` 永远失败)。要自定义字体就走离线渲染字形包:
+  `tools/make-digit-font.py` 出 alpha mask bin,固件逐行混色 pushImage。
+- **lottie 猫脸管线依赖 /tmp 工程**:`/tmp/stackchan-lottie`(
+  `npm i canvaskit-wasm`),`gen-cat-styles.mjs` / `export-*.mjs` 要拷进去跑
+  (ESM 按脚本路径解析包);组装 `assemble-gifs.py`(需 Pillow)。
+  /tmp 被清理就重建。
 
 - **ahakey macOS Makefile is stale** — `ahakey/platforms/macos/Makefile` calls
   `./scripts/build.sh` which doesn't exist. The real source of truth is
