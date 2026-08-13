@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1110" viewBox="0 0 1536 1110">
+  <defs>
+    <style>
+      .page-title { font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #101820; }
+      .page-note { font: 500 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #66707a; }
+      .bezel { fill: #050708; stroke: #c8ced4; stroke-width: 2; }
+      .ghost-ring { fill: none; stroke: #15191d; stroke-width: 7; }
+      .state-ring { fill: none; stroke-width: 7; stroke-linecap: round; }
+      .eyebrow { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 2.2px; fill: #8d979f; text-anchor: middle; }
+      .state-title { font: 800 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1px; fill: white; text-anchor: middle; }
+      .detail { font: 650 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .key { font: 800 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #050708; text-anchor: middle; dominant-baseline: middle; }
+      .key-label { font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.2px; fill: #8d979f; text-anchor: middle; }
+      .label { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #33404a; text-anchor: middle; }
+      .surface { stroke: #15191d; fill: none; }
+    </style>
+    <g id="key-hints">
+      <circle cx="154" cy="376" r="18" fill="#ffd000"/><text class="key" x="154" y="377">A</text>
+      <text class="key-label" x="154" y="408">NEXT</text>
+      <circle cx="312" cy="376" r="18" fill="#35b7ff"/><text class="key" x="312" y="377">B</text>
+      <text class="key-label" x="312" y="408">BACK</text>
+    </g>
+    <g id="base">
+      <circle class="bezel" cx="233" cy="233" r="231"/>
+      <circle class="ghost-ring" cx="233" cy="233" r="216"/>
+    </g>
+  </defs>
+
+  <rect width="1536" height="1110" fill="#eef1f4"/>
+  <text class="page-title" x="48" y="50">StopWatch Walkie — six-state UI review</text>
+  <text class="page-note" x="48" y="82">466×466 content safe area · AMOLED black · physical KEYA/KEYB navigation</text>
+
+  <g transform="translate(35 108)">
+    <use href="#base"/><circle class="state-ring" cx="233" cy="233" r="216" stroke="#ffb84d" stroke-dasharray="82 1275" transform="rotate(-40 233 233)"/>
+    <text class="eyebrow" x="233" y="70">STOPWATCH WALKIE</text>
+    <circle class="surface" cx="233" cy="173" r="58" stroke-width="2"/><circle class="surface" cx="233" cy="173" r="40" stroke-width="2"/>
+    <circle cx="233" cy="173" r="8" fill="#ffb84d"/><circle cx="273" cy="137" r="7" fill="#ffb84d"/><circle cx="187" cy="145" r="6" fill="#ffb84d"/><circle cx="239" cy="226" r="5" fill="#ffb84d"/>
+    <text class="state-title" x="233" y="297">CONNECTING</text><text class="detail" x="233" y="335" fill="#ffb84d">Searching for your Mac</text><use href="#key-hints"/>
+    <text class="label" x="233" y="494">01 · CONNECTING</text>
+  </g>
+
+  <g transform="translate(535 108)">
+    <use href="#base"/><circle class="state-ring" cx="233" cy="233" r="216" stroke="#42f5b3"/>
+    <text class="eyebrow" x="233" y="70">STOPWATCH WALKIE</text>
+    <rect x="208" y="119" width="50" height="82" rx="25" fill="#42f5b3"/><rect x="223" y="130" width="20" height="58" rx="10" fill="#050708"/>
+    <path d="M185 174 A48 48 0 0 0 281 174 M233 214 V238 M205 238 H261" fill="none" stroke="#42f5b3" stroke-width="8" stroke-linecap="round"/>
+    <text class="state-title" x="233" y="297">READY</text><text class="detail" x="233" y="335" fill="#42f5b3">Hold KEYA to talk</text><use href="#key-hints"/>
+    <text class="label" x="233" y="494">02 · READY</text>
+  </g>
+
+  <g transform="translate(1035 108)">
+    <use href="#base"/><circle class="state-ring" cx="233" cy="233" r="216" stroke="#ff4f6d" stroke-width="11"/>
+    <text class="eyebrow" x="233" y="70">LIVE MICROPHONE</text>
+    <g fill="#ff4f6d">
+      <rect x="146" y="161" width="7" height="24" rx="3.5"/><rect x="158" y="151" width="7" height="44" rx="3.5"/><rect x="170" y="142" width="7" height="62" rx="3.5"/><rect x="182" y="156" width="7" height="34" rx="3.5"/><rect x="194" y="132" width="7" height="82" rx="3.5"/><rect x="206" y="146" width="7" height="54" rx="3.5"/><rect x="218" y="119" width="7" height="108" rx="3.5"/><rect x="230" y="137" width="7" height="72" rx="3.5"/><rect x="242" y="125" width="7" height="96" rx="3.5"/><rect x="254" y="150" width="7" height="46" rx="3.5"/><rect x="266" y="135" width="7" height="76" rx="3.5"/><rect x="278" y="157" width="7" height="32" rx="3.5"/><rect x="290" y="145" width="7" height="58" rx="3.5"/><rect x="302" y="153" width="7" height="40" rx="3.5"/><rect x="314" y="163" width="7" height="20" rx="3.5"/>
+    </g>
+    <text class="state-title" x="233" y="297">LISTENING</text><text class="detail" x="233" y="335" fill="#ff4f6d">Release KEYA to send</text><use href="#key-hints"/>
+    <text class="label" x="233" y="494">03 · RECORDING</text>
+  </g>
+
+  <g transform="translate(35 610)">
+    <use href="#base"/><circle class="state-ring" cx="233" cy="233" r="216" stroke="#55c7ff" stroke-dasharray="82 1275" transform="rotate(128 233 233)"/>
+    <text class="eyebrow" x="233" y="70">ON YOUR MAC</text>
+    <circle class="surface" cx="233" cy="173" r="67" stroke-width="2"/><circle cx="233" cy="173" r="28" fill="#15191d"/>
+    <circle cx="233" cy="106" r="10" fill="#55c7ff"/><circle cx="291" cy="207" r="10" fill="#55c7ff"/><circle cx="175" cy="207" r="10" fill="#55c7ff"/>
+    <text class="state-title" x="233" y="297">THINKING</text><text class="detail" x="233" y="335" fill="#55c7ff">Turning speech into text</text><use href="#key-hints"/>
+    <text class="label" x="233" y="494">04 · TRANSCRIBING</text>
+  </g>
+
+  <g transform="translate(535 610)">
+    <use href="#base"/><circle class="state-ring" cx="233" cy="233" r="216" stroke="#42f5b3"/>
+    <text class="eyebrow" x="233" y="70">MESSAGE RECEIVED</text>
+    <circle cx="233" cy="173" r="62" fill="none" stroke="#42f5b3" stroke-width="4"/><path d="M204 174 L225 195 L267 150" fill="none" stroke="#42f5b3" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="state-title" x="233" y="297">DONE</text><text class="detail" x="233" y="335" fill="#42f5b3">Agent reply received</text><use href="#key-hints"/>
+    <text class="label" x="233" y="494">05 · RESULT</text>
+  </g>
+
+  <g transform="translate(1035 610)">
+    <use href="#base"/><circle class="state-ring" cx="233" cy="233" r="216" stroke="#ff7657"/>
+    <text class="eyebrow" x="233" y="70">TRY AGAIN</text>
+    <circle cx="233" cy="173" r="62" fill="none" stroke="#ff7657" stroke-width="4"/><rect x="226" y="129" width="14" height="66" rx="7" fill="#ff7657"/><circle cx="233" cy="216" r="8" fill="#ff7657"/>
+    <text class="state-title" x="233" y="297">NOT SENT</text><text class="detail" x="233" y="335" fill="#ff7657">bridge_unreachable</text><use href="#key-hints"/>
+    <text class="label" x="233" y="494">06 · ERROR</text>
+  </g>
+</svg>

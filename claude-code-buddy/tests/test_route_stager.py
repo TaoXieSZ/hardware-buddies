@@ -83,6 +83,20 @@ def test_restage_resets_ttl():
     assert calls == [(1, "b")]
 
 
+def test_command_id_revision_and_matching_operations():
+    st, calls, _ = make()
+    st.stage("surface-1", "exact $`text`", command_id="cmd-1", target_revision=7)
+    pending = st.peek()
+    assert pending.command_id == "cmd-1"
+    assert pending.target_revision == 7
+    assert st.confirm("cmd-old") is False
+    assert st.peek() is pending
+    assert st.cancel("cmd-old") is False
+    assert st.confirm("cmd-1") is True
+    assert calls == [("surface-1", "exact $`text`")]
+    assert st.confirm("cmd-1") is False
+
+
 def test_route_runs_outside_lock_reentrant():
     # route_fn re-enters the stager (stage + peek). If confirm() held the lock
     # across the route call this would deadlock — proves the route runs lock-free.

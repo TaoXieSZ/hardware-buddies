@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>StopWatch Bridge · Signal Desk</title>
+  <link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">LOCAL SIGNAL DESK · 127.0.0.1</p>
+        <h1>StopWatch <span>Bridge</span></h1>
+      </div>
+      <div class="clock-block">
+        <span id="local-time">--:--:--</span>
+        <small>MAC LOCAL</small>
+      </div>
+    </header>
+
+    <section class="health-strip" aria-label="系统健康状态">
+      <div class="health-item"><span class="signal" id="bridge-dot"></span><small>BRIDGE</small><strong id="bridge-status">启动中</strong></div>
+      <div class="health-item"><span class="signal" id="watch-dot"></span><small>WATCH</small><strong id="watch-status">未连接</strong></div>
+      <div class="health-item"><span class="signal" id="auth-dot"></span><small>AUTH</small><strong id="auth-status">等待</strong></div>
+      <div class="health-item"><span class="signal" id="control-dot"></span><small>CONTROL</small><strong id="control-status">离线</strong></div>
+      <div class="health-item wide"><small>LAST UPDATE</small><strong id="updated-at">--</strong></div>
+    </section>
+
+    <main>
+      <section class="hero-grid">
+        <article class="panel pipeline-panel" aria-labelledby="pipeline-title">
+          <div class="panel-head">
+            <div><p class="index">01 / VOICE PATH</p><h2 id="pipeline-title">语音链路</h2></div>
+            <span class="stage-badge" id="stage-badge">DISCONNECTED</span>
+          </div>
+          <ol class="pipeline" id="pipeline">
+            <li data-stage="recording"><i>01</i><span>录音</span><b>REC</b></li>
+            <li data-stage="transcribing"><i>02</i><span>百炼识别</span><b>ASR</b></li>
+            <li data-stage="routing"><i>03</i><span>目标路由</span><b>ROUTE</b></li>
+            <li data-stage="proposal"><i>04</i><span>手表确认</span><b>CONFIRM</b></li>
+            <li data-stage="running"><i>05</i><span>Agent 执行</span><b>RUN</b></li>
+          </ol>
+          <div class="metric-row">
+            <div><small>AUDIO</small><strong id="audio-bytes">0 B</strong></div>
+            <div><small>ASR LATENCY</small><strong id="asr-latency">—</strong></div>
+            <div><small>TTS</small><strong id="tts-state">IDLE</strong></div>
+          </div>
+        </article>
+
+        <article class="panel diagnostic-panel" aria-labelledby="diagnostic-title">
+          <div class="panel-head">
+            <div><p class="index">02 / LAST SIGNAL</p><h2 id="diagnostic-title">识别与诊断</h2></div>
+            <span class="code-tag" id="error-code">NO ERROR</span>
+          </div>
+          <blockquote id="transcript">等待从 StopWatch 收到语音。</blockquote>
+          <div class="hint" id="routing-hint" role="status" aria-live="polite">等待 StopWatch 连接。</div>
+          <div class="candidates" id="candidates" aria-label="候选会话"></div>
+        </article>
+      </section>
+
+      <section class="work-grid">
+        <article class="panel sessions-panel" aria-labelledby="sessions-title">
+          <div class="panel-head">
+            <div><p class="index">03 / CONTROL PLANE</p><h2 id="sessions-title">可控 Agent 会话</h2></div>
+            <span class="counter" id="session-count">0</span>
+          </div>
+          <div class="session-list" id="session-list"><p class="empty">控制面暂未返回会话。</p></div>
+        </article>
+
+        <article class="panel execution-panel" aria-labelledby="execution-title">
+          <div class="panel-head">
+            <div><p class="index">04 / HUMAN GATE</p><h2 id="execution-title">提案与任务</h2></div>
+            <span class="stage-badge muted" id="task-state">IDLE</span>
+          </div>
+          <dl class="execution-data">
+            <div><dt>目标</dt><dd id="proposal-target">—</dd></div>
+            <div><dt>提案</dt><dd id="proposal-text">尚无待确认命令</dd></div>
+            <div><dt>结果</dt><dd id="task-summary">—</dd></div>
+          </dl>
+          <div class="permission" id="permission-box" hidden>
+            <small>PERMISSION WAIT</small><strong id="permission-text"></strong>
+          </div>
+          <p class="authority-note">只读看板 · 批准与拒绝仍只能在手表上完成</p>
+        </article>
+      </section>
+
+      <section class="panel timeline-panel" aria-labelledby="timeline-title">
+        <div class="panel-head">
+          <div><p class="index">05 / EVENT TAPE</p><h2 id="timeline-title">实时事件</h2></div>
+          <span class="live-label"><i></i> LIVE</span>
+        </div>
+        <ol class="timeline" id="timeline"><li class="empty">等待第一个事件。</li></ol>
+      </section>
+    </main>
+
+    <footer><span>STOPWATCH CONTROL PLANE</span><span>READ ONLY · MEMORY ONLY · NO COMMAND INPUT</span></footer>
+  </div>
+  <script src="./dashboard.js" defer></script>
+</body>
+</html>

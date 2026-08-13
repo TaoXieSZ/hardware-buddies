@@ -736,6 +736,57 @@ class CmuxClient:
         self.run(self._send_key_argv(surface, "Enter"))
         return surface
 
+    def route_surface(self, surface: str, text: str) -> str:
+        """Revalidate and route to one exact live surface UUID.
+
+        This is the stable control-plane path. Every RPC is passed as an argv
+        element, so command text is never interpreted by a shell.
+        """
+        matches = [session for session in self.list_sessions() if session.surface == surface]
+        if len(matches) != 1:
+            raise KeyError("target surface is not uniquely live")
+        for argv in (
+            self._focus_argv(surface),
+            self._send_text_argv(surface, text),
+            self._send_key_argv(surface, "Enter"),
+        ):
+            rc, _out, err = self.run(argv)
+            if rc != 0:
+                raise RuntimeError(f"cmux route failed: {err.strip() or rc}")
+        return surface
+
+    def agent_surface_metadata(self) -> dict[str, dict]:
+        """Return bounded agent identity metadata keyed by live surface UUID."""
+        out: dict[str, dict] = {}
+        try:
+            with open(CMUX_SESSION_JSON, encoding="utf-8") as f:
+                stack = [json.load(f)]
+            while stack:
+                value = stack.pop()
+                if isinstance(value, dict):
+                    agent = (value.get("terminal") or {}).get("agent") or {}
+                    kind = str(agent.get("kind") or "").lower()
+                    surface = value.get("id")
+                    if kind in {"claude", "codex", "opencode", "kimi"} and surface:
+                        out[surface] = {
+                            "agent": kind,
+                            "session_id": str(agent.get("sessionId") or ""),
+                            "working_directory": str(agent.get("workingDirectory") or ""),
+                        }
+                    stack.extend(value.values())
+                elif isinstance(value, list):
+                    stack.extend(value)
+        except (OSError, ValueError, TypeError):
+            pass
+        for session in self.list_sessions():
+            if session.checkpoint_id:
+                out.setdefault(session.surface, {
+                    "agent": "claude",
+                    "session_id": session.checkpoint_id,
+                    "working_directory": session.cwd,
+                })
+        return out
+
     def focus_by_checkpoint(self, checkpoint_id: str) -> Optional[str]:
         """Focus the cmux surface running the Claude session `checkpoint_id`.
 

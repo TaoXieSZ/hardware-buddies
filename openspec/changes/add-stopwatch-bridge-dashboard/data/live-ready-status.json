@@ -1,0 +1,52 @@
+{
+  "captured_at": "2026-08-09T13:05:57+08:00",
+  "status": {
+    "bridge": {
+      "status": "listening",
+      "dashboard": "listening",
+      "dashboard_port": 8766,
+      "port": 8765
+    },
+    "watch": {
+      "connected": true,
+      "authenticated": true,
+      "protocol": 2,
+      "device_id": "stopwatch-38AE43858428"
+    },
+    "pipeline": {
+      "stage": "ready",
+      "bytes": 0,
+      "latency_ms": 0,
+      "transcript": "",
+      "error_code": "",
+      "hint": "按住 A 说话；命令需以 Agent 或别名开头。",
+      "candidates": []
+    },
+    "control_plane": {
+      "healthy": true,
+      "revision": 1,
+      "sessions": [
+        {
+          "agent": "codex",
+          "label": "codex test",
+          "project_label": "hardware-buddies",
+          "state": "idle",
+          "capabilities": {
+            "steer": true,
+            "permission_reply": false
+          }
+        }
+      ]
+    }
+  },
+  "events": [
+    {"sequence": 1, "type": "dashboard.started", "port": 8766},
+    {"sequence": 2, "type": "bridge.started", "port": 8765},
+    {"sequence": 3, "type": "control.snapshot", "healthy": true, "revision": 1},
+    {"sequence": 4, "type": "watch.connected"},
+    {"sequence": 5, "type": "watch.disconnected"},
+    {"sequence": 6, "type": "watch.connected"},
+    {"sequence": 7, "type": "watch.hello", "protocol": 2, "device_id": "stopwatch-38AE43858428"},
+    {"sequence": 8, "type": "control.authenticated"}
+  ]
+}

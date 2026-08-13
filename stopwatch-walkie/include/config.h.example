@@ -1,0 +1,19 @@
+#pragma once
+
+// Copy this file to include/walkie_config.h and fill in local values.
+// Do not commit include/walkie_config.h; it contains trusted-LAN endpoint and Wi-Fi secrets.
+
+#define WIFI_SSID "your-wifi-ssid"
+#define WIFI_PASSWORD "your-wifi-password"
+
+#define WALKIE_WS_HOST "192.168.1.10"
+#define WALKIE_WS_PORT 8765
+#define WALKIE_WS_PATH "/audio"
+
+// Leave empty to derive a device id from the ESP32 MAC address at runtime.
+#define WALKIE_DEVICE_ID ""
+
+// Protocol-v2 control mode is opt-in. Base64url-decode to exactly 32 random bytes.
+// Keep this value identical to WALKIE_CONTROL_SECRET on the Mac.
+#define WALKIE_CONTROL_ENABLED 0
+#define WALKIE_CONTROL_SECRET ""

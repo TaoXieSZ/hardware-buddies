@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+include/config.h
+include/walkie_config.h
+compile_commands.json
