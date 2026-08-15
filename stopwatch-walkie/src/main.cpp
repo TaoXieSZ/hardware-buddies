@@ -601,9 +601,23 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length)
 void connectWiFi()
 {
     WiFi.mode(WIFI_STA);
+    // Bring-up diagnostic: log visible SSIDs so a mismatched/encoded SSID is
+    // obvious instead of a silent infinite wait.
+    const int found = WiFi.scanNetworks();
+    Serial.printf("[wifi] scan found=%d target=\"%s\"\n", found, WIFI_SSID);
+    for (int i = 0; i < found; ++i) {
+        Serial.printf("[wifi]   ssid=\"%s\" rssi=%d\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i));
+    }
+    WiFi.scanDelete();
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.println("[wifi] connecting");
+    wl_status_t last_status = WL_IDLE_STATUS;
     while (WiFi.status() != WL_CONNECTED) {
+        const wl_status_t st = WiFi.status();
+        if (st != last_status) {
+            last_status = st;
+            Serial.printf("[wifi] status=%d\n", static_cast<int>(st));
+        }
         delay(250);
         M5.update();
         renderUi();
@@ -657,6 +671,22 @@ void captureDemoMic()
     }
     if (M5.Mic.record(mic_chunk.data(), mic_chunk.size(), kPcmSampleRateHz)) {
         updateAudioLevel();
+        // Bring-up verification (task 3.2): sample count + non-silent peak over serial.
+        static uint32_t demo_chunks = 0, demo_last_log = 0;
+        ++demo_chunks;
+        if (millis() - demo_last_log >= 1000) {
+            demo_last_log = millis();
+            uint32_t peak = 0;
+            for (const int16_t s : mic_chunk) {
+                const uint32_t m = s < 0 ? static_cast<uint32_t>(-static_cast<int32_t>(s))
+                                         : static_cast<uint32_t>(s);
+                peak = std::max(peak, m);
+            }
+            Serial.printf("[ui-demo] mic chunks=%lu chunk_samples=%u peak=%lu level=%u\n",
+                          static_cast<unsigned long>(demo_chunks),
+                          static_cast<unsigned>(mic_chunk.size()),
+                          static_cast<unsigned long>(peak), ui_audio_level);
+        }
     }
 }
 #endif
@@ -848,6 +878,13 @@ void loop()
     handleButtons();
     captureIfRecording();
     drainAudioQueue();
+    // Skip UI pushes during TTS playback: the full-screen sprite push every
+    // 80 ms starves the low-priority speaker task (audible stutter). The
+    // result screen is static while talking; it was already rendered when
+    // the result arrived.
+    if (!tts_playing) {
+        renderUi();
+    }
 #endif
     renderUi();
     delay(1);
