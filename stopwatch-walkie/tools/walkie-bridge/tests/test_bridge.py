@@ -15,6 +15,8 @@ from bridge import (
     ConnectionHandler,
     ControlProtocolError,
     DashScopeASRClient,
+    DashScopeTTSClient,
+    FallbackTTSClient,
     MacSystemTTSClient,
     MAX_PCM_BYTES,
     main,
@@ -393,6 +395,96 @@ def test_mac_system_tts_returns_16khz_mono_pcm():
 
     assert pcm
     assert len(pcm) % 2 == 0
+
+
+def _wav_16k(payload: bytes) -> bytes:
+    return pcm_to_wav(payload)
+
+
+def test_dashscope_tts_returns_pcm_from_audio_url():
+    pcm_in = b"\x01\x02" * 1600
+    seen = {}
+
+    def fake_post(payload):
+        seen["payload"] = payload
+        return {"output": {"audio": {"url": "https://example.test/speech.wav"}}}
+
+    def fake_get(url):
+        seen["url"] = url
+        return _wav_16k(pcm_in)
+
+    client = DashScopeTTSClient(
+        api_key="key",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model="qwen3-tts-flash",
+        voice="Cherry",
+        post=fake_post,
+        get=fake_get,
+    )
+
+    pcm = asyncio.run(client.synthesize_pcm("收到"))
+
+    assert pcm == pcm_in
+    assert seen["url"] == "https://example.test/speech.wav"
+    assert seen["payload"]["model"] == "qwen3-tts-flash"
+    assert seen["payload"]["input"]["voice"] == "Cherry"
+    assert seen["payload"]["input"]["text"] == "收到"
+
+
+def test_dashscope_tts_rejects_missing_audio_url():
+    client = DashScopeTTSClient(
+        api_key="key",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        post=lambda payload: {"output": {}},
+        get=lambda url: b"",
+    )
+
+    with pytest.raises(ValueError, match="audio URL"):
+        asyncio.run(client.synthesize_pcm("收到"))
+
+
+def test_dashscope_tts_requires_credentials():
+    with pytest.raises(ValueError, match="DASHSCOPE_API_KEY"):
+        DashScopeTTSClient(api_key=None, base_url="https://dashscope.aliyuncs.com")
+
+
+def test_fallback_tts_uses_secondary_when_primary_fails():
+    class BrokenTTS:
+        async def synthesize_pcm(self, text):
+            raise RuntimeError("cloud down")
+
+    class StaticTTS:
+        async def synthesize_pcm(self, text):
+            return b"\x00\x01"
+
+    client = FallbackTTSClient(BrokenTTS(), StaticTTS())
+
+    assert asyncio.run(client.synthesize_pcm("测试")) == b"\x00\x01"
+
+
+def test_tts_provider_selection(monkeypatch):
+    from bridge import _build_tts_client
+
+    config = BridgeConfig(tts_provider="say")
+    assert isinstance(_build_tts_client(config), MacSystemTTSClient)
+
+    config = BridgeConfig(tts_provider="auto", dashscope_api_key=None)
+    assert isinstance(_build_tts_client(config), MacSystemTTSClient)
+
+    config = BridgeConfig(
+        tts_provider="auto",
+        dashscope_api_key="key",
+        dashscope_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    assert isinstance(_build_tts_client(config), FallbackTTSClient)
+
+    config = BridgeConfig(tts_provider="dashscope", dashscope_api_key=None)
+    with pytest.raises(ControlProtocolError, match="requires DASHSCOPE_API_KEY"):
+        _build_tts_client(config)
+
+    config = BridgeConfig(tts_provider="bogus")
+    with pytest.raises(ControlProtocolError, match="WALKIE_TTS_PROVIDER"):
+        _build_tts_client(config)
 
 
 @pytest.mark.live

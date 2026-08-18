@@ -88,6 +88,9 @@ class BridgeConfig:
     asr_timeout_seconds: float = 30.0
     tts_voice: str = "Tingting"
     tts_timeout_seconds: float = 30.0
+    tts_provider: str = "auto"
+    tts_model: str = "qwen3-tts-flash"
+    tts_dashscope_voice: str = "Cherry"
     control_enabled: bool = False
     control_secret: bytes | None = None
     control_aliases: dict[str, dict[str, str]] | None = None
@@ -116,6 +119,9 @@ class BridgeConfig:
             asr_timeout_seconds=float(os.getenv("WALKIE_BRIDGE_ASR_TIMEOUT", "30")),
             tts_voice=os.getenv("WALKIE_TTS_VOICE", "Tingting"),
             tts_timeout_seconds=float(os.getenv("WALKIE_TTS_TIMEOUT", "30")),
+            tts_provider=os.getenv("WALKIE_TTS_PROVIDER", "auto"),
+            tts_model=os.getenv("WALKIE_TTS_MODEL", "qwen3-tts-flash"),
+            tts_dashscope_voice=os.getenv("WALKIE_TTS_DASHSCOPE_VOICE", "Cherry"),
             control_enabled=os.getenv("WALKIE_CONTROL_ENABLED", "0").lower() in {"1", "true", "yes"},
             control_secret=parse_secret(os.getenv("WALKIE_CONTROL_SECRET")),
             control_aliases=aliases,
@@ -643,6 +649,123 @@ class MacSystemTTSClient:
         return pcm
 
 
+def _pcm_from_wav_bytes(wav_bytes: bytes, timeout_seconds: float = 30.0) -> bytes:
+    """Normalize a WAV blob to 16 kHz LEI16 mono PCM.
+
+    Fast path parses the WAV directly when it already matches the device
+    format; anything else is resampled with afconvert (macOS, already a
+    dependency of the system-TTS path).
+    """
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            if wav.getframerate() == SAMPLE_RATE and wav.getnchannels() == CHANNELS and wav.getsampwidth() == 2:
+                pcm = wav.readframes(wav.getnframes())
+                if len(pcm) > MAX_TTS_PCM_BYTES:
+                    raise ValueError("TTS exceeded the 30 second audio limit")
+                return pcm
+    except wave.Error:
+        pass
+    with tempfile.TemporaryDirectory(prefix="walkie-tts-conv-") as temp_dir:
+        source = os.path.join(temp_dir, "in.wav")
+        output = os.path.join(temp_dir, "out.wav")
+        with open(source, "wb") as handle:
+            handle.write(wav_bytes)
+        subprocess.run(
+            ["afconvert", "-f", "WAVE", "-d", "LEI16@16000", source, output],
+            check=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+        with wave.open(output, "rb") as wav:
+            if wav.getframerate() != SAMPLE_RATE or wav.getnchannels() != CHANNELS or wav.getsampwidth() != 2:
+                raise ValueError("converted TTS audio has an unsupported format")
+            pcm = wav.readframes(wav.getnframes())
+    if len(pcm) > MAX_TTS_PCM_BYTES:
+        raise ValueError("TTS exceeded the 30 second audio limit")
+    return pcm
+
+
+class DashScopeTTSClient:
+    """DashScope native HTTP TTS (qwen3-tts-flash).
+
+    The OpenAI-compatible endpoint does not serve speech synthesis (404), so
+    this calls the native multimodal-generation API, downloads the resulting
+    temporary WAV URL, and normalizes it to the device PCM format.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None,
+        base_url: str | None,
+        model: str = "qwen3-tts-flash",
+        voice: str = "Cherry",
+        timeout_seconds: float = 30.0,
+        post: Any | None = None,
+        get: Any | None = None,
+    ):
+        if not api_key:
+            raise ValueError("DASHSCOPE_API_KEY is not configured")
+        if not base_url:
+            raise ValueError("DASHSCOPE_BASE_URL is not configured")
+        host = base_url.split("//", 1)[-1].split("/", 1)[0]
+        self._endpoint = f"https://{host}/api/v1/services/aigc/multimodal-generation/generation"
+        self._api_key = api_key
+        self._model = model
+        self._voice = voice
+        self._timeout_seconds = timeout_seconds
+        self._post = post or self._default_post
+        self._get = get or self._default_get
+
+    async def synthesize_pcm(self, text: str) -> bytes:
+        return await asyncio.to_thread(self._synthesize_sync, text)
+
+    def _default_post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        import httpx
+
+        response = httpx.post(
+            self._endpoint,
+            json=payload,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            timeout=self._timeout_seconds,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _default_get(self, url: str) -> bytes:
+        import httpx
+
+        response = httpx.get(url, timeout=self._timeout_seconds)
+        response.raise_for_status()
+        return response.content
+
+    def _synthesize_sync(self, text: str) -> bytes:
+        payload = {
+            "model": self._model,
+            "input": {"text": text, "voice": self._voice, "language_type": "Auto"},
+        }
+        body = self._post(payload)
+        audio = body.get("output", {}).get("audio", {}) if isinstance(body, dict) else {}
+        url = audio.get("url")
+        if not url:
+            raise ValueError("DashScope TTS response did not include an audio URL")
+        return _pcm_from_wav_bytes(self._get(url), self._timeout_seconds)
+
+
+class FallbackTTSClient:
+    """Try the primary TTS client; on any failure fall back to the secondary."""
+
+    def __init__(self, primary: TTSClient, fallback: TTSClient):
+        self._primary = primary
+        self._fallback = fallback
+
+    async def synthesize_pcm(self, text: str) -> bytes:
+        try:
+            return await self._primary.synthesize_pcm(text)
+        except Exception:
+            LOG.warning("tts primary failed, using fallback", exc_info=True)
+        return await self._fallback.synthesize_pcm(text)
+
+
 def parse_json_message(message: str) -> dict[str, Any]:
     try:
         payload = json.loads(message)
@@ -700,6 +823,29 @@ async def send_error(websocket: Any, code: str, message: str, utterance_id: str 
     )
 
 
+def _build_tts_client(config: BridgeConfig) -> TTSClient:
+    """Select the TTS client: DashScope neural voices when configured, macOS
+    `say` as offline fallback. WALKIE_TTS_PROVIDER: auto | dashscope | say."""
+    provider = config.tts_provider.lower()
+    mac_client = MacSystemTTSClient(config.tts_voice, config.tts_timeout_seconds)
+    if provider == "say":
+        return mac_client
+    if provider not in {"auto", "dashscope"}:
+        raise ControlProtocolError("invalid_tts_provider", "WALKIE_TTS_PROVIDER must be auto, dashscope, or say")
+    if config.dashscope_api_key:
+        dashscope_client = DashScopeTTSClient(
+            config.dashscope_api_key,
+            config.dashscope_base_url,
+            model=config.tts_model,
+            voice=config.tts_dashscope_voice,
+            timeout_seconds=config.tts_timeout_seconds,
+        )
+        return FallbackTTSClient(dashscope_client, mac_client)
+    if provider == "dashscope":
+        raise ControlProtocolError("missing_credentials", "WALKIE_TTS_PROVIDER=dashscope requires DASHSCOPE_API_KEY")
+    return mac_client
+
+
 async def serve(config: BridgeConfig) -> None:
     if websockets is None:
         raise RuntimeError("websockets package is not installed")
@@ -708,7 +854,7 @@ async def serve(config: BridgeConfig) -> None:
         config.dashscope_base_url,
         timeout_seconds=config.asr_timeout_seconds,
     )
-    tts_client = MacSystemTTSClient(config.tts_voice, config.tts_timeout_seconds)
+    tts_client = _build_tts_client(config)
     if config.control_enabled and config.control_secret is None:
         raise ControlProtocolError("missing_control_secret", "control mode requires WALKIE_CONTROL_SECRET")
     router = MultiAgentRouter(config.control_aliases, config.proposal_ttl_seconds) if config.control_enabled else None
