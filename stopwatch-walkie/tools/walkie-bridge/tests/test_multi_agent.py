@@ -42,6 +42,20 @@ def test_missing_target_spawn_and_empty_command_fail_closed(text, code):
     assert excinfo.value.code == code
 
 
+def test_fullwidth_punctuation_after_alias_still_routes():
+    router = MultiAgentRouter({"测试绘画": {"agent": "codex", "project_label": "hardware"}})
+    proposal = router.propose("测试绘画，介绍一下你自己。", SNAPSHOT)
+    assert proposal.session_key == "s-codex"
+    assert proposal.text == "介绍一下你自己。"
+
+    # Built-in agent aliases accept fullwidth boundaries too.
+    assert MultiAgentRouter().propose("codex，run tests", SNAPSHOT).text == "run tests"
+    # No boundary char → not an alias match (prefix of a longer word).
+    with pytest.raises(RouterError) as excinfo:
+        MultiAgentRouter({"测试": {"agent": "codex"}}).propose("测试员开会", SNAPSHOT)
+    assert excinfo.value.code == "target_required"
+
+
 def test_ambiguous_and_unsteerable_targets_fail_closed():
     duplicate = {**SNAPSHOT, "sessions": SNAPSHOT["sessions"] + [{**SNAPSHOT["sessions"][1], "session_key": "s-codex-2", "label": "other"}]}
     with pytest.raises(RouterError) as ambiguous:

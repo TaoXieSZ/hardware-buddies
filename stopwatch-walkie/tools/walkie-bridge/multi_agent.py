@@ -19,6 +19,28 @@ AGENT_ALIASES = {
 }
 SPAWN_WORDS = {"new", "start", "create", "spawn", "新建", "启动", "创建"}
 
+# Boundary chars accepted after an alias/agent/label prefix. ASR transcripts
+# of Chinese speech use fullwidth punctuation (「，。」) instead of spaces, so
+# requiring a literal ASCII space after the alias silently breaks routing.
+_ALIAS_SEPARATORS = " \t\n，。、,.;；:：!！?？"
+
+
+def _match_prefix(source: str, folded: str, prefix: str) -> str | None:
+    """Remainder after `prefix` when `source` starts with it at a boundary.
+
+    Returns "" for an exact match, the stripped remainder when the char
+    following the prefix is a separator, or None when there is no boundary
+    match (e.g. the prefix is just the head of a longer word).
+    """
+    if folded == prefix:
+        return ""
+    if not folded.startswith(prefix):
+        return None
+    rest = source[len(prefix):]
+    if not rest or rest[0] not in _ALIAS_SEPARATORS:
+        return None
+    return rest.lstrip(_ALIAS_SEPARATORS)
+
 
 class RouterError(ValueError):
     def __init__(self, code: str, candidates: list[str] | None = None):
@@ -126,30 +148,35 @@ class MultiAgentRouter:
         selector: dict[str, str] = {}
         command = ""
         for alias in sorted(self.aliases, key=len, reverse=True):
-            if folded == alias or folded.startswith(alias + " "):
+            remainder = _match_prefix(source, folded, alias.casefold())
+            if remainder is not None:
                 selector = self.aliases[alias]
-                command = source[len(alias):].lstrip()
+                command = remainder
                 break
 
         sessions = [row for row in snapshot.get("sessions", []) if isinstance(row, dict)]
         if not selector:
             for alias in sorted(AGENT_ALIASES, key=len, reverse=True):
-                if folded == alias or folded.startswith(alias + " "):
-                    selector = {"agent": AGENT_ALIASES[alias]}
-                    remainder = source[len(alias):].lstrip()
-                    candidates = [row for row in sessions if row.get("agent") == selector["agent"]]
-                    labels = []
-                    for row in candidates:
-                        for key in ("label", "project_label"):
-                            label = str(row.get(key) or "")
-                            if label and (remainder.casefold() == label.casefold() or remainder.casefold().startswith(label.casefold() + " ")):
-                                labels.append((len(label), key, label))
-                    if labels:
-                        _, key, label = max(labels)
-                        selector[key] = label
-                        remainder = remainder[len(label):].lstrip()
-                    command = remainder
-                    break
+                remainder = _match_prefix(source, folded, alias)
+                if remainder is None:
+                    continue
+                selector = {"agent": AGENT_ALIASES[alias]}
+                candidates = [row for row in sessions if row.get("agent") == selector["agent"]]
+                labels = []
+                for row in candidates:
+                    for key in ("label", "project_label"):
+                        label = str(row.get(key) or "")
+                        if not label:
+                            continue
+                        sub = _match_prefix(remainder, remainder.casefold(), label.casefold())
+                        if sub is not None:
+                            labels.append((len(label), key, label, sub))
+                if labels:
+                    _, key, label, sub = max(labels, key=lambda item: item[0])
+                    selector[key] = label
+                    remainder = sub
+                command = remainder
+                break
         if not selector:
             raise RouterError("target_required", self._labels(sessions))
         if not command:
