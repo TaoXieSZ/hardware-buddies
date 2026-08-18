@@ -1,6 +1,9 @@
 # StopWatch Agent 对讲机 · 设计文档
 
-> 2026-08-09 实现状态：音频闭环与 steer-only 多 Agent 控制面已落地。
+> 2026-08-18 实现状态：切片 1 真机 E2E 已过——语音 → ASR → 腕上确认 → cmux 注入
+> Codex 会话并收到回话。 steer 目标当前验证的是 Codex；Kimi 暂不可 steer
+> （cmux 0.64.20 不给 kimi 面板写 `terminal.agent` 元数据，控制面快照看不到，
+> 需要 cc-bridge 控制面按 hook 事件反配面板，后续独立 change）。
 > 本文中的 spawn、LLM 自动选目标、WSS、离线 ASR、mDNS 与 launchd 均为 NEXT，不是当前能力。
 
 ## 一句话
@@ -58,6 +61,8 @@
    注意：这意味着语音内容出云上阿里，已接受。
 7. **寻址 = 显式别名 + 唯一会话匹配**：daemon 读取 cc-bridge 的规范化会话快照，
    不调用 LLM 猜目标。**派发前圆屏显示精确提案，KEYA 确认才执行，KEYB 拒绝**。
+   别名/标签后接受全角标点边界（ASR 转写中文用「，。」不用空格，2026-08-18 修）；
+   同音误识别用谐音别名兜底（「测试会话」≈「测试绘画」）。
 8. **steer 通道 = cc-bridge 加 steer 命令**，走 cmux rpc 往终端窗口注入文本+回车。
    对所有终端 TUI agent（kimi/claude）通吃。kimi 出官方 steer API 后再议。
 9. **权限 = 能力驱动**：Claude Code / OpenCode 复用 pending future，first-response-wins；
@@ -80,7 +85,7 @@
 | 切片 | 内容 | 验证点 |
 |---|---|---|
 | **0** | 按住说话 → PCM 流到 Mac → ASR 转文字 → 圆屏回显 | 音频链路（全部技术风险在这：I2S + WebSocket 在 S3 上的稳定性）。不通就回头改决策 5 |
-| **1** | 已有会话 steer：认证→显式目标→腕上提案→cmux 注入 | 已实现，待四 Agent + 真机完整 smoke |
+| **1** | 已有会话 steer：认证→显式目标→腕上提案→cmux 注入 | 真机 E2E 已过（Codex 目标，2026-08-18）；Claude/OpenCode 目标待 smoke，Kimi 待控制面适配 |
 | **2** | 能力驱动的权限与任务反馈 | Claude/OpenCode 可操作；Codex/Kimi 通知型 |
 | **3 (NEXT)** | 新会话 spawn、LLM 策略选择、WSS、离线 ASR、mDNS | 后续独立 OpenSpec change |
 
