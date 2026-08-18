@@ -215,7 +215,11 @@ void WalkieUi::render(const UiModel& model, uint32_t now_ms)
                           static_cast<unsigned>(asset.size));
         } else {
             rendered_asset_ready_ = false;
-            Serial.printf("[ui] hd asset decode failed state=%s\n", stateName(model.state));
+            // States without an hd asset intentionally fall back to the drawn
+            // frame; only log real decode failures (asset present but broken).
+            if (asset.data != nullptr) {
+                Serial.printf("[ui] hd asset decode failed state=%s\n", stateName(model.state));
+            }
         }
     }
 
