@@ -161,6 +161,14 @@ public:
             state_ = connected_ ? DeviceState::Ready : DeviceState::Connecting;
             return LoopAction::Acknowledge;
         }
+        if (state_ == DeviceState::Running) {
+            // 停止关注当前任务：agent 的活继续在终端跑（cc-bridge 没有杀任务的
+            // 能力），表退回 Ready。task_id_ 清空后，该任务迟到的终态事件会被
+            // onTaskTerminal 忽略，不会把表再次拖回 Running。
+            clearControlDisplay();
+            state_ = connected_ ? DeviceState::Ready : DeviceState::Connecting;
+            return LoopAction::Acknowledge;
+        }
         if (state_ != DeviceState::Recording || active_id_.empty()) {
             return LoopAction::None;
         }

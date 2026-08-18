@@ -162,6 +162,7 @@ class ConnectionHandler:
         proposal_store: ProposalStore | None = None,
         task_tracker: TaskTracker | None = None,
         observation_interval: float = 0.5,
+        task_settle_seconds: float = 8.0,
         dashboard_state: DashboardState | None = None,
     ):
         self._asr_client = asr_client
@@ -177,6 +178,7 @@ class ConnectionHandler:
         self._auth: AuthenticatedSession | None = None
         self._auth_pending: dict[str, str] | None = None
         self._observation_interval = observation_interval
+        self._task_settle_seconds = task_settle_seconds
         self._observer_tasks: dict[str, asyncio.Task] = {}
         self._dashboard = dashboard_state
         self._connection_id = fresh_token()[:16]
@@ -461,6 +463,7 @@ class ConnectionHandler:
 
     async def _observe_task(self, websocket: Any, task_id: str, session_key: str) -> None:
         saw_active = False
+        started = time.monotonic()
         try:
             while task_id in self._tasks.active:
                 if hasattr(self._control_client, "events"):
@@ -502,7 +505,15 @@ class ConnectionHandler:
                             await self._send_json(websocket, event)
                 elif state == "waiting":
                     saw_active = True
-                elif state == "idle" and saw_active:
+                elif state == "idle" and (
+                        saw_active
+                        or time.monotonic() - started >= self._task_settle_seconds):
+                    # Agents without lifecycle tracking (Codex panes read "idle"
+                    # even mid-reply) never flip saw_active; completing only on
+                    # active→idle would leak the task and strand the watch on
+                    # "running". The settle window covers the confirm→pane
+                    # injection roundtrip so a not-yet-started task isn't
+                    # completed prematurely.
                     event = self._tasks.observe({
                         "type": "task.completed", "task_id": task_id,
                         "summary": str(status.get("summary") or "Completed"),

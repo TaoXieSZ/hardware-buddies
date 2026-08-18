@@ -132,8 +132,6 @@ void test_control_state_machine_buttons_are_state_specific()
     TEST_ASSERT_EQUAL(DeviceState::Dispatching, loop.state());
     TEST_ASSERT_TRUE(loop.onTaskAccepted("cmd-1", "task-1"));
     TEST_ASSERT_EQUAL(DeviceState::Running, loop.state());
-    TEST_ASSERT_EQUAL(LoopAction::None, loop.onKeyBCancel());
-    TEST_ASSERT_EQUAL(DeviceState::Running, loop.state());
     TEST_ASSERT_TRUE(loop.onPermission("task-1", "perm-1", "shell", true));
     TEST_ASSERT_EQUAL(LoopAction::DenyPermission, loop.onKeyBCancel());
     TEST_ASSERT_EQUAL(DeviceState::Running, loop.state());
@@ -141,6 +139,26 @@ void test_control_state_machine_buttons_are_state_specific()
     TEST_ASSERT_EQUAL(LoopAction::Acknowledge, loop.onKeyADown("must-not-record"));
     TEST_ASSERT_EQUAL(DeviceState::Ready, loop.state());
     TEST_ASSERT_EQUAL(LoopAction::StartUtterance, loop.onKeyADown("new-utterance"));
+}
+
+void test_keyb_during_running_stops_watching_and_ignores_late_events()
+{
+    AudioLoop loop;
+    loop.onConnected();
+    loop.onKeyADown("u");
+    loop.onKeyAUp();
+    loop.onTranscript("u", "command");
+    loop.onProposal("cmd", "command");
+    loop.onKeyADown("ignored");
+    loop.onTaskAccepted("cmd", "task-1");
+    TEST_ASSERT_EQUAL(DeviceState::Running, loop.state());
+    // KEYB = 停止关注：退回 Ready，agent 的活不受影响。
+    TEST_ASSERT_EQUAL(LoopAction::Acknowledge, loop.onKeyBCancel());
+    TEST_ASSERT_EQUAL(DeviceState::Ready, loop.state());
+    // task_id 已清空，该任务迟到的终态事件必须被忽略。
+    TEST_ASSERT_FALSE(loop.onTaskTerminal("task-1", DeviceState::Completed, "done"));
+    TEST_ASSERT_EQUAL(DeviceState::Ready, loop.state());
+    TEST_ASSERT_EQUAL(LoopAction::StartUtterance, loop.onKeyADown("next"));
 }
 
 void test_reject_and_non_actionable_permission_never_approve()
@@ -221,6 +239,7 @@ int main()
     RUN_TEST(test_protocol_messages_are_versioned_and_correlated);
     RUN_TEST(test_protocol_v2_fixed_inputs_and_v1_fallback_remain_stable);
     RUN_TEST(test_control_state_machine_buttons_are_state_specific);
+    RUN_TEST(test_keyb_during_running_stops_watching_and_ignores_late_events);
     RUN_TEST(test_reject_and_non_actionable_permission_never_approve);
     RUN_TEST(test_late_control_events_and_reconnect_do_not_redispatch);
     RUN_TEST(test_control_sequence_window_rejects_replay_and_out_of_order);

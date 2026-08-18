@@ -210,6 +210,32 @@ def test_task_observation_forwards_permission_running_and_bounded_completion_wit
     asyncio.run(scenario())
 
 
+def test_task_observation_completes_idle_only_session_after_settle_window():
+    """Codex-style panes never report an active state; idle + elapsed settle
+    window must still complete the task instead of leaking it."""
+
+    class IdleOnlyControl(FakeControlClient):
+        async def task_status(self, session_key):
+            return {"ok": True, "state": "idle", "summary": "pane line", "summary_source": "pane_snapshot"}
+
+    async def scenario():
+        websocket = FakeWebSocket([])
+        control = IdleOnlyControl()
+        router = MultiAgentRouter()
+        handler = ConnectionHandler(
+            FakeASR(), router=router, control_client=control,
+            observation_interval=0, task_settle_seconds=0)
+        proposal = router.propose("codex observe", await control.snapshot())
+        handler._tasks.accepted("task-idle", proposal)
+        await handler._observe_task(websocket, "task-idle", proposal.session_key)
+
+        assert [item["type"] for item in websocket.sent] == ["task.completed"]
+        assert websocket.sent[0]["summary"] == "pane line"
+        assert handler._tasks.snapshot("task-idle")["type"] == "task.completed"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("transcript", "sessions", "expected"),
     [
