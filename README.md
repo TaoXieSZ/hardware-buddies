@@ -23,7 +23,7 @@
 | [`tab5-agentfarm-buddy/`](./tab5-agentfarm-buddy) | Agent Farm 桌宠，**USB 串口**供数（P4 无射频） | M5 Tab5 (ESP32-P4) | ESP32-P4 (PlatformIO) + Python bridge | 活跃 |
 | [`stackchan-firmware/`](./stackchan-firmware) | StackChan 固件 + ESP-IDF 语音助手（Agora） | CoreS3 StackChan | PlatformIO + ESP-IDF | 活跃 |
 | [`stackchan-standup-buddy/`](./stackchan-standup-buddy) | StackChan 站立提醒器：定时摇头唱歌，摸头确认 | CoreS3 StackChan | ESP32-S3 (PlatformIO) | 活跃 |
-| [`stopwatch-walkie/`](./stopwatch-walkie) | 按住说话、通过 Mac bridge 转写的腕上对讲机原型 | M5 StopWatch (ESP32-S3) | ESP32-S3 (PlatformIO) + Python bridge | 开发中 |
+| [`stopwatch-walkie/`](./stopwatch-walkie) | StopWatch Agent 对讲机：按住说话，Mac bridge 做 DashScope ASR/TTS 播报，可 steer 现有 agent 会话、震动审批 | M5 StopWatch (ESP32-S3) | ESP32-S3 (PlatformIO) + Python bridge | 活跃（原型已上机验证） |
 | [`ahakey/`](./ahakey) | AhaKey-X1 键盘伴侣：OLED + LED 灯条反映 IDE 状态，拨杆审批 | AhaKey BLE 键盘 | Swift + SwiftUI (macOS) | 活跃 |
 | [`m5-paper-buddy/`](./m5-paper-buddy) | 墨水屏桌面伴侣（第三方上游 `op7418/m5-paper-buddy` 的快照） | M5Paper | ESP32 (PlatformIO) | **冻结**（只同步上游，不重构） |
 
