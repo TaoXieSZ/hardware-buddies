@@ -1,54 +1,68 @@
-# StopWatch Walkie · 交接文档（2026-08-18）
+# StopWatch Walkie · 交接文档（2026-08-21）
 
-> 给下一个接手的 agent（DeepSeek）。你不需要任何会话历史，这份文档 + 仓库就是全部上下文。
-> 终极目标见 `../docs/stopwatch-walkie-talkie-design.md`（agent 编排层对话机，grilling 定稿）。
-> 先读根 `AGENTS.md`（monorepo 血泪坑清单），再读本文件。
+> 给下一个接手的 agent。你不需要任何会话历史,这份文档 + 仓库就是全部上下文。
+> 终极目标见 `../docs/stopwatch-walkie-talkie-design.md`;编排层插件设计见
+> `../docs/plans/2026-08-20-walkie-dsh-plugin-design.md` 与实现计划
+> `../docs/plans/2026-08-20-walkie-dsh-plugin-plan.md`。
+> 先读根 `AGENTS.md`(monorepo 血泪坑清单),再读本文件。
 
 ## 0. 最重要的一句话
 
-**另一个 session 正在主仓库 `/Users/taoxie/hardware-buddies` 做 Tab5 联合开发（tab5-walkie-buddy）。
-不要碰它的目录、不要动 `~/.platformio/platforms/espressif32`（pioarduino，无 .piopm）、
-不要合它未提交的改动。** 我们的工作区是独立 worktree：
+**另一个 session 正在主仓库 `/Users/taoxie/hardware-buddies` 做 Tab5 联合开发
+(tab5-walkie-buddy + walkie screen 角色)。不要碰它的目录、不要动
+`~/.platformio/platforms/espressif32`、不要合它未提交/暂存的改动**——main 的
+暂存区里有它对 walkie 修复的回退 + ScreenHub screen 角色工作,一根指头都别碰。
+我们的工作区是独立 worktree:
 
-- worktree：`/Users/taoxie/hardware-buddies-walkie`，分支 `agent/stopwatch-orchestrator`（从 main 切出，已 ff 合回 main 一次）
-- 子项目：`stopwatch-walkie/`（固件）+ `tools/walkie-bridge/`（Mac daemon）
-- 根 `AGENTS.md` 的烧录纪律（认 MAC 不认端口、平台不混用）全部适用
+- worktree:`/Users/taoxie/hardware-buddies-walkie`,分支 `agent/stopwatch-orchestrator`
+- 子项目:`stopwatch-walkie/`(固件)+ `tools/walkie-bridge/`(Mac daemon)+
+  `tools/walkie-dsh-plugin/`(DSH 插件)
 
-## 1. 当前状态
+## 1. 当前状态(2026-08-21)
 
-- **M1（steer 老会话）真机 E2E 已通过**（2026-08-18）：按住 KEYA 说话 → DashScope ASR →
-  别名路由 → 圆屏 proposal → KEYA 批准 → cmux 注入 Codex 终端并收到回话。
-- **steer 目标用 Codex，不用 Claude/Kimi**（用户明确不要 claude；kimi 见 §5 限制）。
-  牺牲品会话：cmux `workspace:6`（steer-codex，`/tmp/steer-codex`，带代理环境变量启动）。
-- **M2 是下一步**：`kimi -p` 无头编排器（转写文本 + cc-bridge 快照 → LLM → 结构化调度 JSON
-  → 复用现有 proposal 流），插在 ASR 之后、multi_agent.propose 之前。之后 M3 spawn、M4 运维。
-- **有一批已修未提交的修复**（见 §4）：单测全绿（native 14 + pytest 68），固件已烧上表，
-  但真机复测（自动 Completed + KEYB 退出）用户尚未回报，接手后先复测再提交。
+- **M1 steer 真机 E2E 已过**(2026-08-18):PTT → DashScope ASR → 路由 → 圆屏提案
+  → KEYA → cmux 注入 Codex 终端并收到回话。
+- **编排层已升级为 DSH 插件(本分支 8 个新提交,`016ae7c`…`97f7a25`,均未 push)**:
+  - bridge 新增回环 **brain API**(127.0.0.1:8767,Bearer token):status/events/
+    队列长轮询/decision/proposals/tts。单测 86 passed + 1 skipped。
+  - **大脑优先路由**:ASR 后转写入队,brain 15s 超时兑底确定性 `MultiAgentRouter`;
+    decision 目标仍过唯一匹配校验;白名单正则命中(默认查询类)直接注入
+    (dashboard 事件 `direct=true`),否则圆屏提案。固件零改动。
+  - 插件 `walkie-dsh-plugin/`(node 12 例纯函数测试):6 个工具 + 专职 headless
+    值班会话(`walkie-duty`)路由循环,硬化 prompt(转写标注为不受信任数据)。
+- **P3 联调进行中**:bridge 已带 brain 配置重启并验证(8765/8766/8767 全 listen,
+  watch 已重连认证);插件已注册进 `~/.dsh/profiles/web/cordis.patch.yml`(insert
+  id `dsh-walkie`);**用户重启 dsh web 后插件才加载**——这一步是外部依赖,
+  重启后按 §4 清单做真机 E2E。
 
-## 2. 运行手册（全部实测可用）
+## 2. 运行手册(全部实测可用)
 
 ```bash
-# pio：主 penv 是 Python 3.14；本机 platformio 不在 PATH
+# pio:主 penv 是 Python 3.14;本机 platformio 不在 PATH
 PIO=~/.platformio/penv/bin/pio
 
-# 编译+烧录（必须带 PLATFORMIO_PLATFORMS_DIR，原因见 §4.3）
+# 编译+烧录(必须带 PLATFORMIO_PLATFORMS_DIR,原因见 §5.3)
 mkdir -p /tmp/ps-platforms
 ln -sfn ~/.platformio/platforms/espressif32@6.12.0 /tmp/ps-platforms/espressif32
 ln -sfn ~/.platformio/platforms/native /tmp/ps-platforms/native
 cd /Users/taoxie/hardware-buddies-walkie/stopwatch-walkie
 PLATFORMIO_PLATFORMS_DIR=/tmp/ps-platforms $PIO run -e m5stack-stopwatch \
-    -t upload --upload-port /dev/cu.usbmodem21101   # 端口先认 MAC！见 §3
+    -t upload --upload-port /dev/cu.usbmodem21101   # 端口先认 MAC!见 §3
 
 # 测试
-$PIO test -e native                                   # 固件状态机 14 例
-cd tools/walkie-bridge && .venv/bin/python -m pytest tests/ -q   # bridge 68 例
+cd tools/walkie-bridge && .venv/bin/python -m pytest tests/ -q   # 86 passed, 1 skipped
+cd ../walkie-dsh-plugin && node --test                           # 12 passed
 
-# bridge 启动（控制模式；.env 含 DashScope key + control secret + 别名，gitignored）
+# bridge 启动(控制 + brain 模式;.env 含 DashScope key + control secret +
+# brain token + 白名单,gitignored)
 cd /Users/taoxie/hardware-buddies-walkie/stopwatch-walkie/tools/walkie-bridge
 set -a && . ./.env && set +a && .venv/bin/python bridge.py --host 0.0.0.0 --port 8765
-# dashboard: http://127.0.0.1:8766/  （/api/status 看 pipeline 和快照）
+# dashboard: http://127.0.0.1:8766/  brain API: http://127.0.0.1:8767/api/v1/status
 
-# 串口监听（pio device monitor 在无 TTY 环境必崩，用 pyserial）
+# brain API 冒烟(token 在 .env 的 WALKIE_BRAIN_TOKEN)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8767/api/v1/status
+
+# 串口监听(pio device monitor 在无 TTY 环境必崩,用 pyserial)
 ~/.platformio/penv/bin/python - <<'EOF'
 import serial, time
 s = None
@@ -68,63 +82,70 @@ while True:
         s = None; time.sleep(2)
 EOF
 
-# cc-bridge 控制面直查（unix socket）
+# cc-bridge 控制面直查(unix socket)
 python3 -c "
 import socket; s=socket.socket(socket.AF_UNIX); s.connect('/tmp/cc-bridge.sock')
 s.sendall(b'{\"action\":\"control.snapshot\"}\n'); print(s.makefile().readline())"
 ```
 
-依赖服务：cc-bridge daemon（launchd 常驻，提供 `/tmp/cc-bridge.sock` 控制面）、
-cmux ≥ 0.64.6（Automation socket 模式）。GitHub/git 推送走代理
-`git -c http.proxy=http://127.0.0.1:7897 push`。
+依赖服务:cc-bridge daemon(launchd 常驻,`/tmp/cc-bridge.sock` 控制面)、
+cmux ≥ 0.64.6(Automation socket 模式)、dsh web host(插件宿主)。GitHub/git 推送
+走代理 `git -c http.proxy=http://127.0.0.1:7897 push`。
 
-## 3. 设备识别（认 MAC，别认端口，端口会变）
+## 3. 设备识别(认 MAC,别认端口,端口会变)
 
 | 设备 | USB serial | 当前端口 | 备注 |
 |---|---|---|---|
-| **StopWatch（我们的）** | `28:84:85:43:AE:38` | usbmodem21101 | 烧这个 |
-| Tab5（别人的 session） | `80:F1:B2:…` | usbmodem21201 | **别碰** |
+| **StopWatch(我们的)** | `28:84:85:43:AE:38` | usbmodem21101 | 烧这个 |
+| Tab5(别人的 session) | `80:F1:B2:…` | usbmodem21201 | **别碰** |
 | StackChan | `44:1B:F6:…` | — | 别碰 |
 
-`$PIO device list | grep SER=` 确认后再烧。烧录前停掉串口监听，烧完重启。
-手表卡死时 USB CDC 会整个消失，只能物理关机再开。
+`$PIO device list | grep SER=` 确认后再烧。烧录前停掉串口监听,烧完重启。
+手表卡死时 USB CDC 会整个消失,只能物理关机再开。
 
-## 4. 已修未提交的修复（工作区脏文件，先提交）
+## 4. dsh web 重启后的真机 E2E 清单(未完成,交给接手者)
 
-1. **路由标点边界**（已提交 `56fea72`，main 已含）：中文 ASR 转写用全角「，。」，
-   别名后等 ASCII 空格永远匹配不上 → `target_required`。`multi_agent.py` 加了
-   `_match_prefix` 边界匹配。谐音别名兜底：`测试会话/测试绘画/测试对话/测试画画` → codex。
-2. **卡 Running 双 bug**（未提交，`include/audio_loop.h` + `tools/walkie-bridge/bridge.py`）：
-   - 固件：`onKeyBCancel` 在 Running 态返回 None（没出口），且重连后 `task_id` 还在会被
-     拖回 Running。修复：Running 下 KEYB = 停止关注（clearControlDisplay → Ready，
-     迟到终态事件被忽略；cc-bridge 没有杀任务能力，agent 的活继续在终端跑）。
-   - bridge：`_observe_task` 只在 active→idle 才判完成，但 **Codex 面板在控制面永远报
-     idle**（生命周期没接入），任务泄漏。修复：idle + 8s 安置窗口（`task_settle_seconds`）
-     也判完成。启发式，对长任务会提前 Completed，可接受。
-3. **pioarduino 平台遮蔽**（未提交，`platformio.ini` 改 `platformio/espressif32@6.12.0`）：
-   Tab5 session 装的 pioarduino 55.03.35（`~/.platformio/platforms/espressif32`，无
-   `.piopm`）无视版本钉遮蔽官方平台，且拒绝 Python 3.14 → 必须用
-   `PLATFORMIO_PLATFORMS_DIR=/tmp/ps-platforms` 指向只含官方平台的目录。**这个坑还没记进
-   根 AGENTS.md，提交时一起补上。**
+前置:用户已重启 dsh web(插件加载,duty 循环开始长轮询 8767)、bridge 在跑
+(§2 命令)、watch 已连接(`/api/v1/status` 里 watch.authenticated=true)。
 
-## 5. 已知限制 / 待办
+| # | 动作 | 预期 |
+|---|---|---|
+| 1 | 验证插件已加载:任意 DSH 会话可用 `walkie_status` 工具;bridge 侧 duty 会话懒创建 | 工具返回快照;`sessions.list` 出现 `walkie-duty`(首条语音后) |
+| 2 | 按住 KEYA 说「codex 帮我跑一下测试」 | 大脑路由 → 圆屏提案 → KEYA → cmux 注入 |
+| 3 | 按住 KEYA 说「codex git status」 | 白名单命中,**无圆屏提案**,直接注入 |
+| 4 | 任意提案按 KEYB | 拒绝,不注入 |
+| 5 | DSH 会话里 `walkie_propose {text:"…", agent:"codex"}` | 圆屏出现卡片,KEYA/KEYB 决定 |
+| 6 | `walkie_say "你好"` | 手表 TTS 播报 |
+| 7 | 临时注释 cordis.patch.yml 的 dsh-walkie 条目并重启 | 语音走路由器兑底,M1 行为不变 |
+| 8 | 杀 duty 会话后再说一句 | 自动重建,下一条语音仍通 |
 
-- **Kimi 不可 steer**：cmux 0.64.20 不给 kimi 面板写 `terminal.agent` 元数据，
-  `control.snapshot` 看不到它。修法：cc-bridge 控制面按 hook 事件（cwd/title）反配面板
-  （claude-code-buddy 仓库，OpenSpec 管辖，且和 Tab5 session 同仓库，动手前先打招呼）。
-- Codex `permission_reply=false`：审批回路（WaitingPermission 震动、KEYA批/KEYB拒）
-  代码在但没真机测过。
-- 会话的 steer 前提：cmux 工作区启动 + 发过首个 prompt（生命周期 running 过）+
-  cmux session JSON 有 agent 元数据。Claude/Codex 自动，OpenCode 有 fallback，Kimi 没有。
-- ASR 谐音误识别会持续出现，加别名到 `.env` 的 `WALKIE_CONTROL_ALIASES_JSON`
-  （**JSON 必须单引号包**，双引号会被 bash source 吃掉）。
-- WiFi：SSID「团团最帅」/ 19951029，Mac IP 192.168.3.14（写死在固件 `include/walkie_config.h`，
-  gitignored）。
+## 5. 已知限制 / 待办 / 坑
 
-## 6. M2 提示（kimi -p 编排器）
+1. **Kimi 不可 steer**:cmux 0.64.20 不给 kimi 面板写 `terminal.agent` 元数据,
+   `control.snapshot` 看不到它。修法:cc-bridge 控制面按 hook 事件反配面板
+   (claude-code-buddy 仓库,OpenSpec 管辖,且和 Tab5 session 同仓库,动手前先打招呼)。
+2. Codex `permission_reply=false`:审批回路代码在但没真机测过;brain 仲裁
+   (permission 工作项 + `walkie_resolve`)同样未真机验证。
+3. **pioarduino 平台遮蔽**:Tab5 session 装的 pioarduino 55.03.35
+   (`~/.platformio/platforms/espressif32`,无 `.piopm`)无视版本钉遮蔽官方平台,
+   且拒绝 Python 3.14 → 必须用 `PLATFORMIO_PLATFORMS_DIR=/tmp/ps-platforms`。
+   这个坑还没记进根 AGENTS.md,提交时一起补上。
+4. 值班会话的模型/预设默认跟 profile,烧钱快(每句语音一次 LLM);想省钱后续给
+   duty 换便宜模型。大脑 15s 超时(bridge 侧 `WALKIE_BRAIN_TIMEOUT`)。
+5. 白名单默认只含查询类(`^git\s+(status|diff|log)\b`、`^(查看|看看|查一下)`、
+   `^tail\s`、`^cat\s`);改 `WALKIE_BRAIN_WHITELIST_JSON`(JSON 数组,单引号包)。
+   白名单匹配的是大脑回执的 command 文本,不是 ASR 转写原文。
+6. ASR 谐音误识别会持续出现,加别名到 `.env` 的 `WALKIE_CONTROL_ALIASES_JSON`
+   (**JSON 必须单引号包**,双引号会被 bash source 吃掉)。
+7. WiFi:SSID「团团最帅」/ 19951029,Mac IP 192.168.3.14(写死在固件
+   `include/walkie_config.h`,gitignored)。
+8. brain API 与 dashboard 都是 ThreadingHTTPServer;brain 的 HTTP 线程经
+   `run_coroutine_threadsafe` 挂回事件循环(超时 30s),测试里 HTTP 调用必须放
+   worker 线程,否则死锁(见 `tests/test_brain_api.py` 的 to_thread 用法)。
 
-- `kimi` CLI 在 `/Users/taoxie/.kimi-code/bin/kimi`，无头模式 `kimi -p "<prompt>"`。
-- 插入点：`bridge.py` ASR 完成后、路由前；输入 = 转写文本 + `control.snapshot` 的会话列表 +
-  别名表；输出 = 结构化 JSON（agent/label/command 或 spawn 请求），校验后喂给现有
-  `MultiAgentRouter`/proposal 流（圆屏确认依然是安全闸，不要绕过）。
-- 固件协议 v2 不用动；这只是 bridge 内部策略层升级。
+## 6. 提交与回主仓库
+
+- 本分支 8 个提交未 push;推送走代理(§2)。合回 main 前**必须先和 Tab5 session
+  协调**——main 的暂存区有它的回退+screen 角色工作,bridge.py/multi_agent.py
+  在两边都改了,直接合必冲突。
+- 提交风格:`git log stopwatch-walkie/` 为准,一提交一逻辑变更。
