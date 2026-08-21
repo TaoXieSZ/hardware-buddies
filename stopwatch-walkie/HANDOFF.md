@@ -114,12 +114,12 @@ bridge 以 §2 命令常驻。**合成语音假 watch 客户端已验证全链�
 | # | 动作 | 预期 | 状态 |
 |---|---|---|---|
 | 1 | 任意 DSH 会话用 `walkie_status`;duty 会话懒创建 | 工具返回快照;首条语音后出现 `walkie-duty` 会话 | ✅ 已验证 |
-| 2 | 按住 KEYA 说「codex 帮我跑一下测试」 | 大脑路由 → 圆屏提案 → KEYA → cmux 注入 | ⬜ 待真表(链路已由假 watch 验证) |
-| 3 | 按住 KEYA 说「codex git status」 | 白名单命中,**无圆屏提案**,直接注入 | ⬜ 待真表(直发已由假 watch 验证) |
-| 4 | 任意提案按 KEYB | 拒绝,不注入 | ⬜ 待真表 |
+| 2 | 按住 KEYA 说「codex 帮我跑一下测试」 | 大脑路由 → 圆屏提案 → KEYA → cmux 注入 | ✅ 真表通过(proposal.approved → task.accepted → task.completed) |
+| 3 | 按住 KEYA 说「codex git status」 | 白名单命中,**无圆屏提案**,直接注入 | ✅ 直发链路已由假 watch 闭环验证(direct=true → 注入);真表未复测(同链路) |
+| 4 | 任意提案按 KEYB | 拒绝,不注入 | ✅ 真表通过(proposal.rejected,无 dispatch) |
 | 5 | DSH 会话里 `walkie_propose {text:"…", agent:"codex"}` | 圆屏出现卡片,KEYA/KEYB 决定 | ✅ 已推真表(gated=true,卡片 60s 过期) |
 | 6 | `walkie_say "你好"` | 手表 TTS 播报 | ✅ 已验证(tts.completed 145KB) |
-| 7 | 临时注释 cordis.patch.yml 的 dsh-walkie 条目并重启 | 语音走路由器兑底,M1 行为不变 | ⬜ 单元测试覆盖,未真机 |
+| 7 | 临时注释 cordis.patch.yml 的 dsh-walkie 条目并重启 | 语音走路由器兑底,M1 行为不变 | ✅ brain 关闭模式已 live 验证(路由器提案;含 CJK 边界修复) |
 | 8 | bridge 宕机恢复 / duty 会话重建 | 循环退避后自动恢复长轮询;会话复用 | ✅ 宕机恢复已验证(35s 内重连;会话未重建而是复用) |
 
 ## 5. 已知限制 / 待办 / 坑
