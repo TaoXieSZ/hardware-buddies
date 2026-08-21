@@ -103,6 +103,12 @@ build** — always `cd <subdir>` first.
   pio 不在 PATH，用 `~/.platformio/penv/bin/pio`。pytest 装在
   `~/.cc-bridge/venv`（`make test-py` 若报 No module named pytest 就跑
   `~/.cc-bridge/venv/bin/pip install pytest`）。
+- **stopwatch-walkie 编译必须带 `PLATFORMIO_PLATFORMS_DIR=/tmp/ps-platforms`**
+  （2026-08-18 踩坑）：Tab5 session 装的 pioarduino 55.03.35
+  （`~/.platformio/platforms/espressif32`，无 `.piopm`）无视 `platformio.ini`
+  的 `platformio/espressif32@6.12.0` 版本钉遮蔽官方平台，且拒绝 Python 3.14。
+  在 `/tmp/ps-platforms` 里只放官方平台的符号链接
+  （`espressif32@6.12.0` + `native`）再跑 pio。
 - **m5-paper-buddy**: do not refactor. It's a `git subtree` snapshot of
   `op7418/m5-paper-buddy`. Only sync upstream via `git subtree pull`.
 - **stackchan-firmware** (`TaoXieSZ/stackchan-firmware`, subtree from
