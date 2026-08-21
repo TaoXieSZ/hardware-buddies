@@ -5,7 +5,15 @@ from dataclasses import replace
 
 import pytest
 
-from multi_agent import MultiAgentRouter, ProposalStore, RouterError, TaskTracker, bounded_utf8
+from multi_agent import (
+    MultiAgentRouter,
+    ProposalStore,
+    RouterError,
+    TaskTracker,
+    bounded_utf8,
+    compile_whitelist,
+    match_whitelist,
+)
 
 
 SNAPSHOT = {
@@ -103,3 +111,61 @@ def test_task_tracker_orders_bounds_and_restores_without_dispatch():
 def test_utf8_bounding_never_splits_codepoint():
     value = bounded_utf8("你" * 100, 31)
     assert len(value.encode()) <= 31 and value.endswith("…")
+
+
+def test_propose_target_selects_unique_session():
+    router = MultiAgentRouter()
+    proposal = router.propose_target("run tests", SNAPSHOT, {"agent": "codex", "label": "beta"})
+    assert proposal.session_key == "s-codex"
+    assert proposal.text == "run tests"
+    assert proposal.command_id.startswith("cmd-")
+
+
+def test_propose_target_rejects_ambiguous_target():
+    router = MultiAgentRouter()
+    with pytest.raises(RouterError) as excinfo:
+        router.propose_target("run tests", SNAPSHOT, {"project_label": "hardware"})
+    assert excinfo.value.code == "target_ambiguous"
+    duplicate = {**SNAPSHOT, "sessions": SNAPSHOT["sessions"] +
+                 [{**SNAPSHOT["sessions"][1], "session_key": "s-codex-2", "label": "other"}]}
+    with pytest.raises(RouterError) as excinfo:
+        router.propose_target("run tests", duplicate, {"agent": "codex"})
+    assert excinfo.value.code == "target_ambiguous"
+
+
+def test_propose_target_rejects_bad_selector_and_empty_command():
+    router = MultiAgentRouter()
+    with pytest.raises(RouterError) as excinfo:
+        router.propose_target("run tests", SNAPSHOT, {"nope": "x"})
+    assert excinfo.value.code == "invalid_selector"
+    with pytest.raises(RouterError) as excinfo:
+        router.propose_target("run tests", SNAPSHOT, {})
+    assert excinfo.value.code == "invalid_selector"
+    with pytest.raises(RouterError) as excinfo:
+        router.propose_target("   ", SNAPSHOT, {"agent": "codex"})
+    assert excinfo.value.code == "empty_command"
+
+
+def test_propose_target_rejects_unsteerable_target():
+    stale = {**SNAPSHOT, "sessions": [{**SNAPSHOT["sessions"][1], "capabilities": {"steer": False}}]}
+    with pytest.raises(RouterError) as excinfo:
+        MultiAgentRouter().propose_target("run tests", stale, {"agent": "codex", "label": "beta"})
+    assert excinfo.value.code == "target_not_found"
+
+
+def test_match_whitelist_search_semantics():
+    patterns = compile_whitelist([r"^git\s+(status|diff|log)\b"])
+    assert match_whitelist("git status", patterns) is True
+    assert match_whitelist("git diff HEAD", patterns) is True
+    assert match_whitelist("git push origin main", patterns) is False
+    assert match_whitelist("", patterns) is False
+    patterns = compile_whitelist([r"^(查看|看看|查一下)", r"^tail\s", r"^cat\s"])
+    assert match_whitelist("看看日志", patterns) is True
+    assert match_whitelist("帮我看看日志", patterns) is False
+
+
+def test_compile_whitelist_fails_loud_on_bad_pattern():
+    with pytest.raises(RouterError) as excinfo:
+        compile_whitelist([r"(unclosed"])
+    assert excinfo.value.code == "invalid_whitelist_pattern"
+    assert compile_whitelist([]) == []

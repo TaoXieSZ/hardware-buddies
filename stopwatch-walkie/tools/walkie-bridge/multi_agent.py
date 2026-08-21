@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -47,6 +48,32 @@ class RouterError(ValueError):
         super().__init__(code)
         self.code = code
         self.candidates = (candidates or [])[:MAX_CANDIDATES]
+
+
+VALID_SELECTOR_KEYS = {"agent", "label", "project_label"}
+_WHITELIST_CACHE: dict[tuple[str, ...], list[re.Pattern]] = {}
+
+
+def compile_whitelist(patterns: list[str] | None) -> list[re.Pattern]:
+    """Compile (and cache) brain-whitelist regexes.
+
+    Invalid patterns raise RouterError at startup so a typo fails loud
+    instead of silently disabling the gate."""
+    key = tuple(str(p) for p in (patterns or []))
+    if key in _WHITELIST_CACHE:
+        return _WHITELIST_CACHE[key]
+    compiled: list[re.Pattern] = []
+    for pattern in key:
+        try:
+            compiled.append(re.compile(pattern))
+        except re.error as exc:
+            raise RouterError("invalid_whitelist_pattern") from exc
+    _WHITELIST_CACHE[key] = compiled
+    return compiled
+
+
+def match_whitelist(command: str, patterns: list[re.Pattern]) -> bool:
+    return any(pattern.search(command) for pattern in patterns)
 
 
 def bounded_utf8(text: str, limit: int) -> str:
@@ -183,7 +210,33 @@ class MultiAgentRouter:
             raise RouterError("empty_command")
         if len(command.encode("utf-8")) > MAX_COMMAND_TEXT:
             raise RouterError("command_too_large")
+        target = self._select_target(source, snapshot, selector)
+        now = self.clock()
+        return self._build_proposal(target, command, snapshot, now)
 
+    def propose_target(self, text: str, snapshot: dict[str, Any],
+                       selector: dict[str, str] | None = None) -> Proposal:
+        """Explicit-target proposal (brain decisions / ops surface).
+
+        The selector may use only agent/label/project_label and must still
+        resolve to exactly one steerable session — the bridge never takes the
+        brain's word for a target."""
+        source = text.strip()
+        if not source:
+            raise RouterError("empty_command")
+        if len(source.encode("utf-8")) > MAX_COMMAND_TEXT:
+            raise RouterError("command_too_large")
+        selector = {str(k).strip(): str(v).strip()
+                    for k, v in (selector or {}).items() if str(v).strip()}
+        if not selector or any(key not in VALID_SELECTOR_KEYS for key in selector):
+            raise RouterError("invalid_selector")
+        target = self._select_target(source, snapshot, selector)
+        now = self.clock()
+        return self._build_proposal(target, source, snapshot, now)
+
+    def _select_target(self, source: str, snapshot: dict[str, Any],
+                       selector: dict[str, str]) -> dict[str, Any]:
+        sessions = [row for row in snapshot.get("sessions", []) if isinstance(row, dict)]
         matches = []
         for row in sessions:
             caps = row.get("capabilities") or {}
@@ -197,9 +250,12 @@ class MultiAgentRouter:
                 continue
             matches.append(row)
         if len(matches) != 1:
-            raise RouterError("target_not_found" if not matches else "target_ambiguous", self._labels(matches or sessions))
-        target = matches[0]
-        now = self.clock()
+            raise RouterError("target_not_found" if not matches else "target_ambiguous",
+                              self._labels(matches or sessions))
+        return matches[0]
+
+    def _build_proposal(self, target: dict[str, Any], command: str, snapshot: dict[str, Any],
+                        now: float) -> Proposal:
         return Proposal(
             command_id="cmd-" + uuid.uuid4().hex,
             session_key=str(target["session_key"]),
