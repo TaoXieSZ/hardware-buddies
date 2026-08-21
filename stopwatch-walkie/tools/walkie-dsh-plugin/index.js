@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { buildRoutingPrompt, loadConfig, parseDecision, validateDecision } from './lib.js'
 
 export const name = 'dsh-walkie'
+export const inject = ['tools', 'apiProxy']
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -301,6 +302,12 @@ function startDutyLoop(ctx, cfg, client) {
           continue
         }
         const response = await client.popQueue(25000)
+        if (!response || response.ok === false) {
+          // bridge 不可达时 client 返回 {ok:false} 而不是抛异常;退避后再试,
+          // 避免紧循环打爆本机端口。
+          await sleep(2000)
+          continue
+        }
         const item = response?.item
         if (!item || item.kind !== 'transcript') continue
         inFlight = true
