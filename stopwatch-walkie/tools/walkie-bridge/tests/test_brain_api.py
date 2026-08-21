@@ -290,3 +290,20 @@ def test_brain_server_ops_proposal_and_speak_through_watch():
         finally:
             server.stop()
     asyncio.run(scenario())
+
+
+def test_watch_registry_first_authenticated_keeps_slot():
+    async def scenario():
+        registry = WatchRegistry()
+        ws1 = FakeWebSocket([])
+        h1 = _handler(brain_queue=None, watch_registry=registry)
+        h1._websocket = ws1
+        await authenticate(h1, ws1)
+        assert registry.handler is h1
+        ws2 = FakeWebSocket([])
+        h2 = _handler(brain_queue=None, watch_registry=registry)
+        h2._websocket = ws2
+        await authenticate(h2, ws2)
+        assert registry.handler is h1  # second authenticated client never steals the slot
+        assert h2._auth is not None  # its own voice/control path still works
+    asyncio.run(scenario())

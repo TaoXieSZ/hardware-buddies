@@ -388,7 +388,9 @@ class ConnectionHandler:
         self._auth = AuthenticatedSession(
             self._control_secret, pending["session_id"], DEVICE_TO_BRIDGE, BRIDGE_TO_DEVICE)
         self._auth_pending = None
-        if self._watch_registry is not None:
+        if self._watch_registry is not None and self._watch_registry.handler is None:
+            # First authenticated watch owns the ops-surface slot; a second
+            # client (test tools, future screens) never steals it.
             self._watch_registry.handler = self
         await self._send_json(websocket, {"type": "auth.ok"})
         self._dash("control.authenticated")
