@@ -34,7 +34,7 @@ _TEXT_LIMITS = {
     "state": 32,
 }
 _NUMBER_FIELDS = {"protocol", "bytes", "latency_ms", "revision", "port"}
-_BOOL_FIELDS = {"authenticated", "actionable", "healthy"}
+_BOOL_FIELDS = {"authenticated", "actionable", "healthy", "direct"}
 
 ROUTE_HINTS = {
     "target_required": "请以 Claude、Codex、OpenCode、Kimi 或已配置别名开头。",

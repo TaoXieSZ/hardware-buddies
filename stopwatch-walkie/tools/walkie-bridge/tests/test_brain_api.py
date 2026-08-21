@@ -152,3 +152,141 @@ def test_brain_api_decision_validation_and_unknown_routes():
             assert client.post("/api/v1/status", headers=AUTH).status_code == 405
     finally:
         server.stop()
+
+
+from bridge import ConnectionHandler
+from dashboard import DashboardState
+from multi_agent import MultiAgentRouter, compile_whitelist
+from test_bridge import VALID_AUDIO, FakeASR, FakeWebSocket, msg
+from protocol_v2 import BRIDGE_TO_DEVICE, DEVICE_TO_BRIDGE, AuthenticatedSession
+from test_control_integration import SECRET, DEVICE_NONCE, FakeControlClient, authenticate
+
+
+def _handler(transcript="帮我看看日志", **kwargs):
+    return ConnectionHandler(
+        FakeASR(transcript), control_secret=SECRET,
+        router=MultiAgentRouter(), control_client=FakeControlClient(),
+        dashboard_state=DashboardState(), **kwargs,
+    )
+
+
+async def _utter(handler, websocket, device, asr_side_effects=None):
+    """Drive one utterance through authenticate → start → binary → end."""
+    await handler._handle_text(websocket, json.dumps(device.encode(
+        {"type": "utterance.start", "id": "u1", "audio": VALID_AUDIO})))
+    await handler._handle_binary(b"\x00\x00")
+    await handler._handle_text(websocket, json.dumps(device.encode({"type": "utterance.end", "id": "u1"})))
+
+
+def test_brain_whitelist_direct_dispatch_skips_watch_gate():
+    async def scenario():
+        websocket = FakeWebSocket([])
+        queue = BrainQueue(max_pending=4)
+        handler = _handler(
+            brain_queue=queue,
+            brain_whitelist=compile_whitelist([r"^git\s+(status|diff|log)\b"]),
+            brain_timeout_seconds=2.0,
+        )
+        device = await authenticate(handler, websocket)
+
+        async def fake_brain():
+            item = await queue.pop(5000)
+            queue.resolve(item["item_id"], {"kind": "route", "agent": "codex",
+                                            "label": "beta", "command": "git status"})
+        waiter = asyncio.create_task(fake_brain())
+        await _utter(handler, websocket, device)
+        await waiter
+        types = []
+        for m in websocket.sent:
+            if not isinstance(m, dict):
+                continue
+            if m.get("direction"):
+                fresh = AuthenticatedSession(SECRET, device.session_id, BRIDGE_TO_DEVICE, DEVICE_TO_BRIDGE)
+                types.append(fresh.decode(m).get("type"))
+            else:
+                types.append(m.get("type"))
+        assert "command.proposal" not in types
+        assert "task.accepted" in types
+        assert [call[0] for call in handler._control_client.calls] == ["stage", "confirm"]
+        assert handler._control_client.calls[0][3] == "git status"
+    asyncio.run(scenario())
+
+
+def test_brain_timeout_falls_back_to_router():
+    async def scenario():
+        websocket = FakeWebSocket([])
+        handler = _handler("codex explain '$HOME'", brain_queue=BrainQueue(max_pending=4),
+                           brain_timeout_seconds=0.2)
+        device = await authenticate(handler, websocket)
+        await _utter(handler, websocket, device)
+        last = device.decode(websocket.sent[-1])
+        assert last["type"] == "command.proposal" and last["preview"] == "explain '$HOME'"
+        assert handler._control_client.calls == []
+    asyncio.run(scenario())
+
+
+def test_brain_route_without_whitelist_goes_to_watch_gate():
+    async def scenario():
+        websocket = FakeWebSocket([])
+        queue = BrainQueue(max_pending=4)
+        handler = _handler(
+            brain_queue=queue,
+            brain_whitelist=compile_whitelist([r"^git\s+(status|diff|log)\b"]),
+            brain_timeout_seconds=2.0,
+        )
+        device = await authenticate(handler, websocket)
+
+        async def fake_brain():
+            item = await queue.pop(5000)
+            queue.resolve(item["item_id"], {"kind": "route", "agent": "codex",
+                                            "label": "beta", "command": "run tests"})
+        waiter = asyncio.create_task(fake_brain())
+        await _utter(handler, websocket, device)
+        await waiter
+        proposal = device.decode(websocket.sent[-1])
+        assert proposal["type"] == "command.proposal" and proposal["preview"] == "run tests"
+        assert handler._control_client.calls == []
+        decision = device.encode({"type": "command.decision",
+                                  "command_id": proposal["command_id"], "decision": "approve"})
+        await handler._handle_text(websocket, json.dumps(decision))
+        assert [call[0] for call in handler._control_client.calls] == ["stage", "confirm"]
+    asyncio.run(scenario())
+
+
+from bridge import BrainServiceBridge, ConnectionHandler, WatchRegistry
+from test_bridge import FakeTTS
+
+
+def test_brain_server_ops_proposal_and_speak_through_watch():
+    async def scenario():
+        websocket = FakeWebSocket([])
+        registry = WatchRegistry()
+        handler = _handler(brain_queue=None, watch_registry=registry, tts_client=FakeTTS())
+        handler._websocket = websocket  # handle() sets this; unit tests drive _handle_text directly
+        services = BrainServiceBridge(
+            asyncio.get_running_loop(), DashboardState(), BrainQueue(4),
+            FakeControlClient(), MultiAgentRouter(), None, registry)
+        server = BrainServer(services, "secret-token", port=0)
+        server.start()
+        try:
+            client = httpx.Client(base_url=server.url, headers=AUTH)
+            offline = await asyncio.to_thread(
+                client.post, "/api/v1/proposals",
+                json={"text": "run tests", "agent": "codex"})
+            assert offline.status_code == 200
+            assert offline.json() == {"ok": False, "error": "watch_offline"}
+            device = await authenticate(handler, websocket)
+            response = await asyncio.to_thread(
+                client.post, "/api/v1/proposals",
+                json={"text": "run tests", "agent": "codex", "label": "beta"})
+            assert response.status_code == 200
+            body = response.json()
+            assert body["ok"] is True and body["gated"] is True
+            proposal = device.decode(websocket.sent[-1])
+            assert proposal["type"] == "command.proposal" and proposal["preview"] == "run tests"
+            spoke = await asyncio.to_thread(client.post, "/api/v1/tts", json={"text": "你好"})
+            assert spoke.status_code == 200 and spoke.json() == {"ok": True}
+            assert any(isinstance(m, bytes) for m in websocket.sent)  # TTS PCM frames
+        finally:
+            server.stop()
+    asyncio.run(scenario())

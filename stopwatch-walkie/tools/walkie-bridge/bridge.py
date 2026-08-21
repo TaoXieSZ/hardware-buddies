@@ -17,7 +17,21 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from dashboard import DashboardState, start_dashboard
-from multi_agent import CcBridgeClient, MultiAgentRouter, ProposalStore, RouterError, TaskTracker
+from brain_api import (
+    BrainQueue,
+    BrainServer,
+    BrainServices,
+    bounded_sessions,
+)
+from multi_agent import (
+    CcBridgeClient,
+    MultiAgentRouter,
+    ProposalStore,
+    RouterError,
+    TaskTracker,
+    compile_whitelist,
+    match_whitelist,
+)
 from protocol_v2 import (
     BRIDGE_TO_DEVICE,
     DEVICE_TO_BRIDGE,
@@ -98,6 +112,12 @@ class BridgeConfig:
     cc_bridge_socket: str = "/tmp/cc-bridge.sock"
     dashboard_enabled: bool = True
     dashboard_port: int = 8766
+    brain_enabled: bool = False
+    brain_token: str | None = None
+    brain_port: int = 8767
+    brain_timeout_seconds: float = 15.0
+    brain_queue_max: int = 4
+    brain_whitelist: list[str] | None = None
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
@@ -111,6 +131,21 @@ class BridgeConfig:
         dashboard_port = int(os.getenv("WALKIE_DASHBOARD_PORT", "8766"))
         if not 1 <= dashboard_port <= 65535:
             raise ControlProtocolError("invalid_dashboard_port", "WALKIE_DASHBOARD_PORT must be between 1 and 65535")
+        brain_port = int(os.getenv("WALKIE_BRAIN_PORT", "8767"))
+        if not 1 <= brain_port <= 65535:
+            raise ControlProtocolError("invalid_brain_port", "WALKIE_BRAIN_PORT must be between 1 and 65535")
+        whitelist_raw = os.getenv("WALKIE_BRAIN_WHITELIST_JSON")
+        if whitelist_raw:
+            try:
+                whitelist = json.loads(whitelist_raw)
+                if not isinstance(whitelist, list) or not all(isinstance(p, str) for p in whitelist):
+                    raise ValueError
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ControlProtocolError(
+                    "invalid_brain_whitelist",
+                    "WALKIE_BRAIN_WHITELIST_JSON must be a JSON array of regex strings") from exc
+        else:
+            whitelist = [r"^git\s+(status|diff|log)\b", r"^(查看|看看|查一下)", r"^tail\s", r"^cat\s"]
         return cls(
             host=os.getenv("WALKIE_BRIDGE_HOST", "127.0.0.1"),
             port=int(os.getenv("WALKIE_BRIDGE_PORT", "8765")),
@@ -129,6 +164,12 @@ class BridgeConfig:
             cc_bridge_socket=os.path.expanduser(os.getenv("WALKIE_CC_BRIDGE_SOCKET", "/tmp/cc-bridge.sock")),
             dashboard_enabled=os.getenv("WALKIE_DASHBOARD_ENABLED", "1").lower() in {"1", "true", "yes"},
             dashboard_port=dashboard_port,
+            brain_enabled=os.getenv("WALKIE_BRAIN_ENABLED", "0").lower() in {"1", "true", "yes"},
+            brain_token=os.getenv("WALKIE_BRAIN_TOKEN") or None,
+            brain_port=brain_port,
+            brain_timeout_seconds=float(os.getenv("WALKIE_BRAIN_TIMEOUT", "15")),
+            brain_queue_max=int(os.getenv("WALKIE_BRAIN_QUEUE_MAX", "4")),
+            brain_whitelist=whitelist,
         )
 
 
@@ -150,6 +191,13 @@ class Utterance:
         self.pcm.extend(chunk)
 
 
+class WatchRegistry:
+    """Holds the one authenticated watch connection for the brain API."""
+
+    def __init__(self) -> None:
+        self.handler: ConnectionHandler | None = None
+
+
 class ConnectionHandler:
     def __init__(
         self,
@@ -164,6 +212,10 @@ class ConnectionHandler:
         observation_interval: float = 0.5,
         task_settle_seconds: float = 8.0,
         dashboard_state: DashboardState | None = None,
+        brain_queue: BrainQueue | None = None,
+        brain_whitelist: list | None = None,
+        brain_timeout_seconds: float = 15.0,
+        watch_registry: WatchRegistry | None = None,
     ):
         self._asr_client = asr_client
         self._asr_timeout_seconds = asr_timeout_seconds
@@ -182,12 +234,18 @@ class ConnectionHandler:
         self._observer_tasks: dict[str, asyncio.Task] = {}
         self._dashboard = dashboard_state
         self._connection_id = fresh_token()[:16]
+        self._brain_queue = brain_queue
+        self._brain_whitelist = brain_whitelist
+        self._brain_timeout_seconds = brain_timeout_seconds
+        self._watch_registry = watch_registry
+        self._websocket: Any | None = None
 
     def _dash(self, kind: str, **fields: Any) -> None:
         if self._dashboard is not None:
             self._dashboard.publish(kind, **fields)
 
     async def handle(self, websocket: Any) -> None:
+        self._websocket = websocket
         self._dash("watch.connected", connection_id=self._connection_id)
         try:
             try:
@@ -222,6 +280,9 @@ class ConnectionHandler:
                 self._proposals.invalidate(self._auth.session_id)
             self._auth = None
             self._auth_pending = None
+            if self._watch_registry is not None and self._watch_registry.handler is self:
+                self._watch_registry.handler = None
+            self._websocket = None
             for task in self._observer_tasks.values():
                 task.cancel()
             self._observer_tasks.clear()
@@ -327,6 +388,8 @@ class ConnectionHandler:
         self._auth = AuthenticatedSession(
             self._control_secret, pending["session_id"], DEVICE_TO_BRIDGE, BRIDGE_TO_DEVICE)
         self._auth_pending = None
+        if self._watch_registry is not None:
+            self._watch_registry.handler = self
         await self._send_json(websocket, {"type": "auth.ok"})
         self._dash("control.authenticated")
         LOG.info("control_authenticated session=%s", self._auth.session_id[:12])
@@ -394,7 +457,40 @@ class ConnectionHandler:
             snapshot = await self._control_client.snapshot()
             self._dash("control.snapshot", healthy=True, revision=snapshot.get("revision", 0),
                        sessions=snapshot.get("sessions", []))
-            proposal = self._router.propose(text, snapshot)
+            proposal = None
+            brain_direct = False
+            if self._brain_queue is not None:
+                decision = await self._brain_route(text, snapshot)
+                if decision is not None and decision.get("kind") == "route":
+                    try:
+                        selector = {key: str(decision[key]) for key in ("agent", "label", "project_label")
+                                    if decision.get(key)}
+                        proposal = self._router.propose_target(
+                            str(decision.get("command") or ""), snapshot, selector)
+                        brain_direct = bool(
+                            self._brain_whitelist and match_whitelist(proposal.text, self._brain_whitelist))
+                        self._dash("brain.routed", utterance_id=utterance_id,
+                                   command_id=proposal.command_id, direct=brain_direct)
+                        LOG.info("brain_routed command=%s direct=%s", proposal.command_id[:16], brain_direct)
+                    except RouterError as exc:
+                        LOG.warning("brain_decision_invalid code=%s", exc.code)
+                        proposal = None
+            if proposal is None:
+                proposal = self._router.propose(text, snapshot)
+            if brain_direct:
+                await self._dispatch(websocket, proposal)
+                return
+            self._proposals.put(self._auth.session_id, proposal)
+            self._dash("proposal.created", command_id=proposal.command_id, agent=proposal.agent,
+                       label=proposal.label, project_label=proposal.project_label, text=proposal.preview)
+            await self._send_json(websocket, {
+                "type": "command.proposal", "id": utterance_id,
+                "command_id": proposal.command_id, "agent": proposal.agent,
+                "session_label": proposal.label, "project_label": proposal.project_label,
+                "preview": proposal.preview, "expires_in": int(self._router.ttl_seconds),
+            })
+            LOG.info("proposal_created command=%s agent=%s text_len=%d",
+                     proposal.command_id[:16], proposal.agent, len(proposal.text))
         except RouterError as exc:
             LOG.warning("route_error code=%s id=%s candidates=%d", exc.code, utterance_id, len(exc.candidates))
             self._dash("route.failed", utterance_id=utterance_id, code=exc.code, candidates=exc.candidates)
@@ -402,17 +498,32 @@ class ConnectionHandler:
                 "type": "command.error", "id": utterance_id, "code": exc.code,
                 "retryable": True, "candidates": exc.candidates,
             })
-            return
-        self._proposals.put(self._auth.session_id, proposal)
-        self._dash("proposal.created", command_id=proposal.command_id, agent=proposal.agent,
-                   label=proposal.label, project_label=proposal.project_label, text=proposal.preview)
-        await self._send_json(websocket, {
-            "type": "command.proposal", "id": utterance_id,
-            "command_id": proposal.command_id, "agent": proposal.agent,
-            "session_label": proposal.label, "project_label": proposal.project_label,
-            "preview": proposal.preview, "expires_in": int(self._router.ttl_seconds),
+
+    async def _brain_route(self, text: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+        """Submit the transcript to the brain queue and await its decision.
+
+        Returns the decision dict, or None when the brain is full, times out,
+        or is unavailable — the caller then falls back to the deterministic
+        router."""
+        item = await self._brain_queue.submit("transcript", {
+            "text": text,
+            "sessions": bounded_sessions(snapshot.get("sessions", [])),
         })
-        LOG.info("proposal_created command=%s agent=%s text_len=%d", proposal.command_id[:16], proposal.agent, len(proposal.text))
+        if item is None:
+            LOG.warning("brain_queue_full")
+            self._dash("brain.fallback", code="queue_full")
+            return None
+        try:
+            decision = await asyncio.wait_for(item.future, self._brain_timeout_seconds)
+            return decision if isinstance(decision, dict) else None
+        except TimeoutError:
+            self._brain_queue.forget(item.item_id)
+            LOG.warning("brain_timeout id=%s", item.item_id)
+            self._dash("brain.fallback", code="timeout")
+            return None
+        except asyncio.CancelledError:
+            self._brain_queue.forget(item.item_id)
+            raise
 
     async def _handle_command_decision(self, websocket: Any, payload: dict[str, Any]) -> None:
         command_id = require_string(payload, "command_id")
@@ -430,29 +541,37 @@ class ConnectionHandler:
         if decision != "approve":
             raise ProtocolFailure("invalid_decision", "decision must be approve or reject")
         self._dash("proposal.approved", command_id=command_id)
+        await self._dispatch(websocket, proposal)
+
+    async def _dispatch(self, websocket: Any, proposal: Any) -> bool:
+        """Stage → confirm → track. Shared by watch approval and brain-direct
+        (whitelisted) dispatch. Returns True when the command actually fired."""
         if proposal.session_key in self._tasks.session_to_task:
-            self._dash("task.failed", command_id=command_id, code="ambiguous_session_activity",
+            self._dash("task.failed", command_id=proposal.command_id, code="ambiguous_session_activity",
                        hint="目标会话已有手表任务在运行。")
             await self._send_json(websocket, {
-                "type": "task.failed", "command_id": command_id,
+                "type": "task.failed", "command_id": proposal.command_id,
                 "code": "ambiguous_session_activity"})
-            return
+            return False
         staged = await self._control_client.stage(proposal)
         if not staged.get("ok"):
-            self._dash("task.failed", command_id=command_id, code=staged.get("error", "route_failed"))
-            await self._send_json(websocket, {"type": "task.failed", "command_id": command_id, "code": staged.get("error", "route_failed")})
-            return
-        confirmed = await self._control_client.confirm(command_id)
+            self._dash("task.failed", command_id=proposal.command_id, code=staged.get("error", "route_failed"))
+            await self._send_json(websocket, {"type": "task.failed", "command_id": proposal.command_id,
+                                              "code": staged.get("error", "route_failed")})
+            return False
+        confirmed = await self._control_client.confirm(proposal.command_id)
         if not confirmed.get("ok") or not confirmed.get("fired"):
-            self._dash("task.failed", command_id=command_id, code=confirmed.get("error", "route_failed"))
-            await self._send_json(websocket, {"type": "task.failed", "command_id": command_id, "code": confirmed.get("error", "route_failed")})
-            return
+            self._dash("task.failed", command_id=proposal.command_id, code=confirmed.get("error", "route_failed"))
+            await self._send_json(websocket, {"type": "task.failed", "command_id": proposal.command_id,
+                                              "code": confirmed.get("error", "route_failed")})
+            return False
         task_id = "task-" + os.urandom(16).hex()
         event = self._tasks.accepted(task_id, proposal)
-        self._dash("task.accepted", task_id=task_id, command_id=command_id)
+        self._dash("task.accepted", task_id=task_id, command_id=proposal.command_id)
         await self._send_json(websocket, event)
         self._start_observer(websocket, task_id, proposal.session_key)
-        LOG.info("task_accepted task=%s command=%s", task_id[:17], command_id[:16])
+        LOG.info("task_accepted task=%s command=%s", task_id[:17], proposal.command_id[:16])
+        return True
 
     def _start_observer(self, websocket: Any, task_id: str, session_key: str) -> None:
         if not session_key or not hasattr(self._control_client, "task_status"):
@@ -484,6 +603,15 @@ class ConnectionHandler:
                                 self._dash("permission.requested", task_id=task_id,
                                            request_id=local_event.get("request_id"), agent=local_event.get("agent"),
                                            hint=local_event.get("hint"), actionable=local_event.get("actionable"))
+                                if self._brain_queue is not None and local_event.get("request_id"):
+                                    await self._brain_queue.submit("permission", {
+                                        "request_id": str(local_event.get("request_id"))[:64],
+                                        "task_id": task_id,
+                                        "agent": str(local_event.get("agent") or "")[:16],
+                                        "tool": str(local_event.get("tool") or "")[:48],
+                                        "hint": str(local_event.get("hint") or "")[:120],
+                                        "actionable": bool(local_event.get("actionable")),
+                                    })
                 status = await self._control_client.task_status(session_key)
                 if not status.get("ok"):
                     event = self._tasks.observe({
@@ -857,6 +985,101 @@ def _build_tts_client(config: BridgeConfig) -> TTSClient:
     return mac_client
 
 
+class BrainServiceBridge(BrainServices):
+    """Thread-safe brain business surface bridging HTTP threads to the loop."""
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        dashboard_state: DashboardState,
+        brain_queue: BrainQueue,
+        control_client: CcBridgeClient,
+        router: MultiAgentRouter,
+        brain_whitelist: list | None,
+        watch_registry: WatchRegistry,
+        timeout_seconds: float = 30.0,
+    ):
+        self._loop = loop
+        self._dashboard = dashboard_state
+        self._queue = brain_queue
+        self._control_client = control_client
+        self._router = router
+        self._whitelist = brain_whitelist
+        self._watch_registry = watch_registry
+        self._timeout_seconds = timeout_seconds
+
+    def _run(self, coro_factory):
+        return asyncio.run_coroutine_threadsafe(coro_factory(), self._loop).result(timeout=self._timeout_seconds)
+
+    def status(self):
+        return self._dashboard.snapshot()
+
+    def events(self, after, limit):
+        return self._dashboard.events(after, limit)
+
+    def pop_queue(self, wait_ms):
+        return self._run(lambda: self._queue.pop(wait_ms))
+
+    def submit_decision(self, item_id, decision):
+        return self._run(lambda: self._decide(item_id, decision))
+
+    async def _decide(self, item_id, decision):
+        item = self._queue.peek(item_id)
+        if item is None:
+            return {"ok": False, "error": "unknown_item"}
+        if item.kind == "permission":
+            request_id = str(item.payload.get("request_id") or "")
+            verdict = decision.get("decision")
+            if request_id and verdict in {"approve", "deny"}:
+                response = await self._control_client.resolve_permission(request_id, verdict)
+                self._queue.resolve(item_id, {"kind": "permission", "decision": verdict})
+                LOG.info("brain_permission item=%s decision=%s applied=%s",
+                         item_id, verdict, bool(response.get("ok")))
+                return {"ok": True, "applied": bool(response.get("ok"))}
+            self._queue.forget(item_id)
+            return {"ok": False, "error": "invalid_decision"}
+        resolved = self._queue.resolve(item_id, decision)
+        return {"ok": True, "accepted": resolved}
+
+    def submit_proposal(self, text, selector):
+        return self._run(lambda: self._ops_propose(text, selector))
+
+    async def _ops_propose(self, text, selector):
+        watch = self._watch_registry.handler
+        if watch is None or watch._auth is None or watch._websocket is None:
+            return {"ok": False, "error": "watch_offline"}
+        try:
+            snapshot = await self._control_client.snapshot()
+            proposal = self._router.propose_target(text, snapshot, selector)
+        except RouterError as exc:
+            return {"ok": False, "error": exc.code, "candidates": exc.candidates}
+        if self._whitelist and match_whitelist(proposal.text, self._whitelist):
+            fired = await watch._dispatch(watch._websocket, proposal)
+            LOG.info("brain_ops_direct command=%s fired=%s", proposal.command_id[:16], fired)
+            return {"ok": True, "command_id": proposal.command_id, "gated": False, "fired": fired}
+        watch._proposals.put(watch._auth.session_id, proposal)
+        watch._dash("proposal.created", command_id=proposal.command_id, agent=proposal.agent,
+                    label=proposal.label, project_label=proposal.project_label,
+                    text=proposal.preview)
+        await watch._send_json(watch._websocket, {
+            "type": "command.proposal", "id": "brain-" + fresh_token()[:8],
+            "command_id": proposal.command_id, "agent": proposal.agent,
+            "session_label": proposal.label, "project_label": proposal.project_label,
+            "preview": proposal.preview, "expires_in": int(self._router.ttl_seconds),
+        })
+        return {"ok": True, "command_id": proposal.command_id, "gated": True}
+
+    def speak(self, text):
+        return self._run(lambda: self._speak_text(text))
+
+    async def _speak_text(self, text):
+        watch = self._watch_registry.handler
+        if watch is None or watch._auth is None or watch._websocket is None:
+            return {"ok": False, "error": "watch_offline"}
+        await watch._speak(watch._websocket, "brain-" + fresh_token()[:8], text)
+        return {"ok": True}
+
+
 async def serve(config: BridgeConfig) -> None:
     if websockets is None:
         raise RuntimeError("websockets package is not installed")
@@ -868,6 +1091,8 @@ async def serve(config: BridgeConfig) -> None:
     tts_client = _build_tts_client(config)
     if config.control_enabled and config.control_secret is None:
         raise ControlProtocolError("missing_control_secret", "control mode requires WALKIE_CONTROL_SECRET")
+    if config.brain_enabled and not config.brain_token:
+        raise ControlProtocolError("missing_brain_token", "brain mode requires WALKIE_BRAIN_TOKEN")
     router = MultiAgentRouter(config.control_aliases, config.proposal_ttl_seconds) if config.control_enabled else None
     control_client = CcBridgeClient(config.cc_bridge_socket) if config.control_enabled else None
     proposal_store = ProposalStore()
@@ -876,6 +1101,13 @@ async def serve(config: BridgeConfig) -> None:
     dashboard_server = start_dashboard(dashboard_state, config.dashboard_port) if config.dashboard_enabled else None
     if config.dashboard_enabled and dashboard_server is None:
         LOG.warning("dashboard_error code=bind_failed port=%d", config.dashboard_port)
+
+    try:
+        brain_whitelist = compile_whitelist(config.brain_whitelist) if config.brain_enabled else None
+    except RouterError as exc:
+        raise ControlProtocolError("invalid_brain_whitelist", "a WALKIE_BRAIN_WHITELIST_JSON pattern failed to compile") from exc
+    brain_queue = BrainQueue(config.brain_queue_max) if config.brain_enabled else None
+    watch_registry = WatchRegistry()
 
     async def refresh_control_snapshot() -> None:
         if control_client is None:
@@ -915,7 +1147,26 @@ async def serve(config: BridgeConfig) -> None:
             proposal_store=proposal_store,
             task_tracker=task_tracker,
             dashboard_state=dashboard_state,
+            brain_queue=brain_queue,
+            brain_whitelist=brain_whitelist,
+            brain_timeout_seconds=config.brain_timeout_seconds,
+            watch_registry=watch_registry,
         ).handle(websocket)
+
+    brain_server = None
+    if config.brain_enabled and config.brain_token and brain_queue is not None and control_client is not None and router is not None:
+        services = BrainServiceBridge(
+            asyncio.get_running_loop(),
+            dashboard_state,
+            brain_queue,
+            control_client,
+            router,
+            brain_whitelist,
+            watch_registry,
+        )
+        brain_server = BrainServer(services, config.brain_token, config.brain_port).start()
+        dashboard_state.publish("brain.started", port=brain_server.port)
+        LOG.info("brain_api_listening host=127.0.0.1 port=%d", brain_server.port)
 
     refresh_task = asyncio.create_task(refresh_control_snapshot())
     try:
@@ -929,6 +1180,8 @@ async def serve(config: BridgeConfig) -> None:
         refresh_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await refresh_task
+        if brain_server is not None:
+            brain_server.stop()
         if dashboard_server is not None:
             dashboard_server.stop()
 

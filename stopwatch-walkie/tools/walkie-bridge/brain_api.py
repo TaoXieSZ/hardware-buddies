@@ -97,6 +97,9 @@ class BrainQueue:
         self._drop(item_id)
         return True
 
+    def peek(self, item_id: str) -> BrainItem | None:
+        return self._items.get(item_id)
+
     def forget(self, item_id: str) -> None:
         item = self._items.get(item_id)
         if item is None:
@@ -109,6 +112,28 @@ class BrainQueue:
         self._items.pop(item_id, None)
         with contextlib.suppress(ValueError):
             self._order.remove(item_id)
+
+
+def bounded_sessions(rows: Any, limit: int = 16) -> list[dict[str, Any]]:
+    """Minimal steerable-session projection handed to the brain.
+
+    The brain needs enough to choose a target (agent/label/project_label) and
+    no more — session keys stay inside the bridge."""
+    out: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        caps = row.get("capabilities") if isinstance(row.get("capabilities"), dict) else {}
+        out.append({
+            "agent": str(row.get("agent") or "")[:16],
+            "label": str(row.get("label") or "")[:48],
+            "project_label": str(row.get("project_label") or "")[:48],
+            "state": str(row.get("state") or "")[:32],
+            "steerable": bool(caps.get("steer")),
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 class BrainServices(Protocol):
