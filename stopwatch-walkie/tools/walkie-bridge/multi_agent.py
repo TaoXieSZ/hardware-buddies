@@ -24,6 +24,7 @@ SPAWN_WORDS = {"new", "start", "create", "spawn", "新建", "启动", "创建"}
 # of Chinese speech use fullwidth punctuation (「，。」) instead of spaces, so
 # requiring a literal ASCII space after the alias silently breaks routing.
 _ALIAS_SEPARATORS = " \t\n，。、,.;；:：!！?？"
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 
 def _match_prefix(source: str, folded: str, prefix: str) -> str | None:
@@ -41,6 +42,24 @@ def _match_prefix(source: str, folded: str, prefix: str) -> str | None:
     if not rest or rest[0] not in _ALIAS_SEPARATORS:
         return None
     return rest.lstrip(_ALIAS_SEPARATORS)
+
+
+def _match_alias_prefix(source: str, folded: str, alias: str) -> str | None:
+    """Like _match_prefix, but a pure-ASCII alias also accepts a following CJK
+    character as a boundary: ASR often merges 'codex 跑测试' into 'codex跑测试'
+    with no space at all, and a latin token glued to CJK is still unambiguous."""
+    if folded == alias:
+        return ""
+    if not folded.startswith(alias):
+        return None
+    rest = source[len(alias):]
+    if not rest:
+        return ""
+    if rest[0] in _ALIAS_SEPARATORS:
+        return rest.lstrip(_ALIAS_SEPARATORS)
+    if alias.isascii() and _CJK_RE.match(rest[0]):
+        return rest
+    return None
 
 
 class RouterError(ValueError):
@@ -184,7 +203,7 @@ class MultiAgentRouter:
         sessions = [row for row in snapshot.get("sessions", []) if isinstance(row, dict)]
         if not selector:
             for alias in sorted(AGENT_ALIASES, key=len, reverse=True):
-                remainder = _match_prefix(source, folded, alias)
+                remainder = _match_alias_prefix(source, folded, alias)
                 if remainder is None:
                     continue
                 selector = {"agent": AGENT_ALIASES[alias]}

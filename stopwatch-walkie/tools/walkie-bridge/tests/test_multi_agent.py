@@ -169,3 +169,26 @@ def test_compile_whitelist_fails_loud_on_bad_pattern():
         compile_whitelist([r"(unclosed"])
     assert excinfo.value.code == "invalid_whitelist_pattern"
     assert compile_whitelist([]) == []
+
+
+def test_ascii_agent_alias_accepts_cjk_boundary_when_asr_drops_space():
+    router = MultiAgentRouter()
+    # ASR 常把 "codex 跑个测试" 合成 "codex跑个测试"(无空格):
+    proposal = router.propose("codex跑个测试。", SNAPSHOT)
+    assert proposal.session_key == "s-codex"
+    assert proposal.text == "跑个测试。"
+    # 大写字头同理(casefold)
+    assert router.propose("Codex跑个测试", SNAPSHOT).text == "跑个测试"
+
+
+def test_latin_alias_glued_to_latin_word_still_not_a_boundary():
+    with pytest.raises(RouterError) as excinfo:
+        MultiAgentRouter().propose("codexplorer run", SNAPSHOT)
+    assert excinfo.value.code == "target_required"
+
+
+def test_chinese_alias_does_not_accept_cjk_boundary():
+    router = MultiAgentRouter({"测试会话": {"agent": "codex"}})
+    with pytest.raises(RouterError) as excinfo:
+        router.propose("测试会话介绍一下", SNAPSHOT)  # CJK 后接 CJK 不算边界
+    assert excinfo.value.code == "target_required"
