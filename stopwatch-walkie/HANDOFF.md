@@ -103,21 +103,24 @@ cmux ≥ 0.64.6(Automation socket 模式)、dsh web host(插件宿主)。GitHub/
 `$PIO device list | grep SER=` 确认后再烧。烧录前停掉串口监听,烧完重启。
 手表卡死时 USB CDC 会整个消失,只能物理关机再开。
 
-## 4. dsh web 重启后的真机 E2E 清单(未完成,交给接手者)
+## 4. dsh web 重启后的真机 E2E 清单(2026-08-21 更新)
 
-前置:用户已重启 dsh web(插件加载,duty 循环开始长轮询 8767)、bridge 在跑
-(§2 命令)、watch 已连接(`/api/v1/status` 里 watch.authenticated=true)。
+插件已随 dsh web 重启加载(2026-08-21 09:51,host PID 以 `lsof -iTCP:3080` 为准);
+bridge 以 §2 命令常驻。**合成语音假 watch 客户端已验证全链路**
+(`/tmp/walkie_fake_watch.py`):真实 DashScope ASR → duty 会话 LLM 决策(2.5s)→
+`brain.routed` → 白名单直发(`direct=true`,cmux 注入 steer-codex 并观察到 agent
+活动)/ 非白名单圆屏提案。剩真表按键项:
 
-| # | 动作 | 预期 |
-|---|---|---|
-| 1 | 验证插件已加载:任意 DSH 会话可用 `walkie_status` 工具;bridge 侧 duty 会话懒创建 | 工具返回快照;`sessions.list` 出现 `walkie-duty`(首条语音后) |
-| 2 | 按住 KEYA 说「codex 帮我跑一下测试」 | 大脑路由 → 圆屏提案 → KEYA → cmux 注入 |
-| 3 | 按住 KEYA 说「codex git status」 | 白名单命中,**无圆屏提案**,直接注入 |
-| 4 | 任意提案按 KEYB | 拒绝,不注入 |
-| 5 | DSH 会话里 `walkie_propose {text:"…", agent:"codex"}` | 圆屏出现卡片,KEYA/KEYB 决定 |
-| 6 | `walkie_say "你好"` | 手表 TTS 播报 |
-| 7 | 临时注释 cordis.patch.yml 的 dsh-walkie 条目并重启 | 语音走路由器兑底,M1 行为不变 |
-| 8 | 杀 duty 会话后再说一句 | 自动重建,下一条语音仍通 |
+| # | 动作 | 预期 | 状态 |
+|---|---|---|---|
+| 1 | 任意 DSH 会话用 `walkie_status`;duty 会话懒创建 | 工具返回快照;首条语音后出现 `walkie-duty` 会话 | ✅ 已验证 |
+| 2 | 按住 KEYA 说「codex 帮我跑一下测试」 | 大脑路由 → 圆屏提案 → KEYA → cmux 注入 | ⬜ 待真表(链路已由假 watch 验证) |
+| 3 | 按住 KEYA 说「codex git status」 | 白名单命中,**无圆屏提案**,直接注入 | ⬜ 待真表(直发已由假 watch 验证) |
+| 4 | 任意提案按 KEYB | 拒绝,不注入 | ⬜ 待真表 |
+| 5 | DSH 会话里 `walkie_propose {text:"…", agent:"codex"}` | 圆屏出现卡片,KEYA/KEYB 决定 | ✅ 已推真表(gated=true,卡片 60s 过期) |
+| 6 | `walkie_say "你好"` | 手表 TTS 播报 | ✅ 已验证(tts.completed 145KB) |
+| 7 | 临时注释 cordis.patch.yml 的 dsh-walkie 条目并重启 | 语音走路由器兑底,M1 行为不变 | ⬜ 单元测试覆盖,未真机 |
+| 8 | bridge 宕机恢复 / duty 会话重建 | 循环退避后自动恢复长轮询;会话复用 | ✅ 宕机恢复已验证(35s 内重连;会话未重建而是复用) |
 
 ## 5. 已知限制 / 待办 / 坑
 
