@@ -12,7 +12,8 @@
 
 - Personality: calm field instrument, compact, direct, quietly futuristic
 - Trust signals: explicit connection state, unmistakable recording boundary, visible cancellation affordance, correlated result/error state
-- Avoid: desktop-style panels, tiny dashboards, decorative gradients, mascot UI, ambiguous color-only status, dense telemetry
+- Avoid: desktop-style panels, tiny dashboards, decorative gradients, decorative mascots that only sit in a corner, ambiguous color-only status, dense telemetry
+- Character (2026-10-10, owner decision): the Claude crab replaces the static center symbol and *acts out* each state; it never carries state alone (see Visual language → Crab)
 
 ## Product goals
 
@@ -48,6 +49,10 @@
 - Spacing/layout rhythm: 22 px outer safe area, 42 px header zone, 250 px central activity zone, 52 px key-hint zone
 - Shape/radius/elevation: circular rings, round dots, pills; no shadows or fake depth
 - Motion: low-frequency breathing/pulse for connecting/ready, amplitude-driven waveform for recording, rotating dots for transcribing; 12–20 fps maximum
+- Crab: pixel crab from the claude-video project (18×5 half-block grid, body `#D97757`, eyes `#1E1A17`, flat fill, no shadows). Static review sheet: `ui-preview/output/crab.html`.
+  - Role: the perimeter ring still carries state at a glance (edge carries state); the crab enacts it in the center — searching for the ring head while connecting, eyes on KEYA when ready, claws up with the waveform beside it while recording, claw-to-chin while thinking, ^ ^ with the result lifted overhead, squint beside an error mark.
+  - Motion (animation pass, after the static sheet is approved): every frame is a pure function of `millis()`; anticipation → action → follow-through; one damped spring `ring(τ) = exp(−τ/140 ms)·cos(0.0165·τ)` for all rebounds; idle breathing/blinks/small acts only after 800 ms of stillness; 12–20 fps.
+  - Rendering constraints: integer `fillRect` cells only — lean by per-row shear, never rotate pixels; redraw only the crab's bounding box on the PSRAM canvas; the error "!" pops once and never flashes; long idle dims or sleeps to limit AMOLED burn-in.
 - Imagery/iconography: the approved browser/SVG reference is rendered into deterministic 466×466 PNG state assets so anti-aliased typography and icons survive on hardware; generated assets remain reproducible from `ui-preview/scripts/`
 
 ## Components

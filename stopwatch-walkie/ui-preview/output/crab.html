@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Walkie 螃蟹静态稿</title>
+  <style>
+    :root { font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+    body { margin:0; background:#e9ecef; color:#101820; }
+    h1 { font-size:22px; margin:24px 24px 4px; }
+    p.lede { margin:0 24px 18px; color:#5d6670; font-size:14px; }
+    .sheet { display:grid; grid-template-columns:repeat(3, 466px); gap:18px; padding:0 24px 24px; }
+    figure { margin:0; }
+    figcaption { font-size:13px; color:#3b444c; margin-top:6px; }
+    figcaption b { color:#101820; }
+    svg { display:block; width:466px; height:466px; border-radius:50%; background:#050708; }
+    body.device { background:#050708; }
+    body.device h1, body.device p.lede, body.device figcaption { display:none; }
+    body.device .sheet { display:block; padding:0; }
+    body.device svg { border-radius:0; }
+  </style>
+</head>
+<body>
+  <h1 id="heading">StopWatch · 螃蟹进表盘（静态稿）</h1>
+  <p class="lede">每个状态取动作结束那一帧。外圈状态环、文字、A/B 提示与现有界面相同；中间图标换成螃蟹。像素块全部按整数坐标画，不旋转，与设备 fillRect 一致。</p>
+  <div class="sheet" id="sheet"></div>
+  <script>
+    // ---- 螃蟹：移植自 claude-video/src/llm/Crab.tsx 的 18×5 半块网格（每格 1u 宽、2u 高）----
+    const CRAB = '#D97757', EYE = '#1E1A17';
+    const R = Math.round;
+    // 一个像素块：网格坐标 → 屏幕整数矩形；sx/sy 为挤压拉伸，均以脚底中心为原点缩放
+    function crab(p) {
+      const u = p.u ?? 7, fx = p.x, fy = p.y - (p.lift ?? 0);
+      const sx = p.sx ?? 1, sy = p.sy ?? 1, out = [];
+      const rect = (x, y, w, h, fill) => {   // x,y,w,h 为相对脚底中心的未缩放偏移（像素）
+        const X = R(fx + x * sx), Y = R(fy + y * sy), W = Math.max(1, R(w * sx)), H = Math.max(1, R(h * sy));
+        out.push(`<rect x="${X}" y="${Y}" width="${W}" height="${H}" fill="${fill}"/>`);
+      };
+      const cell = (c, r, w, h) => rect((c - 9) * u, -10 * u + r * 2 * u, w * u, h * u, CRAB);
+      // 身体（眼睛位置留空）
+      cell(3, 0, 12, 2); cell(3, 1, 2, 2); cell(6, 1, 6, 2); cell(13, 1, 2, 2); cell(3, 2, 12, 2); cell(3, 3, 12, 2);
+      // 钳子：内侧一格不动，钳尖那一列随举起向上长；开合时最上面一格裂开
+      const claw = (side, raise) => {
+        const base = side < 0 ? 2 : 15, tip = side < 0 ? 1 : 16;
+        cell(base, 2, 1, 2);
+        const top = -6 * u - raise * 2.8 * u, total = 2 * u + raise * 2.8 * u, pin = 0.9 * u, gap = (p.snip ?? 0) * 0.45 * u;
+        rect((tip - 9) * u, top - gap, u, pin, CRAB);
+        rect((tip - 9) * u, top + pin, u, total - pin, CRAB);
+      };
+      claw(-1, p.clawL ?? 0); claw(1, p.clawR ?? 0);
+      // 眼睛：只在眼眶里滑动（横向 ≤0.38 格，纵向 ≤0.42 格）
+      const face = p.face ?? 'idle', ex = p.ex ?? 0, ey = p.ey ?? 0, open = p.open ?? 1;
+      for (const c of [5, 12]) {
+        const cx = (c - 9) * u + u / 2 + ex * u, cy = -10 * u + 3 * u + ey * u;
+        if (face === 'happy') {
+          for (const [dx, dy] of [[-0.55, 0.15], [0, -0.3], [0.55, 0.15]]) rect(cx + dx * u - 0.3 * u, cy + dy * u - 0.3 * u, 0.6 * u, 0.6 * u, EYE);
+          continue;
+        }
+        const [w, h] = face === 'wow' ? [1.35, 2.5] : face === 'squint' ? [1.1, 0.55] : [1, 2];
+        const hh = Math.max(0.18, h * open);
+        rect(cx - (w * u) / 2, cy - (hh * u) / 2, w * u, hh * u, EYE);
+      }
+      // 腿：伸进身体下面一截，身体上下颠时不露缝
+      (p.legs ?? [0, 0, 0, 0]).forEach((l, i) => { const c = [4, 6, 11, 13][i]; rect((c - 9) * u, -3 * u, u, (3 - l * 1.3) * u, CRAB); });
+      return out.join('');
+    }
+
+    // ---- 外圈、文字、按键：与 index.html 相同的几何与文案 ----
+    const frame = (s, center, ring) => `
+      <circle cx="233" cy="233" r="231" fill="#050708"/>
+      <circle cx="233" cy="233" r="216" fill="none" stroke="#15191d" stroke-width="7"/>
+      ${ring ?? `<circle cx="233" cy="233" r="216" fill="none" stroke="${s.color}" stroke-width="7"/>`}
+      <text x="233" y="70" fill="#8d979f" font-size="14" font-weight="700" letter-spacing="2.2" text-anchor="middle">${s.eyebrow}</text>
+      ${center}
+      <text x="233" y="297" fill="white" font-size="34" font-weight="800" text-anchor="middle">${s.title}</text>
+      ${s.reading
+        ? `<text x="233" y="228" fill="#8d979f" font-size="14" font-weight="600" text-anchor="middle">${s.reading[0]}</text>`
+          + s.reading.slice(1).map((line, i) => `<text x="233" y="${272 + i * 30}" fill="${s.color}" font-size="22" font-weight="700" text-anchor="middle">${line}</text>`).join('')
+        : s.heard
+        ? `<text x="233" y="319" fill="#8d979f" font-size="12" font-weight="600" text-anchor="middle">${s.heard}</text>
+           <text x="233" y="342" fill="${s.color}" font-size="16" font-weight="650" text-anchor="middle">${s.detail}</text>`
+        : `<text x="233" y="335" fill="${s.color}" font-size="16" font-weight="650" text-anchor="middle">${s.detail}</text>`}
+      ${s.a ? `<circle cx="154" cy="376" r="18" fill="#ffd000"/><text x="154" y="381" fill="#050708" font-size="15" font-weight="800" text-anchor="middle">A</text>
+      <text x="154" y="408" fill="#8d979f" font-size="12" font-weight="700" text-anchor="middle">${s.a}</text>` : ''}
+      <circle cx="312" cy="376" r="18" fill="#35b7ff"/><text x="312" y="381" fill="#050708" font-size="15" font-weight="800" text-anchor="middle">B</text>
+      <text x="312" y="408" fill="#8d979f" font-size="12" font-weight="700" text-anchor="middle">${s.b}</text>`;
+    // 弧：从 12 点方向顺时针 a0→a1 度
+    const arc = (a0, a1, color, r = 216, w = 7) => {
+      const pt = (a) => [233 + r * Math.sin(a * Math.PI / 180), 233 - r * Math.cos(a * Math.PI / 180)];
+      const [x0, y0] = pt(a0), [x1, y1] = pt(a1);
+      return `<path d="M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round"/>`;
+    };
+    const FEET = 228; // 螃蟹脚底 y：中央活动区 110–245 内
+
+    const walkieStates = [
+      { key:'CONNECTING', eyebrow:'STOPWATCH WALKIE', title:'CONNECTING', detail:'Searching for your Mac', color:'#ffb84d', a:'RETRY', b:'BACK',
+        note:'眯眼望向弧线前端，一只钳子搭在眉上；琥珀弧线是它“走”出来的（动画时沿外圈前进）。',
+        ring:(s)=>arc(-20, 95, s.color),
+        center:(s)=>crab({x:233, y:FEET, face:'squint', ex:0.38, ey:-0.42, clawR:0.55, legs:[0.4,0,0.4,0]}) },
+      { key:'READY', eyebrow:'STOPWATCH WALKIE', title:'READY', detail:'Hold KEYA to talk', color:'#42f5b3', a:'TALK', b:'MENU',
+        note:'平常表情，眼睛看向下方的 A 键：按住 A 说话。闲置时呼吸、眨眼、偶尔小动作。',
+        center:(s)=>crab({x:233, y:FEET, face:'idle', ex:-0.3, ey:0.42}) },
+      { key:'RECORDING', eyebrow:'LIVE MICROPHONE', title:'LISTENING', detail:'Release KEYA to send', color:'#ff4f6d', a:'SEND', b:'CANCEL',
+        note:'睁大眼、双钳举起在听；珊瑚色波形从身体两侧冒出（真机随麦克风音量变化）。',
+        center:(s)=>{
+          const bars=[[ -1,[22,40,58,30]],[1,[30,58,40,22]]].flatMap(([side,hs])=>hs.map((h,i)=>{const x=side<0?233-82-i*12:233+75+i*12;return `<rect x="${x}" y="${FEET-38-h/2}" width="7" height="${h}" rx="3.5" fill="${s.color}"/>`;})).join('');
+          return bars + crab({x:233, y:FEET, face:'wow', clawL:1, clawR:1});
+        } },
+      { key:'TRANSCRIBING', eyebrow:'ON YOUR MAC', title:'THINKING', detail:'Turning speech into text', color:'#55c7ff', a:'WAIT', b:'CANCEL',
+        note:'think：一只钳子托下巴、眼睛往上看；头顶三个青色小点在转（不暗示进度百分比）。',
+        center:(s)=>[[-20,0.7],[0,1],[20,0.7]].map(([dx,o])=>`<circle cx="${233+dx}" cy="${118 - (dx===0?6:0)}" r="7" fill="${s.color}" opacity="${o}"/>`).join('')
+          + crab({x:233, y:FEET, face:'idle', ex:-0.3, ey:-0.42, clawL:0.8}) },
+      { key:'RESULT', eyebrow:'MESSAGE RECEIVED', title:'DONE', heard:'问：我的订阅', detail:'资料里有两个订阅，月付 68 元。', color:'#42f5b3', a:'NEXT', b:'REPLAY',
+        note:'happy：^ ^ 眼、双钳举起，把对勾“顶”上来放稳。下方两行与真机一致：灰色小字是听到的问题，下一行是回答。',
+        center:(s)=>`<path d="M213 116 L228 131 L256 101" fill="none" stroke="${s.color}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>`
+          + crab({x:233, y:FEET, face:'happy', clawL:1, clawR:1}) },
+      { key:'ERROR', eyebrow:'TRY AGAIN', title:'NOT SENT', detail:'bridge_unreachable', color:'#ff7657', a:'RETRY', b:'BACK',
+        note:'squint、钳子垂下；旁边一个橙红色“!”，只弹出一次，不闪烁。',
+        center:(s)=>`<rect x="318" y="140" width="10" height="34" rx="2" fill="${s.color}"/><rect x="318" y="182" width="10" height="10" rx="2" fill="${s.color}"/>`
+          + crab({x:233, y:FEET, face:'squint', ey:0.42, clawL:0, clawR:0, sy:0.94, sx:1.04}) },
+    ];
+
+    // Unified OpenMuse device modes (openspec openmuse-device-interaction): the crab acts, the ring tells.
+    const museStates = [
+      { key:'HOME', eyebrow:'OPENMUSE', title:'就绪', detail:'按住 A 说话', color:'#42f5b3', a:'说话', b:'提醒',
+        note:'主页：平常表情、看向 A 键；右上角角标表示有 1 条未读提醒（B 查看）。闲置时呼吸、眨眼、偶尔小动作。',
+        center:(s)=>crab({x:233, y:FEET, face:'idle', ex:-0.3, ey:0.42})
+          + `<circle cx="318" cy="150" r="13" fill="#ff4f6d"/><text x="318" y="155" fill="#050708" font-size="14" font-weight="800" text-anchor="middle">1</text>` },
+      { key:'LISTENING', eyebrow:'OPENMUSE', title:'在听', detail:'松开 A 发送', color:'#ff4f6d', a:'发送', b:'取消',
+        note:'在听：睁大眼、双钳举起；声波从身体两侧冒出（真机随麦克风音量）。',
+        center:(s)=>{
+          const bars=[[-1,[22,40,58,30]],[1,[30,58,40,22]]].flatMap(([side,hs])=>hs.map((h,i)=>{const x=side<0?233-82-i*12:233+75+i*12;return `<rect x="${x}" y="${FEET-38-h/2}" width="7" height="${h}" rx="3.5" fill="${s.color}"/>`;})).join('');
+          return bars + crab({x:233, y:FEET, face:'wow', clawL:1, clawR:1});
+        } },
+      { key:'THINKING', eyebrow:'OPENMUSE', title:'在想', detail:'正在听懂你的问题', color:'#55c7ff', a:'', b:'取消',
+        note:'在想：一只钳子托下巴、眼睛往上看；头顶三个青色小点在转（转写与提问都在这个模式）。',
+        center:(s)=>[[-20,0.7],[0,1],[20,0.7]].map(([dx,o])=>`<circle cx="${233+dx}" cy="${118-(dx===0?6:0)}" r="7" fill="${s.color}" opacity="${o}"/>`).join('')
+          + crab({x:233, y:FEET, face:'idle', ex:-0.3, ey:-0.42, clawL:0.8}) },
+      { key:'CONFIRM', eyebrow:'OPENMUSE', title:'我的订阅', detail:'2 秒后发送', color:'#b78cff', a:'现在发', b:'取消',
+        note:'确认（新增，D3）：大字是听到的问题，外圈是 3 秒倒计时弧；螃蟹看向倒计时。A 立即发送，B 取消且不调用模型。',
+        ring:(s)=>arc(0, 240, s.color),
+        center:(s)=>crab({x:233, y:FEET, face:'idle', ex:0.38, ey:-0.42, clawR:0.4}) },
+      { key:'ANSWER', eyebrow:'OPENMUSE', title:'', reading:['问：我的订阅', '资料里有两个订阅，', '月付 68 元。'], detail:'', heard:'', color:'#42f5b3', a:'再问', b:'返回',
+        note:'回答：螃蟹缩小到上方（阅读时让出空间），开心脸、钳子举起；灰色小字是听到的问题，下一行是精简回答；振动一次。按住 A 直接问下一个。',
+        center:(s)=>crab({x:233, y:168, u:4, face:'happy', clawL:1, clawR:1}) },
+      { key:'ERROR', eyebrow:'OPENMUSE', title:'出错了', detail:'连不上个人云', color:'#ff7657', a:'重试', b:'返回',
+        note:'出错：眯眼、钳子垂下；旁边一个橙红色“!”只弹一次、不闪烁；下一行是通俗原因。',
+        center:(s)=>`<rect x="318" y="140" width="10" height="34" rx="2" fill="${s.color}"/><rect x="318" y="182" width="10" height="10" rx="2" fill="${s.color}"/>`
+          + crab({x:233, y:FEET, face:'squint', ey:0.42, sy:0.94, sx:1.04}) },
+    ];
+    const params = new URLSearchParams(location.search);
+    const states = params.get('set') === 'walkie' ? walkieStates : museStates;
+    const device = params.get('device') === '1';
+    const only = params.has('state') ? [Number(params.get('state'))] : states.map((_, i) => i);
+    if (device) document.body.classList.add('device');
+    document.getElementById('sheet').innerHTML = only.map((i) => {
+      const s = states[i];
+      return `<figure><svg viewBox="0 0 466 466" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">${frame(s, s.center(s), s.ring?.(s))}</svg>
+        <figcaption><b>0${i + 1} · ${s.key}</b>　${s.note}</figcaption></figure>`;
+    }).join('');
+  </script>
+</body>
+</html>
