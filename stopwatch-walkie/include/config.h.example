@@ -5,6 +5,9 @@
 
 #define WIFI_SSID "your-wifi-ssid"
 #define WIFI_PASSWORD "your-wifi-password"
+// Optional second network (e.g. home); the watch tries both in turn.
+// #define WIFI_SSID_2 "your-home-wifi"
+// #define WIFI_PASSWORD_2 "your-home-password"
 
 #define WALKIE_WS_HOST "192.168.1.10"
 #define WALKIE_WS_PORT 8765
@@ -17,3 +20,8 @@
 // Keep this value identical to WALKIE_CONTROL_SECRET on the Mac.
 #define WALKIE_CONTROL_ENABLED 0
 #define WALKIE_CONTROL_SECRET ""
+
+// Direct-to-Muse build (env m5stack-stopwatch-muse) only. The device token comes from pairing a
+// "StopWatch" device in OpenMuse; never commit it.
+#define WALKIE_MUSE_HOST "muse.example.com"
+#define WALKIE_MUSE_TOKEN ""

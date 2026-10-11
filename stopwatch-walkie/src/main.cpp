@@ -17,12 +17,28 @@
 #define WALKIE_CONTROL_ENABLED 0
 #define WALKIE_CONTROL_SECRET ""
 #endif
+#ifndef WIFI_SSID_2
+#define WIFI_SSID_2 ""
+#endif
+#ifndef WIFI_PASSWORD_2
+#define WIFI_PASSWORD_2 ""
+#endif
 
 #ifndef WALKIE_CONTROL_ENABLED
 #define WALKIE_CONTROL_ENABLED 0
 #endif
 #ifndef WALKIE_CONTROL_SECRET
 #define WALKIE_CONTROL_SECRET ""
+#endif
+#ifndef WALKIE_MUSE_HOST
+#define WALKIE_MUSE_HOST "muse.example.com"
+#endif
+#ifndef WALKIE_MUSE_TOKEN
+#define WALKIE_MUSE_TOKEN ""
+#endif
+#if defined(WALKIE_MUSE_DIRECT)
+#include "muse_client.h"
+#include "muse_fonts.h"
 #endif
 
 #include <Arduino.h>
@@ -36,6 +52,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <vector>
 
 using namespace stopwatch;
 
@@ -79,6 +96,47 @@ String control_session_id;
 uint64_t outbound_control_sequence = 0;
 bool control_authenticated = false;
 bool control_mode = false;
+
+#if defined(WALKIE_MUSE_DIRECT)
+// Direct-to-Muse build: a worker task owns all HTTPS so the UI keeps animating.
+// Spec: openspec/changes/add-stopwatch-muse-direct
+enum class MuseJobKind : uint8_t { Status, Transcribe, Chat, Reminders, MarkRead };
+struct MuseJob {
+    MuseJobKind kind;
+    uint32_t pcm_bytes;
+    char id[48];
+};
+struct MuseDone {
+    MuseJobKind kind;
+    std::string id;
+    MuseOutcome outcome;
+};
+constexpr uint32_t kMuseStatusIdleMs = 60000;
+constexpr uint32_t kMuseStatusRetryMs = 10000;
+MuseClient muse_client;
+QueueHandle_t muse_jobs = nullptr;
+QueueHandle_t muse_done = nullptr;
+size_t muse_record_bytes = 0;
+int muse_pending = 0;
+uint32_t muse_next_status_ms = 0;
+bool muse_disabled = false;  // no device token: never contact the cloud
+constexpr uint32_t kMuseConfirmMs = 3000;  // D3: visible countdown, then send
+std::string muse_question;      // raw transcript, RAM only, cleared once sent or cancelled
+std::string muse_heard;         // "问：…" line shown on confirm and answer
+std::string muse_confirm_id;
+uint32_t muse_confirm_deadline_ms = 0;
+int muse_unread = 0;
+std::string muse_reminder_id;
+std::vector<std::string> muse_reminder_entries;  // newest unread card, one reading page per entry
+size_t muse_reminder_index = 0;
+bool muse_showing_reminder = false;
+std::string muse_abandoned_id;   // KEYB while thinking: this request's late reply is ignored
+constexpr uint32_t kMuseSleepMs = 120000;  // home untouched this long: dim and let the crab sleep (burn-in)
+constexpr uint8_t kMuseDimBrightness = 24;
+uint32_t muse_activity_ms = 0;
+bool muse_asleep = false;
+uint8_t muse_brightness = 0;
+#endif
 
 #if defined(WALKIE_UI_DEMO)
 constexpr std::array<DeviceState, 13> kDemoStates = {
@@ -207,7 +265,11 @@ void renderUi(bool force = false)
     model.state = loop_state.state();
     model.retryable = loop_state.retryableError();
     if (model.state == DeviceState::Connecting) {
+#if defined(WALKIE_MUSE_DIRECT)
+        detail = String(WALKIE_MUSE_HOST);
+#else
         detail = String(WALKIE_WS_HOST) + ":" + String(WALKIE_WS_PORT);
+#endif
     } else if (model.state == DeviceState::Result || model.state == DeviceState::ProposalReview ||
                model.state == DeviceState::WaitingPermission || model.state == DeviceState::Completed ||
                model.state == DeviceState::Cancelled || model.state == DeviceState::Failed) {
@@ -216,6 +278,67 @@ void renderUi(bool force = false)
         detail = String(loop_state.errorCode().c_str());
     }
     model.detail = detail.c_str();
+#if defined(WALKIE_MUSE_DIRECT)
+    // Reading pages and copy: openspec add-stopwatch-muse-direct "Reading pages use large smooth text".
+    String label;
+    const bool online = loop_state.connected();
+    switch (model.state) {
+        case DeviceState::Connecting:
+            model.title = "连接中";
+            detail = "正在连接个人云";
+            break;
+        case DeviceState::Ready:
+            model.title = "可以提问";
+            detail = muse_unread > 0 ? String("有 ") + String(muse_unread) + " 条提醒" : String();
+            model.hint_a = "按住说话";
+            model.hint_b = muse_reminder_entries.empty() ? nullptr : "看提醒";
+            break;
+        case DeviceState::Recording:
+            model.title = "在听";
+            detail = "";
+            model.hint_a = "松开发送";
+            model.hint_b = "取消";
+            break;
+        case DeviceState::Transcribing:
+            model.title = "在想";
+            detail = muse_question.empty() ? "正在识别…" : "Muse 在想…";
+            model.hint_b = "取消";
+            break;
+        case DeviceState::ProposalReview: {
+            const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(muse_confirm_deadline_ms - now));
+            label = String((left + 999) / 1000) + " 秒后发送";
+            detail = String(muse_question.c_str());
+            model.progress = static_cast<int>(left * 100 / static_cast<int32_t>(kMuseConfirmMs));
+            model.hint_a = "现在发";
+            model.hint_b = "取消";
+            break;
+        }
+        case DeviceState::Result:
+            if (muse_showing_reminder && muse_reminder_index < muse_reminder_entries.size()) {
+                label = String("提醒 ") + String(muse_reminder_index + 1) + "/" + String(muse_reminder_entries.size());
+                detail = String(muse_reminder_entries[muse_reminder_index].c_str());
+                model.hint_b = muse_reminder_index + 1 < muse_reminder_entries.size() ? "下一条" : "知道了";
+            } else {
+                label = String(muse_heard.c_str());
+                model.label_quiet = true;
+                model.hint_b = "好的";
+            }
+            model.hint_a = "再问";
+            break;
+        case DeviceState::Error:
+            label = model.retryable ? "没发出去" : "需要处理";
+            model.hint_a = online ? "重说" : nullptr;
+            model.hint_b = online ? "返回" : nullptr;
+            break;
+        default:
+            break;
+    }
+    model.detail = detail.c_str();
+    model.label = label.c_str();
+    model.reminder = model.state == DeviceState::Result && muse_showing_reminder;
+    model.unread = muse_unread;
+    model.asleep = muse_asleep;
+#endif
     model.actionable = model.state == DeviceState::ProposalReview ||
                        (model.state == DeviceState::WaitingPermission && loop_state.permissionActionable());
 #endif
@@ -600,15 +723,25 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length)
 
 void connectWiFi()
 {
+    // An optional second network (e.g. office and home): try each for 12 s in turn until one connects.
+    constexpr uint32_t kWifiTryMs = 12000;
+    const char* ssids[] = {WIFI_SSID, WIFI_SSID_2};
+    const char* passwords[] = {WIFI_PASSWORD, WIFI_PASSWORD_2};
+    const int networks = std::strlen(WIFI_SSID_2) > 0 ? 2 : 1;
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.println("[wifi] connecting");
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(250);
-        M5.update();
-        renderUi();
+    for (int i = 0;; i = (i + 1) % networks) {
+        WiFi.begin(ssids[i], passwords[i]);
+        Serial.printf("[wifi] connecting network=%d\n", i + 1);
+        const uint32_t started = millis();
+        while (WiFi.status() != WL_CONNECTED && (networks == 1 || millis() - started < kWifiTryMs)) {
+            delay(250);
+            M5.update();
+            renderUi();
+        }
+        if (WiFi.status() == WL_CONNECTED) break;
+        WiFi.disconnect();
     }
-    Serial.printf("[wifi] connected ip=%s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[wifi] connected ip=%s rssi=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
 void initHardware()
@@ -815,6 +948,259 @@ void maintainPlayback()
     Serial.println("[tts] playback complete");
 }
 
+#if defined(WALKIE_MUSE_DIRECT)
+void museWorker(void*)
+{
+    MuseJob job;
+    for (;;) {
+        if (xQueueReceive(muse_jobs, &job, portMAX_DELAY) != pdTRUE) continue;
+        auto* done = new MuseDone{job.kind, job.id, {}};
+        switch (job.kind) {
+            case MuseJobKind::Status: done->outcome = muse_client.status(); break;
+            case MuseJobKind::Transcribe: done->outcome = muse_client.transcribe(tts_pcm, job.pcm_bytes); break;
+            case MuseJobKind::Chat: done->outcome = muse_client.chat(muse_question); break;
+            case MuseJobKind::Reminders: done->outcome = muse_client.reminders(); break;
+            case MuseJobKind::MarkRead: done->outcome.ok = muse_client.markRead(job.id); break;
+        }
+        xQueueSend(muse_done, &done, portMAX_DELAY);
+    }
+}
+
+bool postMuseJob(MuseJobKind kind, const std::string& id, uint32_t pcm_bytes)
+{
+    MuseJob job{kind, pcm_bytes, {}};
+    std::snprintf(job.id, sizeof(job.id), "%s", id.c_str());
+    if (xQueueSend(muse_jobs, &job, 0) != pdTRUE) return false;
+    ++muse_pending;
+    return true;
+}
+
+void beginMuse()
+{
+    muse_brightness = M5.Display.getBrightness();
+    muse_activity_ms = millis();
+    muse_client.begin(WALKIE_MUSE_HOST, WALKIE_MUSE_TOKEN);
+    muse_jobs = xQueueCreate(3, sizeof(MuseJob));
+    muse_done = xQueueCreate(3, sizeof(MuseDone*));
+    xTaskCreatePinnedToCore(museWorker, "muse", 16384, nullptr, 1, nullptr, 0);
+    if (std::strlen(WALKIE_MUSE_TOKEN) < 16) {
+        loop_state.onError("", "缺少设备令牌", false);
+        muse_disabled = true;
+    }
+}
+
+void finishMuseUtterance()
+{
+    const uint32_t ms = static_cast<uint32_t>(muse_record_bytes / (kPcmSampleRateHz * sizeof(int16_t) / 1000));
+    if (ms < kMuseMinUtteranceMs) {  // an accidental tap: discard without uploading
+        loop_state.onKeyBCancel();
+        muse_record_bytes = 0;
+        Serial.printf("[muse] discarded short press ms=%lu\n", static_cast<unsigned long>(ms));
+        renderUi(true);
+        return;
+    }
+    const MuseLevel level = museLevel(reinterpret_cast<const int16_t*>(tts_pcm), muse_record_bytes / sizeof(int16_t));
+    Serial.printf("[muse] level ms=%lu peak_dbfs=%.1f rms_dbfs=%.1f clipped=%lu\n", static_cast<unsigned long>(ms),
+                  level.peak_dbfs, level.rms_dbfs, static_cast<unsigned long>(level.clipped));
+    const std::string id = loop_state.activeId();
+    if (loop_state.onKeyAUp() != LoopAction::EndUtterance) return;
+    releaseAck();
+    if (!postMuseJob(MuseJobKind::Transcribe, id, muse_record_bytes)) loop_state.onError(id, "设备忙，请稍后再说", true);
+    renderUi(true);
+}
+
+void sendConfirmedQuestion()
+{
+    const std::string id = muse_confirm_id;
+    muse_confirm_id.clear();
+    if (!loop_state.onMuseConfirmed(id)) return;
+    if (!postMuseJob(MuseJobKind::Chat, id, 0)) {
+        muse_question.clear();
+        loop_state.onError(id, "设备忙，请稍后再说", true);
+    }
+    renderUi(true);
+}
+
+void cancelConfirm()
+{
+    muse_confirm_id.clear();
+    muse_question.clear();
+    loop_state.onKeyBCancel();  // ProposalReview -> Cancelled
+    loop_state.onKeyBCancel();  // Cancelled -> Ready, no model call
+    renderUi(true);
+}
+
+// Leaving a result/error page; a reminder card is marked read when it is dismissed.
+void dismissResult()
+{
+    if (muse_showing_reminder && !muse_reminder_id.empty()) {
+        postMuseJob(MuseJobKind::MarkRead, muse_reminder_id, 0);
+        muse_reminder_id.clear();
+        muse_reminder_entries.clear();
+        muse_unread = std::max(0, muse_unread - 1);
+    }
+    muse_showing_reminder = false;
+}
+
+// Three abstract keys (openspec openmuse-device-interaction): KEYA = talk / confirm, KEYB = cancel / back.
+void handleMuseButtons()
+{
+    const DeviceState state = loop_state.state();
+    if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) muse_activity_ms = millis();
+    if (M5.BtnA.wasPressed()) {
+        if (state == DeviceState::ProposalReview) {
+            sendConfirmedQuestion();
+        } else if (loop_state.connected()) {
+            const std::string id = makeUtteranceId(device_id.c_str(), ++utterance_seq);
+            LoopAction action = loop_state.onKeyADown(id);
+            if (action == LoopAction::Acknowledge) {  // holding talk on a result starts the next question
+                dismissResult();
+                action = loop_state.onKeyADown(id);
+            }
+            if (action == LoopAction::StartUtterance) muse_record_bytes = 0;
+            renderUi(true);
+        }
+    }
+    if (M5.BtnB.wasPressed()) {
+        if (state == DeviceState::Recording && loop_state.onKeyBCancel() == LoopAction::CancelUtterance) {
+            muse_record_bytes = 0;
+        } else if (state == DeviceState::ProposalReview) {
+            cancelConfirm();
+        } else if (state == DeviceState::Transcribing) {
+            const std::string id = loop_state.activeId();
+            if (loop_state.onMuseAbandon()) {  // stop waiting; the request finishes in the background, unseen
+                muse_abandoned_id = id;
+                muse_question.clear();
+                Serial.println("[muse] abandoned while thinking");
+            }
+        } else if (state == DeviceState::Result && muse_showing_reminder &&
+                   muse_reminder_index + 1 < muse_reminder_entries.size()) {
+            ++muse_reminder_index;  // KEYB pages through the card; on the last entry it closes it
+        } else if ((state == DeviceState::Result || state == DeviceState::Error) && loop_state.connected()) {
+            dismissResult();
+            loop_state.onKeyADown("");  // acknowledge -> Ready
+        } else if (state == DeviceState::Ready && !muse_reminder_entries.empty() &&
+                   loop_state.onMuseReminder(muse_reminder_entries.front())) {
+            muse_showing_reminder = true;
+            muse_reminder_index = 0;
+        }
+        renderUi(true);
+    }
+    if (M5.BtnA.wasReleased() && loop_state.state() == DeviceState::Recording) finishMuseUtterance();
+    if (loop_state.state() == DeviceState::ProposalReview && !muse_confirm_id.empty() &&
+        static_cast<int32_t>(millis() - muse_confirm_deadline_ms) >= 0) {
+        sendConfirmedQuestion();
+    }
+}
+
+void captureMuse()
+{
+    if (loop_state.state() != DeviceState::Recording) return;
+    if (!M5.Mic.isEnabled() || !tts_pcm) {
+        loop_state.onError(loop_state.activeId(), "麦克风不可用", true);
+        renderUi(true);
+        return;
+    }
+    if (!M5.Mic.record(mic_chunk.data(), mic_chunk.size(), kPcmSampleRateHz)) return;
+    updateAudioLevel();
+    const size_t bytes = mic_chunk.size() * sizeof(int16_t);
+    if (muse_record_bytes + bytes > kMaxTtsPcmBytes) {  // 30 s cap: same as releasing KEYA
+        finishMuseUtterance();
+        return;
+    }
+    std::memcpy(tts_pcm + muse_record_bytes, mic_chunk.data(), bytes);
+    muse_record_bytes += bytes;
+}
+
+void maintainMuse()
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        loop_state.onDisconnected();
+        connectWiFi();
+        muse_next_status_ms = 0;
+    }
+    MuseDone* done = nullptr;
+    while (xQueueReceive(muse_done, &done, 0) == pdTRUE) {
+        --muse_pending;
+        const MuseOutcome& out = done->outcome;
+        if (!muse_abandoned_id.empty() && done->id == muse_abandoned_id) {
+            Serial.printf("[muse] done kind=%d ignored: abandoned\n", static_cast<int>(done->kind));
+            muse_abandoned_id.clear();
+            delete done;
+            continue;
+        }
+        if (done->kind == MuseJobKind::Status) {
+            const bool idle = loop_state.state() == DeviceState::Connecting || loop_state.state() == DeviceState::Ready ||
+                              loop_state.state() == DeviceState::Error;
+            if (out.ok) {
+                // Only recover from a connection failure; never wipe an answer-level error the user is reading.
+                if (!loop_state.connected()) loop_state.onConnected();
+                muse_next_status_ms = millis() + kMuseStatusIdleMs;
+                postMuseJob(MuseJobKind::Reminders, "", 0);
+            } else if (idle) {
+                loop_state.onDisconnected();
+                loop_state.onError("", out.text, true);
+                muse_next_status_ms = millis() + kMuseStatusRetryMs;
+            }
+        } else if (done->kind == MuseJobKind::Reminders) {
+            if (out.ok) {
+                muse_unread = out.unread;
+                if (!muse_showing_reminder) {  // never swap the card someone is reading
+                    muse_reminder_id = out.reminder_id;
+                    muse_reminder_entries = out.reminder_id.empty() ? std::vector<std::string>() : out.entries;
+                }
+            }
+        } else if (done->kind == MuseJobKind::MarkRead) {
+            postMuseJob(MuseJobKind::Reminders, "", 0);
+        } else if (out.ok && done->kind == MuseJobKind::Transcribe) {
+            // Confirm step: show what was heard and count down before any model call.
+            muse_question = out.question;
+            muse_heard = out.heard;
+            if (loop_state.onTranscript(done->id, muse_heard) && loop_state.onProposal(done->id, muse_heard)) {
+                muse_confirm_id = done->id;
+                muse_confirm_deadline_ms = millis() + kMuseConfirmMs;
+            } else {
+                muse_question.clear();
+            }
+        } else if (out.ok) {
+            muse_question.clear();
+            // The answer page: the heard question as its label (so mishearing is visible), then the answer.
+            if (loop_state.onTranscript(done->id, out.text)) releaseAck();
+            muse_next_status_ms = millis() + kMuseStatusIdleMs;
+        } else {
+            muse_question.clear();
+            loop_state.onError(done->id, out.text, true);
+            muse_next_status_ms = millis() + kMuseStatusIdleMs;
+            if (out.status == 401 || out.status == 403 || (out.status == 0 && !out.slow_network)) {
+                loop_state.onDisconnected();
+                loop_state.onError("", out.text, true);
+                muse_next_status_ms = millis() + kMuseStatusRetryMs;
+            }
+        }
+        Serial.printf("[muse] done kind=%d ok=%d status=%d\n", static_cast<int>(done->kind), out.ok, out.status);
+        delete done;
+        renderUi(true);
+    }
+    const DeviceState state = loop_state.state();
+    static DeviceState last_state = state;
+    if (state != last_state) {
+        last_state = state;
+        muse_activity_ms = millis();
+    }
+    const bool asleep = state == DeviceState::Ready && millis() - muse_activity_ms > kMuseSleepMs;
+    if (asleep != muse_asleep) {
+        muse_asleep = asleep;
+        M5.Display.setBrightness(asleep ? kMuseDimBrightness : muse_brightness);
+        Serial.printf("[ui] %s\n", asleep ? "idle: dimmed" : "awake");
+    }
+    const bool busy = state == DeviceState::Recording || state == DeviceState::Transcribing ||
+                      state == DeviceState::ProposalReview;
+    if (!muse_disabled && !busy && muse_pending == 0 && static_cast<int32_t>(millis() - muse_next_status_ms) >= 0) {
+        if (postMuseJob(MuseJobKind::Status, "", 0)) muse_next_status_ms = millis() + kMuseStatusIdleMs;
+    }
+}
+#endif
+
 }  // namespace
 
 void setup()
@@ -829,6 +1215,10 @@ void setup()
     renderUi(true);
 #if defined(WALKIE_UI_DEMO)
     Serial.println("[ui-demo] offline showcase ready; KEYA=next KEYB=back");
+#elif defined(WALKIE_MUSE_DIRECT)
+    if (museFontsBegin()) renderUi(true);
+    connectWiFi();
+    beginMuse();
 #else
     connectWiFi();
     web_socket.onEvent(onWebSocketEvent);
@@ -842,6 +1232,10 @@ void loop()
 #if defined(WALKIE_UI_DEMO)
     handleDemoButtons();
     captureDemoMic();
+#elif defined(WALKIE_MUSE_DIRECT)
+    maintainMuse();
+    handleMuseButtons();
+    captureMuse();
 #else
     maintainConnection();
     maintainPlayback();

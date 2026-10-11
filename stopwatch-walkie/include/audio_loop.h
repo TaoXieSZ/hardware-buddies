@@ -203,6 +203,43 @@ public:
         return true;
     }
 
+    // Direct-to-Muse build only (openspec openmuse-device-interaction): the confirm step reuses
+    // ProposalReview; once confirmed the question goes back to Transcribing so onTranscript can
+    // deliver the answer for the same utterance.
+    bool onMuseConfirmed(const std::string& utterance_id)
+    {
+        if (state_ != DeviceState::ProposalReview || utterance_id.empty() || utterance_id != command_id_) {
+            return false;
+        }
+        command_id_.clear();
+        active_id_ = utterance_id;
+        result_text_.clear();
+        state_ = DeviceState::Transcribing;
+        return true;
+    }
+
+    // Direct-to-Muse build only: show a reminder card from the home screen; KEYA/KEYB acknowledge it.
+    /** Direct-to-Muse: KEYB while thinking gives up on the pending request; its late reply is then ignored. */
+    bool onMuseAbandon()
+    {
+        if (state_ != DeviceState::Transcribing || active_id_.empty()) {
+            return false;
+        }
+        active_id_.clear();
+        state_ = connected_ ? DeviceState::Ready : DeviceState::Connecting;
+        return true;
+    }
+
+    bool onMuseReminder(const std::string& text)
+    {
+        if (state_ != DeviceState::Ready || !connected_ || text.empty() || text.size() > 240) {
+            return false;
+        }
+        result_text_ = text;
+        state_ = DeviceState::Result;
+        return true;
+    }
+
     bool onTaskAccepted(const std::string& command_id, const std::string& task_id)
     {
         if (state_ != DeviceState::Dispatching || command_id != command_id_ || task_id.empty() || task_id.size() > 64) {

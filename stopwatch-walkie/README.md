@@ -42,6 +42,44 @@ synchronous 45 ms one-shot after capture ends instead of a background vibration
 task. This keeps the acknowledgement outside the recorded utterance and avoids
 adding a long-lived task for a single prototype pulse.
 
+## Direct-to-Muse build (no Mac)
+
+`m5stack-stopwatch-muse` makes the watch ask the personal OpenMuse cloud itself over HTTPS:
+hold KEYA to speak, release to upload the recording to `/device/v1/transcribe` (Tencent
+one-sentence recognition on the server), then the watch asks Muse with protocol 2 and shows
+the whole brief answer full screen in large anti-aliased Chinese type, with a vibration.
+Reminder cards open with KEYB and page entry by entry. No Mac bridge, no speech playback, no
+agent control. Spec: `openspec/changes/add-stopwatch-muse-direct`.
+
+Add `WALKIE_MUSE_HOST` and `WALKIE_MUSE_TOKEN` (the paired "StopWatch" device token) to the
+ignored `include/walkie_config.h`, then:
+
+```bash
+pio run -e m5stack-stopwatch-muse -t upload --upload-port /dev/cu.usbmodemXXXX
+```
+
+### Reading fonts
+
+The reading pages draw Source Han Sans SC (OFL-1.1, `tools/muse-fonts/SourceHanSans-OFL.txt`) at
+24 and 32 px from their own `fonts` flash partition (`partitions_muse.csv`: 3 MB app, ~13 MB
+fonts). Build the image once from `SourceHanSansSC-Normal.otf`
+([adobe-fonts/source-han-sans](https://github.com/adobe-fonts/source-han-sans)) and write it
+after the firmware; without it the watch still works with the small bitmap font.
+
+```bash
+python3 tools/muse-fonts/make_fonts.py --font /path/to/SourceHanSansSC-Normal.otf
+```
+
+```bash
+~/.platformio/penv/bin/python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX write_flash 0x310000 fonts/muse_fonts.bin
+```
+
+`python3 tools/muse-fonts/preview_reading.py` renders every page with the real glyphs to
+`ui-preview/output/reading-pages.png` for review before flashing.
+
+Flash `m5stack-stopwatch` to return to the Mac-bridge build. Measured 2026-10-10 on the office
+guest Wi-Fi: about 3–4.5 s from release to answer, most of it uploading the recording.
+
 ## Configure the firmware
 
 Create the ignored local configuration:
