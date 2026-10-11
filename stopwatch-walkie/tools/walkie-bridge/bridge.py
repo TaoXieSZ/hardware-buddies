@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from dashboard import DashboardState, start_dashboard
+from muse import MuseClient, MuseConfig, MuseFailure
 from multi_agent import CcBridgeClient, MultiAgentRouter, ProposalStore, RouterError, TaskTracker
 from protocol_v2 import (
     BRIDGE_TO_DEVICE,
@@ -95,6 +96,7 @@ class BridgeConfig:
     cc_bridge_socket: str = "/tmp/cc-bridge.sock"
     dashboard_enabled: bool = True
     dashboard_port: int = 8766
+    muse_device_file: str | None = None
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
@@ -123,6 +125,7 @@ class BridgeConfig:
             cc_bridge_socket=os.path.expanduser(os.getenv("WALKIE_CC_BRIDGE_SOCKET", "/tmp/cc-bridge.sock")),
             dashboard_enabled=os.getenv("WALKIE_DASHBOARD_ENABLED", "1").lower() in {"1", "true", "yes"},
             dashboard_port=dashboard_port,
+            muse_device_file=os.getenv("WALKIE_MUSE_DEVICE_FILE") or None,
         )
 
 
@@ -157,8 +160,10 @@ class ConnectionHandler:
         task_tracker: TaskTracker | None = None,
         observation_interval: float = 0.5,
         dashboard_state: DashboardState | None = None,
+        muse: MuseClient | None = None,
     ):
         self._asr_client = asr_client
+        self._muse = muse
         self._asr_timeout_seconds = asr_timeout_seconds
         self._tts_client = tts_client
         self._active: Utterance | None = None
@@ -346,6 +351,9 @@ class ConnectionHandler:
             await send_error(websocket, "no_speech", "no speech recognized", utterance.utterance_id)
             return
         wav_bytes = pcm_to_wav(bytes(utterance.pcm))
+        if self._muse is not None and self._auth is None:
+            await self._ask_muse(websocket, utterance, wav_bytes)
+            return
         started = time.monotonic()
         self._dash("asr.started", utterance_id=utterance.utterance_id, bytes=utterance.byte_count)
         try:
@@ -380,6 +388,39 @@ class ConnectionHandler:
             await self._propose(websocket, utterance.utterance_id, text)
         elif self._tts_client is not None:
             await self._speak(websocket, utterance.utterance_id, text)
+
+    async def _ask_muse(self, websocket: Any, utterance: Utterance, wav_bytes: bytes) -> None:
+        """Protocol v1 with Muse: personal-cloud transcription, then one short answer line and speech."""
+        utterance_id = utterance.utterance_id
+        started = time.monotonic()
+        self._dash("asr.started", utterance_id=utterance_id, bytes=utterance.byte_count)
+        try:
+            question = (
+                await asyncio.wait_for(self._muse.transcribe_wav(wav_bytes), timeout=self._asr_timeout_seconds)
+            ).strip()
+            if not question:
+                self._dash("asr.failed", utterance_id=utterance_id, code="no_speech", hint="没有识别出文字，请靠近手表重试。")
+                await send_error(websocket, "no_speech", "no speech recognized", utterance_id)
+                return
+            asr_ms = int((time.monotonic() - started) * 1000)
+            self._dash("asr.completed", utterance_id=utterance_id, bytes=utterance.byte_count, latency_ms=asr_ms, text=question)
+            answer = await self._muse.ask(f"{self._connection_id}:{utterance_id}", question)
+        except TimeoutError:
+            LOG.warning("muse_error code=asr_timeout id=%s", utterance_id)
+            await send_error(websocket, "asr_timeout", "transcription timed out", utterance_id)
+            return
+        except MuseFailure as exc:
+            LOG.warning("muse_error code=%s id=%s", exc.code, utterance_id)
+            self._dash("asr.failed", utterance_id=utterance_id, code=exc.code, hint="问 Muse 失败，请查看个人云状态。")
+            await send_error(websocket, exc.code, exc.message, utterance_id)
+            return
+        total_ms = int((time.monotonic() - started) * 1000)
+        LOG.info("muse_complete id=%s asr_ms=%d total_ms=%d cited=%s general=%s",
+                 utterance_id, asr_ms, total_ms, answer.cited, answer.general)
+        self._dash("muse.answered", utterance_id=utterance_id, latency_ms=total_ms, text=answer.display)
+        await self._send_json(websocket, {"type": "transcript", "id": utterance_id, "text": answer.display})
+        if self._tts_client is not None:
+            await self._speak(websocket, utterance_id, answer.spoken)
 
     async def _propose(self, websocket: Any, utterance_id: str, text: str) -> None:
         try:
@@ -703,11 +744,20 @@ async def send_error(websocket: Any, code: str, message: str, utterance_id: str 
 async def serve(config: BridgeConfig) -> None:
     if websockets is None:
         raise RuntimeError("websockets package is not installed")
-    asr_client = DashScopeASRClient(
-        config.dashscope_api_key,
-        config.dashscope_base_url,
-        timeout_seconds=config.asr_timeout_seconds,
-    )
+    muse = MuseClient(MuseConfig.from_file(config.muse_device_file)) if config.muse_device_file else None
+    try:
+        asr_client: ASRClient = DashScopeASRClient(
+            config.dashscope_api_key,
+            config.dashscope_base_url,
+            timeout_seconds=config.asr_timeout_seconds,
+        )
+    except ASRFailure:
+        if muse is None:
+            raise
+        # Muse-only setup: no DashScope key, so every utterance uses personal-cloud transcription.
+        asr_client = muse
+    if muse is not None:
+        LOG.info("muse_enabled protocol_v1=ask_muse")
     tts_client = MacSystemTTSClient(config.tts_voice, config.tts_timeout_seconds)
     if config.control_enabled and config.control_secret is None:
         raise ControlProtocolError("missing_control_secret", "control mode requires WALKIE_CONTROL_SECRET")
@@ -758,6 +808,7 @@ async def serve(config: BridgeConfig) -> None:
             proposal_store=proposal_store,
             task_tracker=task_tracker,
             dashboard_state=dashboard_state,
+            muse=muse,
         ).handle(websocket)
 
     refresh_task = asyncio.create_task(refresh_control_snapshot())
